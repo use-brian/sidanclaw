@@ -1140,9 +1140,13 @@ export const ja: Dictionary = {
     offline: "オフライン",
     offlinePending: "オフライン（保留中 {count} 件）",
     offlineUnavailable: "オフラインでは利用できません",
+    offlineSyncPendingTitle: "同期待ちの変更",
+    offlineSyncPendingBody: "{count} 件の変更がこの端末に保存されています。同期は自動的に再試行されます。",
+    offlinePageStorageFailed: "この端末にページを保存できませんでした。空き容量を確認して再試行してください。",
+    offlinePageParentMissing: "オフラインでサブページを作成する前に、オンラインで親ページを一度開いてください。",
+    offlinePageSessionMissing: "この端末でアカウント情報を取得できません。再接続して再試行してください。",
     offlineBannerTitle: "オフラインです",
-    offlineBannerBody:
-      "このデバイスに保存された内容を表示しています。更新や変更を行うには再接続してください。",
+    offlineBannerBody: "この端末に保存されたページはオフラインで編集できます。その他の機能には接続が必要です。",
     offlineBannerPending:
       "保存済みの内容を表示しています。再接続後に {count} 件の変更を同期します。",
     dataBlockFailed: "このデータブロックの読み込みに失敗しました。",

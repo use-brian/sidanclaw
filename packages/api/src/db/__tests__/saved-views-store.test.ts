@@ -679,3 +679,34 @@ describe('[COMP:doc/page-tree-store] getPageTreeNeighborhood', () => {
     })
   })
 })
+
+
+describe('[COMP:api/saved-views-store] idempotent offline creation', () => {
+  const input = { id: VIEW_ID, userId: USER_ID, workspaceId: WORKSPACE_ID, name: 'Offline page', entity: 'tasks' as const, viewType: 'table' as const, binding: { entity: 'tasks' as const, viewType: 'table' as const }, page: { blocks: [] }, deferCreatedEvent: true }
+  it('inserts a caller UUID with an atomic conflict guard', async () => {
+    mockQueryWithRLS.mockResolvedValueOnce({ rows: [{ id: VIEW_ID, name: input.name }], rowCount: 1 } as never)
+    expect((await store.createDraft(input)).id).toBe(VIEW_ID)
+    const [user, sql, params] = mockQueryWithRLS.mock.calls[0] as [string, string, unknown[]]
+    expect(user).toBe(USER_ID)
+    expect(sql).toContain('ON CONFLICT (id) DO NOTHING')
+    expect(params[19]).toBe(VIEW_ID)
+  })
+  it('returns the existing page without overwriting edits or emitting creation again', async () => {
+    const emit = vi.fn()
+    const localStore = createDbSavedViewStore({ onPageLifecycle: emit })
+    mockQueryWithRLS.mockResolvedValueOnce({ rows: [], rowCount: 0 } as never)
+    mockQueryWithRLS.mockResolvedValueOnce({ rows: [{ id: VIEW_ID, name: 'Already edited', page: { blocks: [{ kind: 'text', id: 'b1', text: 'Keep me' }] } }], rowCount: 1 } as never)
+    const page = await localStore.createDraft(input)
+    expect(page.name).toBe('Already edited')
+    expect(page.page?.blocks).toHaveLength(1)
+    expect(emit).not.toHaveBeenCalled()
+    const [user, sql, params] = mockQueryWithRLS.mock.calls[1] as [string, string, unknown[]]
+    expect(user).toBe(USER_ID)
+    expect(sql).toContain('workspace_id = $2 AND created_by = $3')
+    expect(params).toEqual([VIEW_ID, WORKSPACE_ID, USER_ID])
+  })
+  it('refuses a collision when the scoped lookup cannot see the existing page', async () => {
+    mockQueryWithRLS.mockResolvedValue({ rows: [], rowCount: 0 } as never)
+    await expect(store.createDraft(input)).rejects.toMatchObject({ code: 'PAGE_ID_CONFLICT' })
+  })
+})

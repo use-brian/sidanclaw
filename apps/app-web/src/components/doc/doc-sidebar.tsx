@@ -259,8 +259,7 @@ export function DocSidebar(props: Props) {
   const copy = useT();
   const t = copy.docPage;
   const liveTitle = copy.liveApp.title;
-  // Creating a page isn't supported offline (no server id) — disable the entry
-  // in the bundled app when offline. No-op on web/thin (gate keeps it false).
+  // Teamspace management still requires a connection; pages can be created locally.
   const offline = useIsOffline();
   const { workspaceId, saved, drafts, activeId } = props;
   const activeOperatorApp = props.activeOperatorApp;
@@ -908,8 +907,7 @@ export function DocSidebar(props: Props) {
                 collapsed={sectionCollapsed[ts.id] ?? false}
                 onToggle={() => toggleSection(ts.id)}
                 onNewPage={() => props.onNewDraft(ts.id)}
-                newPageDisabled={props.busyNewDraft || offline}
-                newPageTitle={offline ? t.offlineUnavailable : undefined}
+                newPageDisabled={props.busyNewDraft}
                 dragging={draggingId !== null}
                 onOpenSettings={(tab) => props.onTeamspaceSettings(ts.id, tab)}
                 onLeave={() => props.onLeaveTeamspace(ts.id)}
@@ -924,8 +922,7 @@ export function DocSidebar(props: Props) {
                 page here to make it private). No manage menu. */}
             <PrivateGroupSection
               onNewPage={() => props.onNewDraft(null)}
-              newPageDisabled={props.busyNewDraft || offline}
-              newPageTitle={offline ? t.offlineUnavailable : undefined}
+              newPageDisabled={props.busyNewDraft}
               dragging={draggingId !== null}
             >
               {privateTree.length > 0 && (

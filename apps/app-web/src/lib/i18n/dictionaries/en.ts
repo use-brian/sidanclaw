@@ -1269,9 +1269,13 @@ export const en = {
     offline: "Offline",
     offlinePending: "Offline ({count} pending)",
     offlineUnavailable: "Not available offline",
+    offlineSyncPendingTitle: "Changes waiting to sync",
+    offlineSyncPendingBody: "{count} changes are saved on this device. Sync will retry automatically.",
+    offlinePageStorageFailed: "Could not save this page on your device. Check available storage and try again.",
+    offlinePageParentMissing: "Open the parent page online once before creating a subpage offline.",
+    offlinePageSessionMissing: "Your account information is not available on this device. Reconnect and try again.",
     offlineBannerTitle: "You're offline",
-    offlineBannerBody:
-      "Showing content saved on this device. Reconnect to refresh or make changes.",
+    offlineBannerBody: "Pages saved on this device can be edited offline. Other features need a connection.",
     offlineBannerPending:
       "Showing saved content. {count} changes will sync after you reconnect.",
     dataBlockFailed: "Failed to load this data block.",

@@ -1127,9 +1127,13 @@ export const zh: Dictionary = {
     offline: "離線",
     offlinePending: "離線（{count} 項待同步）",
     offlineUnavailable: "離線時無法使用",
+    offlineSyncPendingTitle: "變更等待同步",
+    offlineSyncPendingBody: "{count} 項變更已儲存在此裝置。系統會自動重試同步。",
+    offlinePageStorageFailed: "無法將此頁面儲存到裝置。請檢查可用儲存空間後再試。",
+    offlinePageParentMissing: "離線建立子頁面前，請先連線開啟父頁面一次。",
+    offlinePageSessionMissing: "此裝置上的帳戶資料無法使用。請重新連線後再試。",
     offlineBannerTitle: "目前離線",
-    offlineBannerBody:
-      "正在顯示儲存在此裝置上的內容。請重新連線以更新或進行變更。",
+    offlineBannerBody: "儲存在此裝置的頁面可離線編輯。其他功能需要網路連線。",
     offlineBannerPending:
       "正在顯示已儲存的內容。重新連線後會同步 {count} 項變更。",
     dataBlockFailed: "無法載入此資料區塊。",

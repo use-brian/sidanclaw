@@ -20,6 +20,7 @@
  */
 
 import { authFetch } from "@/lib/auth-fetch";
+import { desktopBridge, isDesktopAuth } from "@/lib/desktop-auth-source";
 import type { ViewPayload } from "@use-brian/views-renderer";
 import type {
   CustomPageTemplate,
@@ -571,6 +572,15 @@ async function json<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+// An expired access token can still produce a resource 401 while desktop
+// refresh is temporarily unreachable. Only a rejected refresh clears the
+// durable session; mirror the desktop bootstrap's cache authority rule.
+function transientViewResponse(status: number): boolean {
+  return status >= 500 || (status === 401 && isDesktopAuth() && Boolean(
+    desktopBridge()?.getAccessToken?.() || desktopBridge()?.getRefreshToken?.(),
+  ));
+}
+
 // ── List ──────────────────────────────────────────────────────────────
 
 /**
@@ -587,16 +597,55 @@ export async function listViews(params: {
   const url = `${API_URL}/api/workspaces/${params.workspaceId}/saved-views${
     qs.toString() ? `?${qs.toString()}` : ""
   }`;
-  const res = await authFetch(url);
-  const body = await json<{ savedViews: ViewListRow[] }>(res);
-  return body.savedViews;
+  const { mergeLocalPages } = await import("@/lib/offline/offline-pages");
+  const { idbGet, idbSet, idbDelete } = await import("@/lib/offline/idb");
+  const key = `sidebar:${params.state === "saved" ? "saved" : params.state === "draft" ? "drafts" : "all"}:${params.workspaceId}`;
+  const cached = await idbGet<ViewListRow[]>(key);
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return mergeLocalPages(cached ?? [], params.workspaceId, params.state);
+  }
+  try {
+    const res = await authFetch(url);
+    if (transientViewResponse(res.status)) {
+      return mergeLocalPages(cached ?? [], params.workspaceId, params.state);
+    }
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      await idbDelete(key);
+      return json<{ savedViews: ViewListRow[] }>(res).then((body) => body.savedViews);
+    }
+    const body = await json<{ savedViews: ViewListRow[] }>(res);
+    await idbSet(key, body.savedViews);
+    return mergeLocalPages(body.savedViews, params.workspaceId, params.state);
+  } catch (error) {
+    if (error instanceof TypeError || /^HTTP 5\d\d/.test(String((error as Error).message))) {
+      return mergeLocalPages(cached ?? [], params.workspaceId, params.state);
+    }
+    throw error;
+  }
 }
 
 // ── Read ──────────────────────────────────────────────────────────────
 
 export async function getView(viewId: string): Promise<ViewMetadata> {
-  const res = await authFetch(`${API_URL}/api/views/${viewId}`);
-  return json<ViewMetadata>(res);
+  const { readLocalPage, readCachedPage, cachePage, evictCachedPage } = await import("@/lib/offline/offline-pages");
+  const local = await readLocalPage(viewId);
+  if (local) return local.view;
+  const cached = await readCachedPage(viewId);
+  if (cached && typeof navigator !== "undefined" && !navigator.onLine) return cached;
+  try {
+    const res = await authFetch(`${API_URL}/api/views/${viewId}`);
+    if (cached && transientViewResponse(res.status)) return cached;
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      await evictCachedPage(viewId);
+      return json<ViewMetadata>(res);
+    }
+    const view = await json<ViewMetadata>(res);
+    await cachePage(view);
+    return view;
+  } catch (error) {
+    if (cached && (error instanceof TypeError || /^HTTP 5\d\d/.test(String((error as Error).message)))) return cached;
+    throw error;
+  }
 }
 
 // ── Custom page templates (migration 281) ─────────────────────────────
@@ -1253,7 +1302,9 @@ export async function deleteView(viewId: string): Promise<void> {
   }
 }
 
-export async function createDraft(params: {
+export type DraftInput = {
+  /** Stable client UUID, also used by the offline outbox. */
+  id?: string;
   workspaceId: string;
   name?: string;
   binding?: BindingConfig;
@@ -1277,13 +1328,46 @@ export async function createDraft(params: {
    * draft pre-filled with a template's blocks. Omit for an empty page.
    */
   blocks?: Block[];
-}): Promise<ViewMetadata> {
+};
+
+export async function createDraft(params: DraftInput): Promise<ViewMetadata> {
+  const { getOnline } = await import("@/lib/offline/offline-writes");
+  const { createLocalPage, readLocalPage, cachePage } = await import("@/lib/offline/offline-pages");
+  const input = { ...params, id: params.id ?? crypto.randomUUID() };
+  if (!getOnline() || (typeof navigator !== "undefined" && !navigator.onLine)
+      || (input.nestParentId && await readLocalPage(input.nestParentId))) {
+    return createLocalPage(input);
+  }
+  try {
+    const view = await createDraftOnServer(input);
+    await cachePage(view);
+    return view;
+  } catch (error) {
+    // A lost response may already have created the page. Retry the SAME UUID.
+    if (error instanceof TypeError || /^HTTP 5\d\d/.test(String((error as Error).message))) {
+      return createLocalPage(input);
+    }
+    throw error;
+  }
+}
+
+/** Older APIs ignore unknown create fields, so verify support before replay. */
+export async function supportsOfflinePageIds(workspaceId: string): Promise<boolean> {
+  const res = await authFetch(`${API_URL}/api/workspaces/${workspaceId}/views/offline-capabilities`);
+  if (!res.ok) return false;
+  const body = await res.json() as { clientAssignedPageIds?: boolean };
+  return body.clientAssignedPageIds === true;
+}
+
+/** Network-only executor; the outbox calls this without re-enqueueing. */
+export async function createDraftOnServer(params: DraftInput): Promise<ViewMetadata> {
   const res = await authFetch(
     `${API_URL}/api/workspaces/${params.workspaceId}/views/draft`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        ...(params.id ? { id: params.id } : {}),
         ...(params.name ? { name: params.name } : {}),
         ...(params.binding ? { binding: params.binding } : {}),
         ...(params.nestParentId ? { nestParentId: params.nestParentId } : {}),

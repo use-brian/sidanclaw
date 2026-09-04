@@ -1837,3 +1837,44 @@ describe('[COMP:api/doc-auto-title] POST /saved-views/:id/auto-title', () => {
     expect(stores.savedViewStore.setAutoTitle).not.toHaveBeenCalled()
   })
 })
+
+
+describe('[COMP:api/views-routes] offline draft identity', () => {
+  const id = '00000000-0000-4000-8000-000000000099'
+  it('advertises stable IDs only to workspace members', async () => {
+    const member = makeApp({ userId: USER_ID })
+    const allowed = await request(member.app).get(`/api/workspaces/${WORKSPACE_ID}/views/offline-capabilities`)
+    expect(allowed.status).toBe(200)
+    expect(allowed.body).toEqual({ clientAssignedPageIds: true })
+    const outsider = makeApp({ userId: USER_ID, role: null })
+    expect((await request(outsider.app).get(`/api/workspaces/${WORKSPACE_ID}/views/offline-capabilities`)).status).toBe(403)
+  })
+  it('accepts a stable UUID and returns that identity' , async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.createDraft.mockResolvedValueOnce(savedViewFixture({ id }))
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id })
+    expect(result.status).toBe(201)
+    expect(result.body.id).toBe(id)
+    expect(stores.savedViewStore.createDraft).toHaveBeenCalledWith(expect.objectContaining({ id, userId: USER_ID, workspaceId: WORKSPACE_ID, deferCreatedEvent: true }))
+  })
+  it('rejects malformed IDs before creation', async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id: 'not-a-uuid' })
+    expect(result.status).toBe(400)
+    expect(stores.savedViewStore.createDraft).not.toHaveBeenCalled()
+  })
+  it('rejects a parent outside the workspace', async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.getById.mockResolvedValueOnce(savedViewFixture({ workspaceId: 'another-workspace' }))
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id, nestParentId: id })
+    expect(result.status).toBe(404)
+    expect(stores.savedViewStore.createDraft).not.toHaveBeenCalled()
+  })
+  it('returns a conflict without leaking another owner or workspace', async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.createDraft.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 'PAGE_ID_CONFLICT' }))
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id })
+    expect(result.status).toBe(409)
+    expect(result.body).toEqual({ error: 'Page ID is already in use' })
+  })
+})

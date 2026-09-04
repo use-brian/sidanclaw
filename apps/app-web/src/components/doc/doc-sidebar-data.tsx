@@ -53,6 +53,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useRouter } from "next/navigation";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { promptDialog } from "@/components/ui/prompt-dialog";
 import { invalidateDocPage } from "@/lib/surface-prefetch";
@@ -95,7 +96,7 @@ import {
   APPROVALS_REFRESH_EVENT,
   type ApprovalsRefreshDetail,
 } from "@/lib/approvals-events";
-import { isDesktopAuth } from "@/lib/desktop-auth-source";
+import { LOCAL_PAGES_CHANGED } from "@/lib/offline/offline-pages";
 import { idbGet, idbSet } from "@/lib/offline/idb";
 import { dropPageFromDocTabsSession } from "@/lib/doc-tabs-session";
 import { offlineWrite, getOnline } from "@/lib/offline/offline-writes";
@@ -442,32 +443,15 @@ export function DocSidebarDataProvider({
 
   // ── Sidebar list fetch — re-runs on workspace change + manual bump ────
   const [reloadTick, setReloadTick] = useState(0);
+  const router = useRouter();
   const reloadSidebar = useCallback(() => setReloadTick((n) => n + 1), []);
   useEffect(() => {
     if (!workspaceId) return;
     let cancelled = false;
 
-    // Bundled desktop only (gated): stale-while-revalidate the page tree through
-    // IndexedDB so the sidebar renders offline. Seed from cache immediately, then
-    // fetch; on success refresh the cache; on failure (offline) keep the stale
-    // tree instead of surfacing a hard error. Web + thin shell skip all of this.
-    const bundled = isDesktopAuth();
-    const savedKey = `sidebar:saved:${workspaceId}`;
-    const draftKey = `sidebar:drafts:${workspaceId}`;
+    // Page lists merge durable local creations in the SDK. Teamspaces retain
+    // their last known list so cached sections remain available offline.
     const teamspacesKey = `sidebar:teamspaces:${workspaceId}`;
-    if (bundled) {
-      void Promise.all([
-        idbGet<ViewListRow[]>(savedKey),
-        idbGet<ViewListRow[]>(draftKey),
-        idbGet<Teamspace[]>(teamspacesKey),
-      ]).then(([cs, cd, cts]) => {
-        if (cancelled) return;
-        if (cs) setSaved(cs);
-        if (cd) setDrafts(cd);
-        if (cts) setTeamspaces(cts);
-      });
-    }
-
     // The teamspace list rides the same fetch as the page lists so the
     // sidebar's sections and their rows always land together (a row whose
     // teamspace section hasn't arrived would misfile into Private). A failed
@@ -476,23 +460,17 @@ export function DocSidebarDataProvider({
     Promise.all([
       listViews({ workspaceId, state: "saved" }),
       listViews({ workspaceId, state: "draft" }),
-      listTeamspaces(workspaceId).catch(() => [] as Teamspace[]),
+      listTeamspaces(workspaceId).catch(async () => (await idbGet<Teamspace[]>(teamspacesKey)) ?? []),
     ])
       .then(([s, d, ts]) => {
         if (cancelled) return;
         setSaved(s);
         setDrafts(d);
         setTeamspaces(ts);
-        if (bundled) {
-          void idbSet(savedKey, s);
-          void idbSet(draftKey, d);
-          void idbSet(teamspacesKey, ts);
-        }
+        void idbSet(teamspacesKey, ts);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        // Offline in the bundled app: keep the cache-seeded tree, stay quiet.
-        if (bundled) return;
         const message = err instanceof Error ? err.message : String(err);
         setTopError(message);
       });
@@ -554,19 +532,23 @@ export function DocSidebarDataProvider({
     if (typeof window === "undefined") return;
     const handler = () => reloadSidebar();
     window.addEventListener("doc:draft-created", handler);
-    return () => window.removeEventListener("doc:draft-created", handler);
+    window.addEventListener(LOCAL_PAGES_CHANGED, handler);
+    return () => {
+      window.removeEventListener("doc:draft-created", handler);
+      window.removeEventListener(LOCAL_PAGES_CHANGED, handler);
+    };
   }, [reloadSidebar]);
 
   // ── Navigation helper through the bridge (no-op off /p) ───────────────
   const navigate = useCallback((id: string | null) => {
     if (id) pushRecent(id);
-    bridgeRef.current?.navigate(id);
-  }, [pushRecent]);
+    if (bridgeRef.current) bridgeRef.current.navigate(id);
+    else if (id) router.push(`/w/${workspaceId}/p/${id}`);
+  }, [pushRecent, router, workspaceId]);
 
   // ── Mutation handlers ─────────────────────────────────────────────────
   const handleNewDraft = useCallback(
     async (teamspaceId?: string | null) => {
-      if (!getOnline()) return; // not supported offline — the create button is disabled too
       setBusyNewDraft(true);
       setTopError(null);
       try {
@@ -593,7 +575,6 @@ export function DocSidebarDataProvider({
 
   const handleAddChild = useCallback(
     async (parentId: string) => {
-      if (!getOnline()) return; // not supported offline
       setTopError(null);
       try {
         const created = await createDraft({ workspaceId, nestParentId: parentId });

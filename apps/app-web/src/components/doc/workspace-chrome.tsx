@@ -572,7 +572,7 @@ export function WorkspaceChrome({
 
   return (
     <div className="relative flex h-full w-full overflow-hidden">
-      {offlineState.offline && (
+      {(offlineState.offline || offlineState.pending > 0) && (
         <div
           role="status"
           aria-live="polite"
@@ -584,11 +584,11 @@ export function WorkspaceChrome({
           />
           <span className="min-w-0">
             <strong className="block text-xs font-semibold">
-              {t.offlineBannerTitle}
+              {offlineState.offline ? t.offlineBannerTitle : t.offlineSyncPendingTitle}
             </strong>
             <span className="block text-[11px] leading-relaxed opacity-80">
               {offlineState.pending > 0
-                ? format(t.offlineBannerPending, {
+                ? format(offlineState.offline ? t.offlineBannerPending : t.offlineSyncPendingBody, {
                     count: offlineState.pending,
                   })
                 : t.offlineBannerBody}
