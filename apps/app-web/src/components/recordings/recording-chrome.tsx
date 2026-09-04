@@ -21,10 +21,9 @@
  * **The chrome is status-honest.** A page is linked to its recording the
  * moment the recording id exists (the live-capture auto-link), so the linked
  * recording may still be uploading, queued, processing, or failed. Rendering
- * the processed-state UI for those - a dead 0:00:00 player, "no action items",
- * an empty transcript - reads as breakage; the chrome instead fetches the
- * recording's status and shows a status card until `processed`, naming the
- * failure (`lastError`) when there is one.
+ * the processed-state UI for those would invent action items and a transcript.
+ * The chrome shows their processing status, but keeps the player available
+ * once a positive duration proves that the media reached storage.
  *
  * Layout: the action items are ALWAYS open - they are the thing a person acts
  * on after a meeting, and hiding them behind a toggle buried the point of the
@@ -245,6 +244,9 @@ export function RecordingChrome({
 
   const status = summary?.status;
   const notProcessed = status !== undefined && status !== "processed";
+  // Preserve playback when the metadata read fails: the independently minted
+  // media URL can still work. A known unfinished upload needs proven bytes.
+  const canPlay = !notProcessed || (summary?.durationMs ?? 0) > 0;
 
   return (
     <div className="mb-6 flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3">
@@ -255,16 +257,24 @@ export function RecordingChrome({
         {...(notProcessed ? { emptyCopy: t.recordings.transcriptPending } : {})}
       />
 
+      {canPlay ? (
+        <>
+          <RecordingVideoStage />
+          <RecordingPlayerBar title={title} className="sticky top-0 z-10" />
+        </>
+      ) : null}
+
       {notProcessed ? (
-        /* Status-honest card: no dead player, no "no action items" for a
-           recording that has not produced any yet. */
+        /* Processing status stays visible beside independently playable media. */
         <section className="flex flex-col gap-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-medium">
               {status === "failed"
                 ? t.recordings.statusFailedTitle
                 : status === "awaiting_upload"
-                  ? t.recordings.statusAwaitingUploadTitle
+                  ? canPlay
+                    ? t.recordings.statusStagedTitle
+                    : t.recordings.statusAwaitingUploadTitle
                   : t.recordings.statusProcessingTitle}
             </h2>
             <span className="flex shrink-0 items-center gap-3">
@@ -291,17 +301,15 @@ export function RecordingChrome({
                 ? t.recordings.statusFailedBodyDetail.replace("{detail}", summary.lastError)
                 : t.recordings.statusFailedBody
               : status === "awaiting_upload"
-                ? t.recordings.statusAwaitingUploadBody
+                ? canPlay
+                  ? t.recordings.statusStagedBody
+                  : t.recordings.statusAwaitingUploadBody
                 : t.recordings.statusProcessingBody}
           </p>
           {livePane}
         </section>
       ) : (
         <>
-          {/* Visible only for a video recording; citation seeks land on this frame. */}
-          <RecordingVideoStage />
-          <RecordingPlayerBar title={title} className="sticky top-0 z-10" />
-
           {/* Always open — the reason someone opens a meeting page. */}
           <section>
             <div className="mb-1.5 flex items-baseline justify-between gap-2">

@@ -16,6 +16,7 @@
  * [COMP:app-web/recording-chrome]
  */
 
+import { useEffect, useState } from "react";
 import { formatStamp } from "@use-brian/shared";
 import { useT } from "@/lib/i18n/client";
 import { useRecordingPlayer } from "@/lib/recordings/recording-player-context";
@@ -30,6 +31,26 @@ export function RecordingPlayerBar({
   const t = useT();
   const { currentMs, durationMs, isPlaying, togglePlay, isLoading, error, seekTo } =
     useRecordingPlayer();
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copying" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    if (copyStatus !== "copied" && copyStatus !== "failed") return;
+    const timer = setTimeout(() => setCopyStatus("idle"), 3_000);
+    return () => clearTimeout(timer);
+  }, [copyStatus]);
+
+  const copyTimestamp = async () => {
+    // Capture the click's moment even if playback advances while permission
+    // resolves. Pasting uses the existing timestamp scanner and page pointer.
+    const stamp = `[${formatStamp(currentMs)}]`;
+    setCopyStatus("copying");
+    try {
+      await navigator.clipboard.writeText(stamp);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
 
   if (error) {
     return (
@@ -41,7 +62,7 @@ export function RecordingPlayerBar({
 
   return (
     <div
-      className={`flex items-center gap-3 rounded-md border border-border bg-background/95 px-4 py-3 backdrop-blur ${className}`}
+      className={`flex flex-wrap items-center gap-3 rounded-md border border-border bg-background/95 px-4 py-3 backdrop-blur ${className}`}
     >
       <button
         type="button"
@@ -62,13 +83,29 @@ export function RecordingPlayerBar({
         value={Math.min(currentMs, durationMs || 0)}
         onChange={(e) => seekTo(Number(e.target.value))}
         aria-label={title}
-        className="h-1 w-full cursor-pointer"
+        className="h-1 min-w-20 flex-1 cursor-pointer"
       />
+      <button
+        type="button"
+        onClick={() => void copyTimestamp()}
+        disabled={isLoading || durationMs <= 0 || copyStatus === "copying"}
+        title={t.recordings.copyTimestampHint}
+        className="shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+      >
+        {t.recordings.copyTimestamp}
+      </button>
       {isLoading ? (
         <span className="shrink-0 text-xs text-muted-foreground">
           {t.recordings.detailLoadingAudio}
         </span>
       ) : null}
+      <span role="status" className="basis-full text-xs text-muted-foreground">
+        {copyStatus === "copied"
+          ? t.recordings.timestampCopied
+          : copyStatus === "failed"
+            ? t.recordings.timestampCopyFailed
+            : t.recordings.copyTimestampHint}
+      </span>
     </div>
   );
 }
