@@ -17,6 +17,42 @@ import { authFetch } from "@/lib/auth-fetch";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
+/**
+ * Browsers normally provide a media MIME for picked recordings, but desktop
+ * file drags and a few platform bridges can leave `File.type` empty. The
+ * recording route requires an audio/video MIME, so infer common recording
+ * extensions here rather than mislabelling every empty type as MP3.
+ */
+const RECORDING_MIME_BY_EXTENSION: Record<string, string> = {
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  wav: "audio/wav",
+  aac: "audio/aac",
+  flac: "audio/flac",
+  ogg: "audio/ogg",
+  oga: "audio/ogg",
+  opus: "audio/ogg",
+  amr: "audio/amr",
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  mov: "video/quicktime",
+  webm: "video/webm",
+  mkv: "video/x-matroska",
+  avi: "video/x-msvideo",
+  "3gp": "video/3gpp",
+};
+
+export function recordingMimeForFile(file: Pick<File, "name" | "type">): string | null {
+  const declared = file.type.toLowerCase().split(";", 1)[0]?.trim() ?? "";
+  if (declared.startsWith("audio/") || declared.startsWith("video/")) return declared;
+  const extension = file.name.toLowerCase().split(".").pop() ?? "";
+  return RECORDING_MIME_BY_EXTENSION[extension] ?? null;
+}
+
+export function isRecordingFile(file: Pick<File, "name" | "type">): boolean {
+  return recordingMimeForFile(file) !== null;
+}
+
 export type RecordingEstimate = {
   recordingId: string;
   durationMs: number;
@@ -267,7 +303,10 @@ export async function startRecordingUpload(params: {
    */
   kind?: "memo" | "meeting";
 }): Promise<{ recordingId: string }> {
-  const mime = params.file.type || "audio/mpeg";
+  const mime = recordingMimeForFile(params.file);
+  if (!mime) {
+    throw new RecordingApiError("Only audio/video recordings are supported", 400);
+  }
   const mintRes = await authFetch(`${API_URL}/api/recordings/upload-url`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

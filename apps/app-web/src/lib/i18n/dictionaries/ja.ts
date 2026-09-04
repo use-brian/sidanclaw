@@ -837,7 +837,7 @@ export const ja: Dictionary = {
         "今は対応が必要なものはありません。上で入力すれば、アシスタントが作成します。",
       // "ブレインにファイルを追加" ドロップブロック。[COMP:app-web/home-file-drop]
       ingestTitle: "ブレインにファイルを追加",
-      ingestCaption: "資料をドロップして保存し、要点を抽出します",
+      ingestCaption: "ファイルをドロップして保存・取り込みます。音声や動画ではブループリントを選べます",
       ingestCta: "ファイルを選択",
       ingestDrop: "ドロップしてブレインに追加",
       ingestAdd: "ブレインに追加",
@@ -851,6 +851,7 @@ export const ja: Dictionary = {
       ingestTooLarge: "ブレインに追加するには大きすぎます: {size}。1 ファイルあたりの上限は {limit} です。",
       ingestUnreachable: "アップロードがサーバーに届きませんでした。接続を確認してもう一度お試しください。",
       ingestTooManyFiles: "一度に追加できるのは {max} ファイルまでです。このファイルは次のバッチで追加してください。",
+      ingestMediaNeedsAssistant: "音声や動画を取り込む前にアシスタントを追加してください。",
       ingestRemove: "削除",
       ingestClear: "クリア",
       linkedinArchiveAlone: "全行を照合するため、LinkedIn ZIP は単独で追加してください。",

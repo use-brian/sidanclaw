@@ -930,7 +930,8 @@ export const en = {
         "Nothing needs you right now. Describe anything above and your assistant will build it.",
       // "Add files to your brain" drop block. [COMP:app-web/home-file-drop]
       ingestTitle: "Add files to your brain",
-      ingestCaption: "Drop documents to store them and pull out what matters",
+      ingestCaption:
+        "Drop files to store and ingest them. Audio and video let you choose a blueprint.",
       ingestCta: "Choose files",
       ingestDrop: "Drop to add to your brain",
       ingestAdd: "Add to brain",
@@ -950,6 +951,8 @@ export const en = {
         "The upload could not reach the server. Check your connection and try again.",
       ingestTooManyFiles:
         "Only {max} files at a time. Add this one in the next batch.",
+      ingestMediaNeedsAssistant:
+        "Add an assistant before ingesting audio or video.",
       ingestRemove: "Remove",
       ingestClear: "Clear",
       linkedinArchiveAlone: "Add a LinkedIn ZIP by itself so every row can be reconciled.",

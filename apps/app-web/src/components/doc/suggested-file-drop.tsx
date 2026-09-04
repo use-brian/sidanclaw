@@ -1,13 +1,15 @@
 "use client";
 
 /**
- * Home "Add files to your brain" drop block. Drag files onto it (or pick them),
- * then "Add to brain" runs deterministic ingest. Ordinary files use Pipeline B;
- * a single LinkedIn ZIP uses the dedicated lossless queue. Per-file status
+ * Shared "Add files to your brain" drop block for Home and Brain. Drag files
+ * onto it (or pick them), then "Add to brain" runs deterministic ingest.
+ * Ordinary files use Pipeline B; audio/video uses the recording pipeline so
+ * the required cost + blueprint confirmation happens before transcription; a
+ * single LinkedIn ZIP uses the dedicated lossless queue. Per-file status
  * renders inline.
  *
  * Reuses `useFileDrop` for drag state; the ingest SDK is `lib/api/ingest.ts`.
- * Lives on the Suggested-for-you surface, under the build bar.
+ * It lives under the Home build bar and at the top of Brain Entries.
  *
  * Spec: docs/architecture/features/files.md -> "Direct ingest".
  * [COMP:app-web/home-file-drop]
@@ -29,6 +31,11 @@ import {
   totalAdded,
   type IngestFileResult,
 } from "@/lib/api/ingest";
+import { isRecordingFile } from "@/lib/api/recordings";
+import {
+  useRecordingUpload,
+  type RecordingUploadStatus,
+} from "@/lib/recordings/use-recording-upload";
 
 /** Match the server's per-request cap (MAX_INGEST_FILES in routes/files.ts). */
 const MAX_FILES = 5;
@@ -64,16 +71,32 @@ type StagedItem = {
   file: File;
   status: ItemStatus;
   result?: IngestFileResult;
+  recordingId?: string;
   error?: string;
 };
 
-export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
-  const t = useT().docPage.suggested;
+export function SuggestedFileDrop({
+  workspaceId,
+  assistantId,
+}: {
+  workspaceId: string;
+  assistantId?: string | null;
+}) {
+  const copy = useT();
+  const t = copy.docPage.suggested;
   const [items, setItems] = useState<StagedItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [activeMediaId, setActiveMediaId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Polls outlive no unmount: this block sits on the Home surface, which is torn
-  // down the moment the user navigates to Brain / Studio / anywhere else.
+  const recording = useRecordingUpload(workspaceId, assistantId ?? "");
+  const {
+    run: runRecording,
+    dismiss: dismissRecording,
+    status: recordingStatus,
+    uploadProgress: recordingProgress,
+  } = recording;
+  // Polls outlive no unmount: this block is torn down when its Home/Brain
+  // surface changes.
   const unmounted = useRef(false);
   useEffect(() => {
     unmounted.current = false;
@@ -90,7 +113,14 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
       // is dropped by the edge before any handler runs, so the request would
       // reject with a bare `TypeError: Failed to fetch` that names neither the
       // size nor the limit. Telling the user here also costs them nothing.
-      const { accepted, tooLarge } = partitionByIngestSize(incoming);
+      // Explicit Brain intake treats every audio/video file as a recording,
+      // including a short voice memo. Media goes direct to signed storage and
+      // therefore must not inherit the ordinary multipart 30 MiB ceiling.
+      const media = incoming.filter(isRecordingFile);
+      const ordinary = incoming.filter((file) => !isRecordingFile(file));
+      const { accepted, tooLarge } = partitionByIngestSize(ordinary);
+      const acceptedSet = new Set([...media, ...accepted]);
+      const acceptedInOrder = incoming.filter((file) => acceptedSet.has(file));
       const limit = formatFileSize(MAX_INGEST_FILE_BYTES);
       setItems((prev) => {
         // Keep only unresolved (pending) items plus the new batch, capped.
@@ -102,7 +132,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         // no chip, no message, and nothing to click. Error chips are not
         // uploads and never evict a file that could still be sent.
         const room = Math.max(0, MAX_FILES - pending.length);
-        const staged = accepted.slice(0, room).map((file) => ({
+        const staged = acceptedInOrder.slice(0, room).map((file) => ({
           localId: crypto.randomUUID(),
           file,
           status: "pending" as const,
@@ -112,7 +142,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
             file,
             error: format(t.ingestTooLarge, { size: formatFileSize(file.size), limit }),
           })),
-          ...accepted.slice(room).map((file) => ({
+          ...acceptedInOrder.slice(room).map((file) => ({
             file,
             error: format(t.ingestTooManyFiles, { max: String(MAX_FILES) }),
           })),
@@ -187,12 +217,16 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
       if (zipItems.length > 0 && pending.length !== 1) {
         throw new Error(t.linkedinArchiveAlone);
       }
+      const ordinary = pending.filter((item) => !isRecordingFile(item.file));
+      const media = pending.filter((item) => isRecordingFile(item.file));
       const results = zipItems.length === 1
         ? [await ingestLinkedInArchive(workspaceId, zipItems[0].file)]
-        : await ingestFiles(workspaceId, pending.map((p) => p.file));
-      // `results` is positional over `pending`; pair them out here rather than
+        : ordinary.length > 0
+          ? await ingestFiles(workspaceId, ordinary.map((p) => p.file))
+          : [];
+      // `results` is positional over `ordinary`; pair them out here rather than
       // inside the updater, which React may run twice.
-      const queued = pending.flatMap((p, idx) => {
+      const queued = ordinary.flatMap((p, idx) => {
         const r = results[idx];
         return r?.ok && r.status === "queued" && r.jobId
           ? [{ localId: p.localId, jobId: r.jobId }]
@@ -201,7 +235,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
       setItems((prev) => {
         let idx = 0;
         return prev.map((i) => {
-          if (!pendingIds.has(i.localId)) return i;
+          if (!pendingIds.has(i.localId) || isRecordingFile(i.file)) return i;
           const r = results[idx++];
           const status = statusForIngestResult(r);
           if (status === "error") {
@@ -211,6 +245,58 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         });
       });
       for (const job of queued) void watchJob(job.localId, job.jobId);
+
+      // Recording uploads are sequential. Each file owns a separate cost +
+      // blueprint decision, so overlapping confirms would make the selection
+      // ambiguous.
+      for (const [mediaIndex, item] of media.entries()) {
+        if (!assistantId) {
+          setItems((prev) =>
+            prev.map((i) =>
+              i.localId === item.localId
+                ? { ...i, status: "error", error: t.ingestMediaNeedsAssistant }
+                : i,
+            ),
+          );
+          continue;
+        }
+        setActiveMediaId(item.localId);
+        const outcome = await runRecording(item.file);
+        if (outcome.outcome === "cancelled") {
+          // A cancel spends nothing and leaves the file ready to retry. Stop
+          // here rather than immediately opening the next recording dialog.
+          const notStarted = new Set(
+            media.slice(mediaIndex).map((remaining) => remaining.localId),
+          );
+          setItems((prev) =>
+            prev.map((i) =>
+              notStarted.has(i.localId) ? { ...i, status: "pending" } : i,
+            ),
+          );
+          break;
+        }
+        if (outcome.outcome === "failed") {
+          setItems((prev) =>
+            prev.map((i) =>
+              i.localId === item.localId
+                ? { ...i, status: "error", error: outcome.message }
+                : i,
+            ),
+          );
+          continue;
+        }
+        setItems((prev) =>
+          prev.map((i) =>
+            i.localId === item.localId
+              ? {
+                  ...i,
+                  status: "done",
+                  recordingId: outcome.recording.recordingId,
+                }
+              : i,
+          ),
+        );
+      }
     } catch (err) {
       // `fetch` rejects with a bare `TypeError` for anything that never reached
       // a handler: offline, DNS, CORS, or a body the edge refused. Its message
@@ -220,13 +306,29 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         err instanceof TypeError ? t.ingestUnreachable : (err as Error).message;
       setItems((prev) =>
         prev.map((i) =>
-          pendingIds.has(i.localId) ? { ...i, status: "error", error: message } : i,
+          pendingIds.has(i.localId) && i.status === "ingesting"
+            ? { ...i, status: "error", error: message }
+            : i,
         ),
       );
     } finally {
+      setActiveMediaId(null);
+      dismissRecording();
       setBusy(false);
     }
-  }, [items, busy, workspaceId, watchJob, t.ingestFailed, t.ingestUnreachable, t.linkedinArchiveAlone]);
+  }, [
+    items,
+    busy,
+    workspaceId,
+    assistantId,
+    runRecording,
+    dismissRecording,
+    watchJob,
+    t.ingestFailed,
+    t.ingestMediaNeedsAssistant,
+    t.ingestUnreachable,
+    t.linkedinArchiveAlone,
+  ]);
 
   return (
     <section
@@ -274,7 +376,13 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
                 {i.file.name}
               </span>
               <span className="shrink-0 text-[11.5px] text-muted-foreground">
-                <StatusLabel item={i} t={t} />
+                <StatusLabel
+                  item={i}
+                  t={t}
+                  recordings={copy.recordings}
+                  recordingStatus={activeMediaId === i.localId ? recordingStatus : undefined}
+                  recordingProgress={recordingProgress}
+                />
               </span>
               {i.status === "pending" && (
                 <button
@@ -336,14 +444,41 @@ function StatusIcon({ status }: { status: ItemStatus }) {
 function StatusLabel({
   item,
   t,
+  recordings,
+  recordingStatus,
+  recordingProgress,
 }: {
   item: StagedItem;
   t: ReturnType<typeof useT>["docPage"]["suggested"];
+  recordings: ReturnType<typeof useT>["recordings"];
+  recordingStatus?: RecordingUploadStatus;
+  recordingProgress: number;
 }) {
   if (item.status === "pending") return <>{t.ingestReady}</>;
-  if (item.status === "ingesting") return <>{t.ingestAdding}</>;
+  if (item.status === "ingesting") {
+    if (recordingStatus === "uploading") {
+      return (
+        <>
+          {recordings.uploadingProgress.replace(
+            "{percent}",
+            String(Math.round(recordingProgress * 100)),
+          )}
+        </>
+      );
+    }
+    if (recordingStatus === "estimating") return <>{recordings.estimating}</>;
+    if (recordingStatus === "processing") return <>{recordings.processing}</>;
+    return <>{t.ingestAdding}</>;
+  }
   if (item.status === "analyzing") return <>{t.ingestAnalyzing}</>;
   if (item.status === "error") return <span className="text-rose-600 dark:text-rose-400">{item.error ?? t.ingestFailed}</span>;
+  if (item.recordingId) {
+    return (
+      <span className="text-emerald-600 dark:text-emerald-400">
+        {recordings.detailStatusQueued}
+      </span>
+    );
+  }
   if (item.result?.linkedinImport) {
     const imported = item.result.linkedinImport;
     return imported.status === "completed" ? (

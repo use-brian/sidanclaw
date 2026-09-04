@@ -347,7 +347,7 @@ export function SuggestedView({
       </form>
 
       {/* Drop files to add to the brain — store raw bytes + decompose content. */}
-      <SuggestedFileDrop workspaceId={workspaceId} />
+      <SuggestedFileDrop workspaceId={workspaceId} assistantId={assistantId} />
 
       {loading ? (
         <DockSkeleton />

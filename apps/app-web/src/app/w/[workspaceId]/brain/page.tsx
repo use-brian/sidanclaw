@@ -138,6 +138,8 @@ import {
 } from "@/contexts/brain-surface-context";
 import { Button } from "@/components/ui/button";
 import { useIsOffline } from "@/lib/offline/use-offline-sync";
+import { usePrimaryAssistant } from "@/contexts/primary-assistant";
+import { SuggestedFileDrop } from "@/components/doc/suggested-file-drop";
 import {
   deleteBrainContentCache,
   isArrayValue,
@@ -157,6 +159,7 @@ function BrainPageInner() {
   const searchParams = useSearchParams();
   const t = useT();
   const offline = useIsOffline();
+  const { assistantId: primaryAssistantId } = usePrimaryAssistant();
   // The Brain controls live in the sidebar (`BrainSidebarPanel`); this page
   // reads + reacts to their shared state. The mobile inline strip below also
   // binds to these setters. `pendingOnly` is derived (section === 'reviews').
@@ -1030,6 +1033,14 @@ function BrainPageInner() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col">
+        {section === "entries" && activeId && !offline ? (
+          <div className="px-3 sm:px-5">
+            <SuggestedFileDrop
+              workspaceId={activeId}
+              assistantId={primaryAssistantId}
+            />
+          </div>
+        ) : null}
         {section === "reviews" ? (
           /* Reviews master-detail — the sidebar lists the queue; this pane
              shows the selected item with verify / delete / more-options and

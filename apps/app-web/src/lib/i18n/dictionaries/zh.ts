@@ -824,7 +824,7 @@ export const zh: Dictionary = {
       allClearBody: "目前沒有需要你處理的事項。在上方描述需求，助理就會為你建立。",
       // 「將檔案加入大腦」拖放區塊。[COMP:app-web/home-file-drop]
       ingestTitle: "將檔案加入大腦",
-      ingestCaption: "拖放文件即可保存並擷取重點",
+      ingestCaption: "拖放檔案即可儲存並匯入。音訊和影片可選擇藍圖。",
       ingestCta: "選擇檔案",
       ingestDrop: "放開即可加入大腦",
       ingestAdd: "加入大腦",
@@ -838,6 +838,7 @@ export const zh: Dictionary = {
       ingestTooLarge: "檔案太大，無法加入大腦：{size}。每個檔案上限為 {limit}。",
       ingestUnreachable: "上傳無法連到伺服器。請檢查網路連線後再試一次。",
       ingestTooManyFiles: "一次最多 {max} 個檔案。請在下一批加入這個檔案。",
+      ingestMediaNeedsAssistant: "請先新增助理，再匯入音訊或影片。",
       ingestRemove: "移除",
       ingestClear: "清除",
       linkedinArchiveAlone: "請單獨加入 LinkedIn ZIP，以便核對每一列資料。",
