@@ -391,12 +391,14 @@ function Boot() {
       const tokenPromise = getValidAccessToken();
       const cached = await idbGet<unknown>(DESKTOP_WORKSPACES_CACHE_KEY);
       const bridge = desktopBridge();
-      const hasStoredSession = Boolean(
-        bridge?.getAccessToken?.() || bridge?.getRefreshToken?.(),
-      );
       const result = await resolveDesktopWorkspaceBootstrap({
         cached,
-        hasStoredSession,
+        // Read through the preload cache each time. `authFetch` clears it
+        // synchronously only when `/auth/refresh` definitively rejects the
+        // session; transient failures leave the refresh credential in place.
+        hasStoredSession: () => Boolean(
+          bridge?.getAccessToken?.() || bridge?.getRefreshToken?.(),
+        ),
         authenticate: () => tokenPromise,
         loadLive: async () => {
           const res = await authFetch(`${apiBase()}/api/workspaces`);
