@@ -1120,7 +1120,7 @@ export const zhCN: Dictionary = {
     offlinePageParentMissing: "离线创建子页面前，请先联网打开父页面一次。",
     offlinePageSessionMissing: "此设备上的账户信息不可用。请重新连接后重试。",
     offlineBannerTitle: "目前离线",
-    offlineBannerBody: "保存在此设备的页面可离线编辑。其他功能需要网络连接。",
+    offlineBannerBody: "此设备已保存的页面及 Feed 草稿可离线编辑。AI、上传及发布需要连接。",
     offlineBannerPending: "正在显示已保存的内容。重新连接后会同步 {count} 项变更。",
     dataBlockFailed: "无法加载此数据区块。",
     dataTable: {
@@ -6313,6 +6313,14 @@ export const zhCN: Dictionary = {
       ideaSaveFailed: "无法保存这条灵感。",
     },
     postEditor: {
+      savedLocally: "已保存在此设备，等待同步。",
+      synced: "工作草稿已同步",
+      localSaveFailed: "无法保存在此设备。请保持编辑器打开并复制文字。",
+      syncConflict: "其他设备已修改此帖子。你的编辑仍保留在此，可另存为新帖子。",
+      syncBlocked: "无法完成同步。你的编辑仍保留在此，请检查连接和草稿权限。",
+      saveAsNewPost: "另存为新帖子",
+      refineNeedsConnection: "润色需要连接及已同步的帖子。你仍可在编辑器继续撰写。",
+
       captionPlaceholder: "直接撰写帖子，或让右侧的助手起草一版。",
       charCount: "{count} 个字符",
       overLimit: "超出上限",

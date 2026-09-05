@@ -94,6 +94,7 @@ export function CaptionEditor({
   readOnly,
   placeholder,
   deferSave = false,
+  saveHint,
   onChange,
   onSave,
 }: {
@@ -103,6 +104,7 @@ export function CaptionEditor({
   placeholder?: string;
   /** Keep edits local until the parent commits the complete format payload. */
   deferSave?: boolean;
+  saveHint?: string;
   /** Every keystroke; the parent owns the text. */
   onChange: (next: string) => void;
   /** Debounced commit. Returns false to surface a save error. */
@@ -278,7 +280,7 @@ export function CaptionEditor({
               : state === "error"
                 ? t.saveFailed
                 : deferSave
-                  ? t.saveWithVersion
+                  ? (saveHint ?? t.saveWithVersion)
                   : t.autosaveHint}
         </span>
       </div>

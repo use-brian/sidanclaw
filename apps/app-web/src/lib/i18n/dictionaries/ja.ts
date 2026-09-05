@@ -1148,7 +1148,7 @@ export const ja: Dictionary = {
     offlinePageParentMissing: "オフラインでサブページを作成する前に、オンラインで親ページを一度開いてください。",
     offlinePageSessionMissing: "この端末でアカウント情報を取得できません。再接続して再試行してください。",
     offlineBannerTitle: "オフラインです",
-    offlineBannerBody: "この端末に保存されたページはオフラインで編集できます。その他の機能には接続が必要です。",
+    offlineBannerBody: "この端末に保存したページとFeedの下書きはオフラインで編集できます。AI、アップロード、公開には接続が必要です。",
     offlineBannerPending:
       "保存済みの内容を表示しています。再接続後に {count} 件の変更を同期します。",
     dataBlockFailed: "このデータブロックの読み込みに失敗しました。",
@@ -6247,6 +6247,14 @@ export const ja: Dictionary = {
       ideaSaveFailed: "アイデアを保存できませんでした。",
     },
     postEditor: {
+      savedLocally: "この端末に保存しました。同期待ちです。",
+      synced: "作業中の原稿を同期しました",
+      localSaveFailed: "この端末に保存できませんでした。エディターを開いたまま、文章をコピーしてください。",
+      syncConflict: "別の端末でこの投稿が変更されました。編集内容はここに保持されています。新しい投稿として保存してください。",
+      syncBlocked: "同期できませんでした。編集内容はここに保持されています。接続と下書きの権限を確認してください。",
+      saveAsNewPost: "新しい投稿として保存",
+      refineNeedsConnection: "推敲には接続と投稿の同期が必要です。エディターでは引き続き執筆できます。",
+
       captionPlaceholder: "投稿を書くか、右のアシスタントに下書きを頼んでください。",
       charCount: "{count} 文字",
       overLimit: "上限を超えています",

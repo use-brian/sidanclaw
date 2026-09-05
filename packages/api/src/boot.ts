@@ -170,6 +170,7 @@ import {
 } from './routes/content-planning.js'
 import { contentPlanRoutes } from './routes/content-plan.js'
 import { contentIdeasRoutes } from './routes/content-ideas.js'
+import { postWorkingCopiesRoutes } from './routes/post-working-copies.js'
 import {
   selfHostFeedCloudRoutes,
   selfHostFeedManagedDistributionRoutes,
@@ -4954,6 +4955,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   // The idea backlog rides the same open mount for the same reason: capturing
   // and developing an idea must never require a credential in either edition.
   app.use('/api/distribution', requireAuth(env.JWT_SECRET), contentIdeasRoutes())
+  app.use('/api/distribution', requireAuth(env.JWT_SECRET), postWorkingCopiesRoutes())
 
   // Standalone content planning reuses the app-web `/api/distribution/*` wire
   // contract but contains no provider integration. Hosted mounts its

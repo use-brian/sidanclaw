@@ -1135,7 +1135,7 @@ export const zh: Dictionary = {
     offlinePageParentMissing: "離線建立子頁面前，請先連線開啟父頁面一次。",
     offlinePageSessionMissing: "此裝置上的帳戶資料無法使用。請重新連線後再試。",
     offlineBannerTitle: "目前離線",
-    offlineBannerBody: "儲存在此裝置的頁面可離線編輯。其他功能需要網路連線。",
+    offlineBannerBody: "此裝置已儲存的頁面及 Feed 草稿可離線編輯。AI、上傳及發佈需要連線。",
     offlineBannerPending:
       "正在顯示已儲存的內容。重新連線後會同步 {count} 項變更。",
     dataBlockFailed: "無法載入此資料區塊。",
@@ -6189,6 +6189,14 @@ export const zh: Dictionary = {
       ideaSaveFailed: "无法保存这条灵感。",
     },
     postEditor: {
+      savedLocally: "已儲存在此裝置，等待同步。",
+      synced: "工作草稿已同步",
+      localSaveFailed: "無法儲存在此裝置。請保持編輯器開啟並複製文字。",
+      syncConflict: "其他裝置已修改此貼文。你的編輯仍保留在此，可另存為新貼文。",
+      syncBlocked: "無法完成同步。你的編輯仍保留在此，請檢查連線和草稿權限。",
+      saveAsNewPost: "另存為新貼文",
+      refineNeedsConnection: "潤飾需要連線及已同步的貼文。你仍可在編輯器繼續撰寫。",
+
       captionPlaceholder: "直接撰写帖子，或让右侧的助手起草一版。",
       charCount: "{count} 个字符",
       overLimit: "超出上限",

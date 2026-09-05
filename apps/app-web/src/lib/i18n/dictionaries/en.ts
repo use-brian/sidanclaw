@@ -1277,7 +1277,7 @@ export const en = {
     offlinePageParentMissing: "Open the parent page online once before creating a subpage offline.",
     offlinePageSessionMissing: "Your account information is not available on this device. Reconnect and try again.",
     offlineBannerTitle: "You're offline",
-    offlineBannerBody: "Pages saved on this device can be edited offline. Other features need a connection.",
+    offlineBannerBody: "Pages and Feed drafts saved on this device can be edited offline. AI, uploads, and publishing need a connection.",
     offlineBannerPending:
       "Showing saved content. {count} changes will sync after you reconnect.",
     dataBlockFailed: "Failed to load this data block.",
@@ -6486,6 +6486,14 @@ export const en = {
       ideaSaveFailed: "Couldn't save the idea.",
     },
     postEditor: {
+      savedLocally: "Saved on this device. Sync pending.",
+      synced: "Working copy synced",
+      localSaveFailed: "Could not save on this device. Keep this editor open and copy your text.",
+      syncConflict: "Another device changed this post. Your edits are kept here. Save them as a new post.",
+      syncBlocked: "Sync could not complete. Your edits are kept here. Check your connection and draft access.",
+      saveAsNewPost: "Save as new post",
+      refineNeedsConnection: "Refine needs a connection and a synced post. You can keep writing in the editor.",
+
       captionPlaceholder: "Write the post, or ask the assistant on the right for a draft.",
       charCount: "{count} characters",
       overLimit: "Over the limit",

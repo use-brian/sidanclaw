@@ -34,6 +34,8 @@ import {
   subscribePendingCount,
 } from "./offline-writes";
 
+import { FEED_LOCAL_CHANGED, flushFeedWorkingCopies, readLocalFeedPosts } from "./feed-offline";
+
 import { LOCAL_PAGES_CHANGED, flushLocalPages, readLocalPages } from "./offline-pages";
 
 export interface OfflineSyncState {
@@ -99,6 +101,7 @@ export function useOfflineSync(): OfflineSyncState {
   const [navOnline, setNavOnline] = useState(initialNavigatorOnline);
   const [pending, setPending] = useState(0);
   const [localPending, setLocalPending] = useState(0);
+  const [feedPending, setFeedPending] = useState(0);
   const collabUp = useSyncExternalStore(
     subscribeCollabConnected,
     getCollabConnected,
@@ -157,9 +160,31 @@ export function useOfflineSync(): OfflineSyncState {
     };
   }, [navOnline]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let idle: ReturnType<typeof setTimeout>;
+    const count = async () => {
+      const posts = await readLocalFeedPosts();
+      if (!cancelled) setFeedPending(posts.filter(p => p.dirty).length);
+    };
+    const replay = async () => { await flushFeedWorkingCopies(); await count(); };
+    const onChange = () => {
+      void count();
+      clearTimeout(idle);
+      idle = setTimeout(() => { void replay().catch(() => {}); }, 1_000);
+    };
+    void replay().catch(() => {});
+    const timer = setInterval(() => { void replay().catch(() => {}); }, 15_000);
+    window.addEventListener(FEED_LOCAL_CHANGED, onChange);
+    return () => {
+      cancelled = true; clearTimeout(idle); clearInterval(timer);
+      window.removeEventListener(FEED_LOCAL_CHANGED, onChange);
+    };
+  }, [navOnline]);
+
   return {
     connectivity,
     offline: isEffectivelyOffline(connectivity),
-    pending: pending + localPending,
+    pending: pending + localPending + feedPending,
   };
 }

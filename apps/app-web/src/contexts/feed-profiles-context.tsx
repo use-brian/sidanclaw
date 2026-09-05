@@ -32,7 +32,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { authFetch } from "@/lib/auth-fetch";
+import { feedCachedJson } from "@/lib/offline/feed-cache";
 import {
   fetchFeedDistributionAssistants,
   fetchFeedCloudLink,
@@ -42,7 +42,6 @@ import {
 } from "@/lib/api/feed";
 import { deploymentCapabilities } from "@/lib/edition";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 export type FeedWorkspaceValue = {
   workspaceId: string;
@@ -126,9 +125,7 @@ async function loadWorkspace(workspaceId: string): Promise<{
   myUserId: string;
   canDraft: boolean;
 }> {
-  const res = await authFetch(`${API_URL}/api/workspaces/${workspaceId}`);
-  if (!res.ok) throw new Error(`workspace API ${res.status}`);
-  const team = (await res.json()) as WorkspaceApiResponse;
+  const team = await feedCachedJson<WorkspaceApiResponse>(`/api/workspaces/${workspaceId}`);
   if (!team.id || !team.name || !team.role) {
     throw new Error("workspace API returned an incomplete payload");
   }
