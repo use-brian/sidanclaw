@@ -49,7 +49,13 @@ const AUDIO_BITS_PER_SECOND = 64_000;
  */
 const VIDEO_BITS_PER_SECOND = 1_000_000;
 
-type CaptureResult = { blob: Blob; mime: string; durationMs: number };
+type CaptureResult = {
+  blob: Blob;
+  mime: string;
+  durationMs: number;
+  /** Network drain for finalization fallback, never part of the local stop. */
+  liveWindowsDone?: Promise<void>;
+};
 
 export interface RecorderEngine {
   /** Recorder clock: wall time since start, minus paused time. */
@@ -257,7 +263,7 @@ export async function createRecorderEngine(opts?: {
     if (cancel) liveCancelled = true;
     const rolling = liveRecorder;
     liveRecorder = null;
-    if (!rolling || rolling.state === "inactive") return liveQueue;
+    if (!rolling || rolling.state === "inactive") return Promise.resolve();
     return new Promise<void>((resolve) => {
       const previousStop = rolling.onstop;
       rolling.onstop = (event) => {
@@ -269,7 +275,7 @@ export async function createRecorderEngine(opts?: {
       } catch {
         resolve();
       }
-    }).then(() => liveQueue);
+    });
   };
 
   // ── chunks + spool ───────────────────────────────────────────────────
@@ -383,13 +389,19 @@ export async function createRecorderEngine(opts?: {
     spoolSessionId: () => spoolId,
     async stop() {
       closed = true;
-      await stopLiveWindow(false);
+      const durationMs = elapsedMs();
+      const liveStopped = stopLiveWindow(false);
+      const liveWindowsDone = liveStopped.then(() => liveQueue);
       return new Promise<CaptureResult>((resolve) => {
-        const durationMs = elapsedMs();
         const finish = () => {
           const mime = recorder.mimeType || mimeType || fallbackMime;
-          release();
-          resolve({ blob: new Blob(chunks, { type: mime }), mime, durationMs });
+          // Release inputs after both local encoders flush. Only durable local
+          // writes gate stop; slow transcript requests belong to the save job.
+          void liveStopped.then(async () => {
+            release();
+            await spoolQueue;
+            resolve({ blob: new Blob(chunks, { type: mime }), mime, durationMs, liveWindowsDone });
+          });
         };
         // A died track leaves the recorder already inactive — assemble what
         // was captured rather than waiting for an onstop that never fires.

@@ -8766,6 +8766,7 @@ export const zh: Dictionary = {
     micAndComputerAudio: "麦克风 + 电脑音频",
     finishing: "保存中...",
     pause: "暂停",
+    savingBackground: "正在背景儲存錄音或錄影（{count} 個）。你可以繼續聊天或開始下一段錄製。",
     resume: "继续",
     stop: "停止",
     discard: "丢弃",

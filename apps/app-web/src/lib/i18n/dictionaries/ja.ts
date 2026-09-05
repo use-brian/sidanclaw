@@ -8841,6 +8841,7 @@ export const ja: Dictionary = {
     micAndComputerAudio: "マイク + コンピューター音声",
     finishing: "保存中...",
     pause: "一時停止",
+    savingBackground: "バックグラウンドで録音・録画を保存中（{count}件）。チャットや次の録音・録画を続けられます。",
     resume: "再開",
     stop: "停止",
     discard: "破棄",

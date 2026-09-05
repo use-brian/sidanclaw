@@ -2868,10 +2868,13 @@ export function FloatingChat({
   // row and the expanded composer), so a capture started collapsed keeps
   // running when the panel opens. The stop fork lands on the same two lanes
   // a dropped file takes: short → voice-clip auto-send on THIS chat; long →
-  // the recording ingestion flow (`rec.run`, the full cost + blueprint +
+  // the recording ingestion flow (the full cost + blueprint +
   // destination confirm), stamped kind='meeting' — a recorder-originated
   // long capture is a meeting, and kind routes the transcriber ladder.
   const liveRecording = useLiveRecordingPage(workspaceId, activeAssistantId);
+  // Capture saves have their own serial lane. Never gate chat/attachments on
+  // this uploader's busy state: the recorder reports its background progress.
+  const captureUpload = useRecordingUpload(workspaceId, activeAssistantId);
   const recorder = useDockRecorder({
     enabled: !!workspaceId && !!activeAssistantId,
     workspaceId,
@@ -2888,7 +2891,7 @@ export function FloatingChat({
     prepareCaptureSource: (initialSource) => pickCaptureSource(initialSource, tRecorder),
     streamLiveWindow: liveRecording.streamWindow,
     onMeetingCapture: async (file: File, live?: { pageId: string; sessionId?: string }) => {
-      const outcome = await rec.run(file, {
+      const outcome = await captureUpload.run(file, {
         kind: "meeting",
         ...(live ? { existingPageId: live.pageId } : {}),
         ...(live?.sessionId ? { liveSessionId: live.sessionId } : {}),
@@ -2897,7 +2900,7 @@ export function FloatingChat({
       // step-aware failure) on BOTH render sites, collapsed included — the
       // upload hook's inline line below the composer only ever shows
       // expanded, so it would either be invisible or say it twice.
-      rec.dismiss();
+      captureUpload.dismiss();
       return outcome;
     },
   });

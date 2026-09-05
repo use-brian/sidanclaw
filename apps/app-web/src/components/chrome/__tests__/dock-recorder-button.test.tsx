@@ -35,6 +35,7 @@ vi.mock("@/lib/i18n/client", () => ({
       audioOptions: "Recording audio options",
       includeComputerAudio: "Include computer audio",
       streamToPage: "Stream transcript and notes to a page",
+      savingBackground: "Saving in background ({count}). Keep chatting or record again.",
     },
   }),
 }));
@@ -91,6 +92,7 @@ vi.mock("@/components/ui/switch", async () => {
 
 import {
   DockRecorderButton,
+  DockRecorderNotice,
   pickCaptureSource,
 } from "../dock-recorder";
 
@@ -111,6 +113,7 @@ function recorder(overrides: Partial<DockRecorderApi> = {}): DockRecorderApi {
   return {
     phase: { kind: "idle" },
     active: false,
+    savingCount: 0,
     elapsedMs: () => 0,
     notice: null,
     clearNotices: vi.fn(),
@@ -147,6 +150,18 @@ function mount(rec: DockRecorderApi): void {
 }
 
 describe("[COMP:app-web/dock-recorder] DockRecorderButton", () => {
+  it("keeps Record enabled and shows background progress independently of dismissible outcomes", () => {
+    const rec = recorder({ savingCount: 2, notice: { kind: "queued", text: "First recording queued" } });
+    mount(rec);
+    act(() => root!.render(<><DockRecorderButton rec={rec} /><DockRecorderNotice rec={rec} /></>));
+    expect((container!.querySelector('[aria-label="Record"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(container!.querySelectorAll('[role="status"]')).toHaveLength(2);
+    expect(container!.textContent).toContain("Saving in background (2)");
+    expect(container!.textContent).toContain("First recording queued");
+    act(() => root!.render(<DockRecorderNotice rec={{ ...rec, notice: null }} />));
+    expect(container!.textContent).toContain("Saving in background (2)");
+  });
+
   it("offers live page streaming in browsers and old shells", () => {
     mount(recorder());
     expect(container!.querySelector('[aria-label="Record"]')).toBeTruthy();

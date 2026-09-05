@@ -124,6 +124,7 @@ function renderDock(profiles: FeedProfile[]): string {
   recorderRef.current = {
     phase: { kind: "idle" },
     active: false,
+    savingCount: 0,
     elapsedMs: () => 0,
     notice: null,
     clearNotices: vi.fn(),

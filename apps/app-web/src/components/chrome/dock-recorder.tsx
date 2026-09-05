@@ -585,15 +585,15 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
 export function DockRecorderNotice({ rec, className }: { rec: DockRecorderApi; className?: string }) {
   const t = useT().recorder;
   const notice = rec.notice;
-  if (!notice) return null;
+  if (!notice && !rec.savingCount) return null;
   const informational =
-    notice.kind === "micHint" ||
-    notice.kind === "kept" ||
-    notice.kind === "queued" ||
-    notice.kind === "autoStopped" ||
-    notice.kind === "pauseStopped";
+    notice?.kind === "micHint" ||
+    notice?.kind === "kept" ||
+    notice?.kind === "queued" ||
+    notice?.kind === "autoStopped" ||
+    notice?.kind === "pauseStopped";
   const text =
-    notice.kind === "queued" || notice.kind === "handOffFailed"
+    !notice ? "" : notice.kind === "queued" || notice.kind === "handOffFailed"
       ? notice.text
       : notice.kind === "micHint"
         ? t.micHint
@@ -613,25 +613,33 @@ export function DockRecorderNotice({ rec, className }: { rec: DockRecorderApi; c
                       ? t.voiceFailed
                       : t.captureFailed;
   return (
-    <div
-      role="status"
-      className={cn(
-        "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs",
-        informational
-          ? "border-border bg-background/95 text-muted-foreground"
-          : "border-destructive/30 bg-destructive/10 text-destructive",
-        className,
+    <div className={cn("space-y-1.5", className)}>
+      {rec.savingCount > 0 && (
+        <div role="status" className="rounded-md border border-border bg-background/95 px-2.5 py-1.5 text-xs text-muted-foreground">
+          {t.savingBackground.replace("{count}", String(rec.savingCount))}
+        </div>
       )}
-    >
-      <span className="min-w-0 flex-1">{text}</span>
-      <button
-        type="button"
-        aria-label={t.dismiss}
-        onClick={rec.clearNotices}
-        className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <X className="size-3.5" aria-hidden />
-      </button>
+      {notice && (
+        <div
+          role="status"
+          className={cn(
+            "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs",
+            informational
+              ? "border-border bg-background/95 text-muted-foreground"
+              : "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
+        >
+          <span className="min-w-0 flex-1">{text}</span>
+          <button
+            type="button"
+            aria-label={t.dismiss}
+            onClick={rec.clearNotices}
+            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

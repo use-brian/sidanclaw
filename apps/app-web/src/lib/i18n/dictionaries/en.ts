@@ -9090,6 +9090,7 @@ export const en = {
     micAndComputerAudio: "Mic + computer audio",
     finishing: "Saving...",
     pause: "Pause",
+    savingBackground: "Saving recordings in the background ({count}). You can keep chatting or record again.",
     resume: "Resume",
     stop: "Stop",
     discard: "Discard",
