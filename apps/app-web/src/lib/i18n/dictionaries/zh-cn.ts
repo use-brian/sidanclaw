@@ -826,6 +826,8 @@ export const zhCN: Dictionary = {
       ingestMediaNeedsAssistant: "请先添加助手，再导入音频或视频。",
       ingestRemove: "移除",
       ingestClear: "清除",
+      ingestDialogClose: "关闭文件导入",
+      ingestOffline: "你当前处于离线状态。重新连接后即可添加这些文件。",
       linkedinArchiveAlone: "请单独加入 LinkedIn ZIP，以便核对每一列数据。",
       linkedinImportQueued: "无损导入已调度",
       linkedinRowsImported: "列已导入",

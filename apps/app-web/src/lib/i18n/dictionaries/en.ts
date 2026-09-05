@@ -928,7 +928,7 @@ export const en = {
       allClearTitle: "You're all caught up",
       allClearBody:
         "Nothing needs you right now. Describe anything above and your assistant will build it.",
-      // "Add files to your brain" drop block. [COMP:app-web/home-file-drop]
+      // Shared brain file intake. [COMP:app-web/workspace-file-drop]
       ingestTitle: "Add files to your brain",
       ingestCaption:
         "Drop files to store and ingest them. Audio and video let you choose a blueprint.",
@@ -955,6 +955,8 @@ export const en = {
         "Add an assistant before ingesting audio or video.",
       ingestRemove: "Remove",
       ingestClear: "Clear",
+      ingestDialogClose: "Close file intake",
+      ingestOffline: "You're offline. These files can be added after you reconnect.",
       linkedinArchiveAlone: "Add a LinkedIn ZIP by itself so every row can be reconciled.",
       linkedinImportQueued: "Lossless import queued",
       linkedinRowsImported: "rows imported",

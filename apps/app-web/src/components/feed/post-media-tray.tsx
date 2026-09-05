@@ -23,6 +23,7 @@ import { ImagePlus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
 import { usePostMedia } from "@/lib/use-post-media";
+import { useFileDrop } from "@/lib/use-file-drop";
 import {
   ACCEPTED_MEDIA_MIME,
   canPublishMedia,
@@ -120,6 +121,10 @@ export function PostMediaTray({
     if (result.media.length > 0) onChange([...media, ...result.media]);
   }
 
+  const drop = useFileDrop((files) => void add(Array.from(files)), {
+    disabled: readOnly || full,
+  });
+
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -132,15 +137,7 @@ export function PostMediaTray({
       </div>
 
       <div
-        onDragOver={(e) => {
-          if (readOnly || full) return;
-          e.preventDefault();
-        }}
-        onDrop={(e) => {
-          if (readOnly || full) return;
-          e.preventDefault();
-          void add(Array.from(e.dataTransfer.files));
-        }}
+        {...drop.dropProps}
         className="flex flex-wrap items-center gap-2"
       >
         {media.map((item, i) => (

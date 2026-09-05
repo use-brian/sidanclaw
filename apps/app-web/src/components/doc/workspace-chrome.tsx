@@ -84,6 +84,7 @@ import {
 } from "@/lib/desktop-titlebar";
 import { DocSidebar } from "./doc-sidebar";
 import { InboxPanel } from "./inbox-panel";
+import { WorkspaceFileDropBoundary } from "./workspace-file-drop";
 import { useSidebarData } from "./doc-sidebar-data";
 import {
   TeamspaceCreateDialog,
@@ -571,7 +572,12 @@ export function WorkspaceChrome({
   }, [router, workspaceId, homeHref]);
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden">
+    <WorkspaceFileDropBoundary
+      workspaceId={workspaceId}
+      assistantId={chatAssistantId}
+      offline={offlineState.offline}
+      className="relative flex h-full w-full overflow-hidden"
+    >
       {(offlineState.offline || offlineState.pending > 0) && (
         <div
           role="status"
@@ -800,6 +806,6 @@ export function WorkspaceChrome({
           />
         </div>
       )}
-    </div>
+    </WorkspaceFileDropBoundary>
   );
 }

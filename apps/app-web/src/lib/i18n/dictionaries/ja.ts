@@ -854,6 +854,8 @@ export const ja: Dictionary = {
       ingestMediaNeedsAssistant: "音声や動画を取り込む前にアシスタントを追加してください。",
       ingestRemove: "削除",
       ingestClear: "クリア",
+      ingestDialogClose: "ファイル取り込みを閉じる",
+      ingestOffline: "オフラインです。再接続すると、これらのファイルを追加できます。",
       linkedinArchiveAlone: "全行を照合するため、LinkedIn ZIP は単独で追加してください。",
       linkedinImportQueued: "ロスレス取り込みをキューに追加済み",
       linkedinRowsImported: "行を取り込み済み",

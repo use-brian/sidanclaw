@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * Shared "Add files to your brain" drop block for Home and Brain. Drag files
- * onto it (or pick them), then "Add to brain" runs deterministic ingest.
+ * Shared "Add files to your brain" intake for Home, Brain, and the workspace
+ * fallback dialog. Drag files onto it (or pick them), then "Add to brain" runs
+ * deterministic ingest.
  * Ordinary files use Pipeline B; audio/video uses the recording pipeline so
  * the required cost + blueprint confirmation happens before transcription; a
  * single LinkedIn ZIP uses the dedicated lossless queue. Per-file status
@@ -75,18 +76,32 @@ type StagedItem = {
   error?: string;
 };
 
+export type IngestFileBatch = {
+  id: number;
+  files: File[];
+};
+
 export function SuggestedFileDrop({
   workspaceId,
   assistantId,
+  incomingBatch,
+  offline = false,
+  appearance = "card",
+  onBusyChange,
 }: {
   workspaceId: string;
   assistantId?: string | null;
+  incomingBatch?: IngestFileBatch | null;
+  offline?: boolean;
+  appearance?: "card" | "dialog";
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const copy = useT();
   const t = copy.docPage.suggested;
   const [items, setItems] = useState<StagedItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [activeMediaId, setActiveMediaId] = useState<string | null>(null);
+  const incomingBatchId = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const recording = useRecordingUpload(workspaceId, assistantId ?? "");
   const {
@@ -158,7 +173,17 @@ export function SuggestedFileDrop({
     [t.ingestTooLarge, t.ingestTooManyFiles],
   );
 
-  const drop = useFileDrop(addFiles, { disabled: busy });
+  useEffect(() => {
+    if (!incomingBatch || incomingBatchId.current === incomingBatch.id) return;
+    incomingBatchId.current = incomingBatch.id;
+    addFiles(incomingBatch.files);
+  }, [addFiles, incomingBatch]);
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+
+  const drop = useFileDrop(addFiles, { disabled: busy || offline });
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) addFiles(e.target.files);
@@ -206,7 +231,7 @@ export function SuggestedFileDrop({
 
   const addToBrain = useCallback(async () => {
     const pending = items.filter((i) => i.status === "pending");
-    if (pending.length === 0 || busy) return;
+    if (pending.length === 0 || busy || offline) return;
     setBusy(true);
     const pendingIds = new Set(pending.map((p) => p.localId));
     setItems((prev) =>
@@ -319,6 +344,7 @@ export function SuggestedFileDrop({
   }, [
     items,
     busy,
+    offline,
     workspaceId,
     assistantId,
     runRecording,
@@ -334,7 +360,8 @@ export function SuggestedFileDrop({
     <section
       {...drop.dropProps}
       className={cn(
-        "relative mt-4 rounded-2xl border bg-card p-4 transition-colors",
+        "relative rounded-2xl transition-colors",
+        appearance === "card" ? "mt-4 border bg-card p-4" : "bg-transparent pr-9",
         drop.isDragging ? "border-primary/60 bg-primary/[0.04]" : "border-border",
       )}
     >
@@ -349,7 +376,7 @@ export function SuggestedFileDrop({
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          disabled={busy}
+          disabled={busy || offline}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
         >
           {t.ingestCta}
@@ -358,11 +385,21 @@ export function SuggestedFileDrop({
           ref={inputRef}
           type="file"
           multiple
+          disabled={busy || offline}
           onChange={onPick}
           className="hidden"
           aria-hidden
         />
       </div>
+
+      {offline && (
+        <p
+          role="status"
+          className="mt-3 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950 dark:text-amber-100"
+        >
+          {t.ingestOffline}
+        </p>
+      )}
 
       {items.length > 0 && (
         <ul className="mt-3 flex flex-col gap-1.5">
@@ -413,7 +450,7 @@ export function SuggestedFileDrop({
           <button
             type="button"
             onClick={addToBrain}
-            disabled={pendingCount === 0 || busy}
+            disabled={pendingCount === 0 || busy || offline}
             className="inline-flex items-center gap-1.5 rounded-lg bg-action px-3 py-1.5 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
           >
             {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
