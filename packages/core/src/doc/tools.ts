@@ -545,6 +545,7 @@ function newId(): string {
  */
 export function createRenderPageTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'renderPage',
     description:
       'Create a brand-new doc page from a fully-formed `Page` object. ' +
@@ -674,6 +675,7 @@ export function createRenderPageTool(deps: DocToolDeps): Tool {
  */
 export function createPatchPageTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'patchPage',
     description:
       'Apply a list of surgical edits (`Op`s) to an existing doc page. ' +
@@ -1117,6 +1119,7 @@ export function createPatchPageTool(deps: DocToolDeps): Tool {
  */
 export function createGetBlockTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'getBlock',
     description:
       'Fetch the full content of one block on a doc page. ' +
@@ -1200,6 +1203,7 @@ export function createGetBlockTool(deps: DocToolDeps): Tool {
  */
 export function createQueryDataBlockTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'queryDataBlock',
     description:
       'Resolve the rows of a `kind: "data"` block on a doc page. ' +
@@ -1316,6 +1320,7 @@ export function createQueryDataBlockTool(deps: DocToolDeps): Tool {
  */
 export function createGetCurrentPageTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'getCurrentPage',
     description:
       'Re-fetch a doc page outline + current version. ' +
@@ -1381,6 +1386,7 @@ export function createGetCurrentPageTool(deps: DocToolDeps): Tool {
  */
 export function createGetSectionTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'getSection',
     description:
       'Expand one section of a doc page — a heading and every block beneath it, up to the next heading of the same or higher level — with full block content. ' +
@@ -1447,6 +1453,7 @@ export function createGetSectionTool(deps: DocToolDeps): Tool {
  */
 export function createGetBlockRangeTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'getBlockRange',
     description:
       'Read a contiguous run of blocks on a doc page, from `fromBlockId` to `toBlockId` (inclusive), with full content. ' +
@@ -1520,6 +1527,7 @@ const exportPageInputSchema = z.object({
  */
 export function createExportPageTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'exportPage',
     description:
       'Export a doc page to Markdown text you can reuse — paste into a message, include in an email draft, or hand to another tool. ' +
@@ -1586,6 +1594,7 @@ const importToPageInputSchema = z.object({
  */
 export function createImportToPageTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'importToPage',
     description:
       'Import a previously uploaded .docx or .md file into a doc page. ' +
@@ -1692,6 +1701,7 @@ export function createImportToPageTool(deps: DocToolDeps): Tool {
  */
 export function createCreateSubPageTool(deps: DocToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'createSubPage',
     description:
       'Create a new page NESTED UNDER an existing doc page — the Notion sub-page primitive. ' +

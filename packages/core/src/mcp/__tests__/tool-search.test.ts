@@ -707,3 +707,18 @@ describe('[COMP:mcp/tool-search] createMcpSearchTools', () => {
     expect(String(result.data)).toContain('connection refused')
   })
 })
+
+
+describe('[COMP:mcp/tool-search] mini-app grants on folded tools', () => {
+  it('refuses a cached local tool call when its app set is disabled', async () => {
+    const execute = vi.fn(async () => ({ data: 'saved' }))
+    const write = buildTool({ name: 'writePage', description: 'Write a page', requiresCapability: 'page', inputSchema: z.object({}), execute })
+    const index = buildToolIndex([{ kind: 'local', serverName: 'page', tools: [write] }])
+    const [, call] = createMcpSearchTools({ index, settingsStore: makeFakeSettingsStore(), assistantId: 'a1', userId: 'u1', callMcpTool: vi.fn() })
+    const result = await call.execute({ server: 'page', tool: 'writePage', args: {} }, { ...ctx, activeCapabilities: new Set(['page', 'home_app:page:read']) })
+    expect(result.isError).toBe(true)
+    expect(execute).not.toHaveBeenCalled()
+    const allowed = await call.execute({ server: 'page', tool: 'writePage', args: {} }, { ...ctx, activeCapabilities: new Set(['page', 'home_app:page:write']) })
+    expect(allowed.data).toBe('saved')
+  })
+})

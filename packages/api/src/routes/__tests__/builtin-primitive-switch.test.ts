@@ -15,7 +15,7 @@ vi.mock('../../db/users.js', () => ({
 import { assistantRoutes } from '../assistants.js'
 import { query, queryWithRLS } from '../../db/client.js'
 import { resolveAssistantAccess } from '../../db/users.js'
-import { BUILTIN_PRIMITIVE_CONNECTOR_IDS, OFFICIAL_CONNECTOR_TOOLS } from '@use-brian/shared'
+import { BUILTIN_PRIMITIVE_CONNECTOR_IDS, OFFICIAL_CONNECTOR_TOOLS, HOME_APP_TOOL_CAPABILITIES } from '@use-brian/shared'
 
 const mockQuery = vi.mocked(query)
 const mockQueryWithRLS = vi.mocked(queryWithRLS)
@@ -104,7 +104,7 @@ describe('[COMP:connectors/builtin-primitive-switch] Built-in primitive off swit
     // covered without touching this test.
     for (const id of BUILTIN_PRIMITIVE_CONNECTOR_IDS) {
       expect(byCap.get(id), `${id} must be toggleable`).toBeDefined()
-      expect(byCap.get(id)!.group).toBe('builtin')
+      expect(byCap.get(id)!.group).toBe(HOME_APP_TOOL_CAPABILITIES.includes(id) ? 'home-app' : 'builtin')
     }
     expect(byCap.get('files')!.enabled).toBe(true)
     expect(byCap.get('office')!.enabled).toBe(false)
@@ -115,8 +115,8 @@ describe('[COMP:connectors/builtin-primitive-switch] Built-in primitive off swit
     const res = await request(makeApp()).get('/api/assistants/a-1/primitive-grants')
     const group = (cap: string) =>
       res.body.grants.find((g: { capability: string }) => g.capability === cap)?.group
-    expect(group('tasks')).toBe('primitive')
-    expect(group('crm')).toBe('primitive')
+    expect(group('tasks')).toBe('home-app')
+    expect(group('crm')).toBe('home-app')
     expect(group('goals')).toBe('primitive')
     expect(group('configure')).toBe('admin')
   })
@@ -131,7 +131,7 @@ describe('[COMP:connectors/builtin-primitive-switch] Built-in primitive off swit
       .send({ enabled: true })
 
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ capability: 'computer', enabled: true, group: 'builtin' })
+    expect(res.body).toEqual({ capability: 'computer', enabled: true, group: 'home-app' })
     expect(capabilityStore.grant).toHaveBeenCalledWith(
       expect.objectContaining({ assistantId: 'a-1', capability: 'computer' }),
     )

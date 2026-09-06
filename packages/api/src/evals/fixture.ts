@@ -1,3 +1,4 @@
+import { homeAppToolRequirements } from '@use-brian/shared'
 /**
  * In-memory fixture workspace for the capability probe battery (D4,
  * docs/plans/behavioral-evals.md §1/§3).
@@ -228,11 +229,15 @@ export function buildFixtureWorkspace(): FixtureWorkspace {
     FIXTURE_USER_CONTEXT +
     buildUnavailableCapabilitiesPrompt(unavailable, tools)
 
-  // Frozen-state capability grants: 'tasks' (§3 explicit) + 'crm' (probe
-  // expectations require saveContact/listDeals callable). The other declared
-  // capability ids (files/views/goals/bug_triage) gate builders this fixture
-  // does not inject.
-  const activeCapabilities: ReadonlySet<string> = new Set(['crm', 'tasks'])
+  // Every injected fixture tool is intentionally usable. Derive both app and
+  // named-set grants so evals never mistake a missing fixture grant for a
+  // model failure when the production tool metadata evolves.
+  const activeCapabilities: ReadonlySet<string> = new Set(
+    [...tools.values()].flatMap((tool) => [
+      ...(tool.requiresCapability ? [tool.requiresCapability] : []),
+      ...homeAppToolRequirements(tool),
+    ]),
+  )
 
   return { systemPrompt, tools, unavailable, activeCapabilities }
 }

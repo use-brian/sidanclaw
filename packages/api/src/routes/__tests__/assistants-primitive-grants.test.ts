@@ -1,3 +1,4 @@
+import { HOME_APP_TOOL_CAPABILITIES } from '@use-brian/shared'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import express from 'express'
 import request from 'supertest'
@@ -41,8 +42,8 @@ beforeEach(() => {
 
 /** The §17 + admin rows — this suite's subject. Built-in primitives share the
  *  route but belong to [COMP:connectors/builtin-primitive-switch]. */
-function nonBuiltin(grants: Array<{ group?: string }>) {
-  return grants.filter((g) => g.group !== 'builtin')
+function nonBuiltin(grants: Array<{ capability?: string; group?: string }>) {
+  return grants.filter((g) => ['tasks', 'crm', 'goals', 'configure'].includes(g.capability ?? ''))
 }
 
 function makeApp(opts: { userId: string }) {
@@ -70,8 +71,8 @@ describe('[COMP:routes/assistants-primitive-grants] GET /:assistantId/primitive-
     // Built-in primitives (files/office/computer) ride the same route under
     // group 'builtin' and are covered by [COMP:connectors/builtin-primitive-switch].
     expect(nonBuiltin(res.body.grants)).toEqual([
-      { capability: 'tasks', enabled: true, group: 'primitive' },
-      { capability: 'crm', enabled: true, group: 'primitive' },
+      { capability: 'tasks', enabled: true, group: 'home-app' },
+      { capability: 'crm', enabled: true, group: 'home-app' },
       { capability: 'goals', enabled: false, group: 'primitive' },
       { capability: 'configure', enabled: false, group: 'admin' },
     ])
@@ -86,8 +87,8 @@ describe('[COMP:routes/assistants-primitive-grants] GET /:assistantId/primitive-
 
     expect(res.status).toBe(200)
     expect(nonBuiltin(res.body.grants)).toEqual([
-      { capability: 'tasks', enabled: false, group: 'primitive' },
-      { capability: 'crm', enabled: false, group: 'primitive' },
+      { capability: 'tasks', enabled: false, group: 'home-app' },
+      { capability: 'crm', enabled: false, group: 'home-app' },
       { capability: 'goals', enabled: false, group: 'primitive' },
       { capability: 'configure', enabled: false, group: 'admin' },
     ])
@@ -115,7 +116,7 @@ describe('[COMP:routes/assistants-primitive-grants] PATCH /:assistantId/primitiv
       .send({ enabled: true })
 
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ capability: 'tasks', enabled: true, group: 'primitive' })
+    expect(res.body).toEqual({ capability: 'tasks', enabled: true, group: 'home-app' })
     expect(capabilityStore.grant).toHaveBeenCalledWith({
       assistantId: 'a-1',
       capability: 'tasks',
@@ -134,7 +135,7 @@ describe('[COMP:routes/assistants-primitive-grants] PATCH /:assistantId/primitiv
       .send({ enabled: true })
 
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ capability: 'tasks', enabled: true, group: 'primitive' })
+    expect(res.body).toEqual({ capability: 'tasks', enabled: true, group: 'home-app' })
   })
 
   it('revokes the active grant when enabled=false', async () => {
@@ -148,7 +149,7 @@ describe('[COMP:routes/assistants-primitive-grants] PATCH /:assistantId/primitiv
       .send({ enabled: false })
 
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ capability: 'crm', enabled: false, group: 'primitive' })
+    expect(res.body).toEqual({ capability: 'crm', enabled: false, group: 'home-app' })
     expect(capabilityStore.revoke).toHaveBeenCalledWith({
       grantId: 'g-existing',
       revokedByUserId: 'u-1',
@@ -283,5 +284,33 @@ describe('[COMP:routes/assistants-primitive-grants] configure capability (admin-
 
     expect(res.status).toBe(200)
     expect(res.body.grants).toContainEqual({ capability: 'configure', enabled: true, group: 'admin' })
+  })
+})
+
+
+describe('[COMP:routes/assistants-primitive-grants] mini-app tool sets', () => {
+  it.each(HOME_APP_TOOL_CAPABILITIES)('persists and revokes %s for only the selected assistant', async (capability) => {
+    mockAccess.mockResolvedValue({ assistant: { id: 'a-1', name: 'A', workspaceId: 'w-1' }, role: 'member' } as never)
+    capabilityStore.listActive.mockResolvedValueOnce([capability])
+    const enabled = await request(makeApp({ userId: 'u-1' }))
+      .patch(`/api/assistants/a-1/primitive-grants/${encodeURIComponent(capability)}`).send({ enabled: true })
+    expect(enabled.status).toBe(200)
+    expect(enabled.body).toEqual({ capability, enabled: true, group: 'home-app' })
+    expect(capabilityStore.grant).toHaveBeenCalledWith(expect.objectContaining({ assistantId: 'a-1', capability, grantedByUserId: 'u-1' }))
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'grant-1' }] } as never)
+    capabilityStore.listActive.mockResolvedValueOnce([])
+    const disabled = await request(makeApp({ userId: 'u-1' }))
+      .patch(`/api/assistants/a-1/primitive-grants/${encodeURIComponent(capability)}`).send({ enabled: false })
+    expect(disabled.body).toEqual({ capability, enabled: false, group: 'home-app' })
+    expect(mockQuery).toHaveBeenCalledWith(expect.any(String), ['a-1', capability])
+    expect(capabilityStore.revoke).toHaveBeenCalledWith(expect.objectContaining({ grantId: 'grant-1' }))
+    expect(capabilityStore.grant).toHaveBeenCalledTimes(1)
+  })
+  it('rejects an undeclared set without writing', async () => {
+    mockAccess.mockResolvedValue({ assistant: { id: 'a-1', workspaceId: 'w-1' }, role: 'member' } as never)
+    const res = await request(makeApp({ userId: 'u-1' }))
+      .patch('/api/assistants/a-1/primitive-grants/home_app:page:unknown').send({ enabled: true })
+    expect(res.status).toBe(400)
+    expect(capabilityStore.grant).not.toHaveBeenCalled()
   })
 })

@@ -853,7 +853,7 @@ export function createCalleeExecutor(options: CalleeExecutorOptions): CalleeExec
 
     // 4. The callee's consult tool surface (full caller-visible set — the
     // destination-side mode filter was retired 2026-07-24).
-    const modeTools = new Map(calleeTools)
+    const modeTools = filterToolsByCapabilities(calleeTools, calleeCapabilities)
 
     // Include memory READ on every consult. A WORKFLOW-origin consult
     // (`assistant_call` step / scheduled-job reminder, both arrive with
@@ -1258,7 +1258,7 @@ export function createCalleeExecutor(options: CalleeExecutorOptions): CalleeExec
           name: calleeAssistant.name,
           appType: calleeAssistant.appType,
         },
-        resolveAppSoul: options.resolveAppSoul,
+        resolveAppSoul: calleeAssistant.appType === 'distribution' && (!calleeCapabilities.has('feed') || !calleeCapabilities.has('home_app:feed:read') || !calleeCapabilities.has('home_app:feed:write')) ? undefined : options.resolveAppSoul,
       })
       systemPrompt = `${soul}
 
@@ -1358,7 +1358,7 @@ export function createCalleeExecutor(options: CalleeExecutorOptions): CalleeExec
     // Page-anchored consults get the doc skill block (page-first authoring
     // protocol) plus a short anchor note, mirroring how the chat route
     // steers doc-surface turns. Unanchored consults are unchanged.
-    const docAnchorBlock = params.pageAnchorId
+    const docAnchorBlock = params.pageAnchorId && finalTools.has('getCurrentPage') && finalTools.has('delegateDocEdit')
       ? `\n\n${buildDocSupervisorSkillBlock({ mode: 'page' })}\n## Anchored page\nThis session is anchored to page \`${params.pageAnchorId}\`. Read it with \`getCurrentPage\` when needed, then submit one in-place edit brief through \`delegateDocEdit\`. Do not request a new page unless the request explicitly asks for one.`
       : ''
 

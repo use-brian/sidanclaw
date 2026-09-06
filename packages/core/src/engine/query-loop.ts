@@ -1,3 +1,4 @@
+import { filterToolsByCapabilities } from '../tools/capability-gate.js'
 import { getHeapStatistics } from 'node:v8'
 import type { LLMProvider, Message, ContentBlock, TokenUsage, AssistantResponse, SendOptions, ThinkingLevel, ToolDefinition, ToolParameter } from '../providers/types.js'
 import type { Tool, ToolContext, ToolResultMeta } from '../tools/types.js'
@@ -575,7 +576,7 @@ export async function* queryLoop(options: QueryLoopOptions): AsyncGenerator<Quer
   }
 
   try {
-    yield* queryLoopCore({ ...options, context: toolContext, stallWatchdog: watchdog ?? undefined })
+    yield* queryLoopCore({ ...options, tools: filterToolsByCapabilities(options.tools, toolContext.activeCapabilities ?? new Set()), context: toolContext, stallWatchdog: watchdog ?? undefined })
   } finally {
     watchdog?.dispose()
     const results = await Promise.allSettled(

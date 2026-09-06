@@ -36,6 +36,7 @@ import {
   APP_LEVEL_ASSISTANT_ID,
   ALL_EXACT_INSTANCE_GOVERNANCE_CONNECTOR_IDS,
   BUILTIN_PRIMITIVE_CONNECTOR_IDS,
+  HOME_APP_TOOL_CAPABILITIES,
   MULTI_INSTANCE_CONNECTOR_IDS,
   OFFICIAL_CONNECTOR_TOOLS,
   OFFICIAL_CONNECTORS,
@@ -697,11 +698,12 @@ export function assistantRoutes(options: AssistantRouteOptions): Router {
   // list — see the "all built-ins" drift anti-pattern in CLAUDE.md. The
   // capability name IS the connector id, which is why one set serves both.
   const BUILTIN_CAPABILITIES = [...BUILTIN_PRIMITIVE_CONNECTOR_IDS]
-  const TOGGLEABLE_CAPABILITIES: string[] = [
+  const TOGGLEABLE_CAPABILITIES: string[] = [...new Set([
+    ...HOME_APP_TOOL_CAPABILITIES,
     ...PRIMITIVE_CAPABILITIES,
     ...ADMIN_CAPABILITIES,
     ...BUILTIN_CAPABILITIES,
-  ]
+  ])]
 
   // Which surface owns each row. Two clients read this one route and each
   // renders only its own group — without the discriminator the Settings
@@ -709,9 +711,11 @@ export function assistantRoutes(options: AssistantRouteOptions): Router {
   // built-in primitive alongside the Tools tab's. A client must NOT re-derive
   // the split from a local slug list (that is how `goals` ended up rendering
   // under the `configure` label).
-  type CapabilityGroup = 'primitive' | 'admin' | 'builtin'
+  type CapabilityGroup = 'primitive' | 'admin' | 'builtin' | 'home-app'
   const groupOf = (cap: string): CapabilityGroup =>
-    BUILTIN_PRIMITIVE_CONNECTOR_IDS.has(cap)
+    HOME_APP_TOOL_CAPABILITIES.includes(cap)
+      ? 'home-app'
+      : BUILTIN_PRIMITIVE_CONNECTOR_IDS.has(cap)
       ? 'builtin'
       : (ADMIN_CAPABILITIES as readonly string[]).includes(cap)
         ? 'admin'

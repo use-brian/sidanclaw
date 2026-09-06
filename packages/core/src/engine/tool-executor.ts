@@ -1,3 +1,4 @@
+import { missingToolCapability } from '../tools/capability-gate.js'
 import type { Tool, ToolContext, ToolResult, ToolResultMeta } from '../tools/types.js'
 import type { ContentBlock } from '../providers/types.js'
 import type { LoopDetector, LoopAction } from './loop-detector.js'
@@ -317,8 +318,8 @@ export function createToolExecutor(options: ToolExecutorOptions) {
     // Capability gate — belt-and-braces with filterToolsByCapabilities.
     // A hallucinated call for a requiresCapability tool from an assistant
     // that lacks the grant lands here and is rejected before execute() runs.
-    const needed = toolDef.requiresCapability
-    if (needed && !options.context.activeCapabilities?.has(needed)) {
+    const needed = missingToolCapability(toolDef, options.context.activeCapabilities)
+    if (needed) {
       t.result = {
         type: 'tool_result',
         toolUseId: t.id,

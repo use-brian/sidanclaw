@@ -747,7 +747,7 @@ describe('[COMP:workers/manager] createWorkerManager', () => {
       manager.setResearchMode(true)
       manager.spawn(
         'dig into a gap',
-        { ...ctx, activeCapabilities: new Set(['computer']) },
+        { ...ctx, activeCapabilities: new Set(['computer', 'home_app:browsers:read']) },
         new Map([readOnlyTool('webSearch')]),
       )
       await manager.waitAll()

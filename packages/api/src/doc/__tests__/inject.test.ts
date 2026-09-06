@@ -297,6 +297,7 @@ describe('[COMP:api/doc-inject] injectDocTools', () => {
     })
     const delegate = tools.get('delegateDocEdit')!
     const context: ToolContext = {
+      activeCapabilities: new Set(['page', 'home_app:page:read', 'home_app:page:write']),
       userId: 'user-1',
       assistantId: 'primary-1',
       sessionId: 'session-1',
@@ -376,6 +377,7 @@ describe('[COMP:api/doc-inject] injectDocTools', () => {
     })
     const delegate = tools.get('delegateDocEdit')!
     const context: ToolContext = {
+      activeCapabilities: new Set(['page', 'home_app:page:read', 'home_app:page:write']),
       userId: 'user-1',
       assistantId: 'primary-1',
       sessionId: 'session-1',

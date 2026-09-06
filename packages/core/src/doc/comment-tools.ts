@@ -119,6 +119,7 @@ const NO_WORKSPACE = {
 
 export function createPostCommentTool(deps: CommentToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'postComment',
     description:
       'Post a comment to a doc page as a block-anchored thread. ' +
@@ -205,6 +206,7 @@ export function createPostCommentTool(deps: CommentToolDeps): Tool {
 
 export function createResolveCommentTool(deps: CommentToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'resolveComment',
     description:
       'Mark a doc comment thread resolved once its question has been answered or its change made. ' +
@@ -231,6 +233,7 @@ export function createResolveCommentTool(deps: CommentToolDeps): Tool {
 
 export function createGetCommentThreadTool(deps: CommentToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'getCommentThread',
     description:
       "Read one doc comment thread end-to-end: its anchor plus every comment in order. " +

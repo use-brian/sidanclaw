@@ -4540,7 +4540,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // surface test; `docCtx` is kept as the name the gates below read.)
       const onDocSurface = isDocSurface(session)
       const docCtx = onDocSurface
-      const docSkillTurn = docCtx
+      const docSkillTurn = docCtx && activeCapabilities.has('page') && activeCapabilities.has('home_app:page:read') && activeCapabilities.has('home_app:page:write')
       // The app-web workspace surfaces (Brain / Studio / Workflow / Approvals /
       // Knowledge-base / full Chat) get the doc tools too, but with AMBIENT steering
       // (chat-first, author only on an explicit ask). `docToolsTurn` gates the
@@ -4548,7 +4548,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // coordinator / outline / presence gate stays keyed to the doc-only
       // `docCtx` / `onDocSurface` so those behaviours don't change off-doc.
       const onAppSurface = isAppSurface(session)
-      const docToolsTurn = docCtx || onAppSurface
+      const docToolsTurn = (docCtx || onAppSurface) && activeCapabilities.has('page')
       let basePrompt = resolveLayer1Prompt({
         defaultPrompt: options.systemPrompt,
         assistant: {
@@ -4563,7 +4563,7 @@ export function chatRoutes(options: WebChatOptions): Router {
         // of `bio`, migration 418) - the app-soul hook renders it as the
         // voice + identity anchor.
         assistantBio: charterMission(resolveCharter(assistant)),
-        resolveAppSoul: options.resolveAppSoul,
+        resolveAppSoul: assistant.appType === 'distribution' && (!activeCapabilities.has('feed') || !activeCapabilities.has('home_app:feed:read') || !activeCapabilities.has('home_app:feed:write')) ? undefined : options.resolveAppSoul,
       })
       // Follow-up chips are opt-in per client (see _prompt-builder.ts):
       // appended only when the requesting surface declares it renders chips,
@@ -4668,7 +4668,7 @@ export function chatRoutes(options: WebChatOptions): Router {
               teamName: workspaceIdentity?.name,
               teamPurpose: workspaceIdentity?.purpose ?? undefined,
             }))
-          : onAppSurface
+          : onAppSurface && activeCapabilities.has('page') && activeCapabilities.has('home_app:page:read') && activeCapabilities.has('home_app:page:write')
             ? (docSkillBlockStr = buildAmbientDocSkillBlock({
                 teamName: workspaceIdentity?.name,
                 teamPurpose: workspaceIdentity?.purpose ?? undefined,
@@ -5116,11 +5116,11 @@ export function chatRoutes(options: WebChatOptions): Router {
       // A host may add a session-specific prompt block (e.g. a draft-session
       // authoring addendum). Open default: none. Pairs with injectExtraTools
       // below so the prompt and the available tools agree.
-      const extraSystemPrompt = await options.resolveExtraSystemPrompt?.({
+      const extraSystemPrompt = (assistant.appType !== 'distribution' || (activeCapabilities.has('feed') && activeCapabilities.has('home_app:feed:write'))) ? await options.resolveExtraSystemPrompt?.({
         mode: session.mode,
         channelType: session.channelType,
         assistantId: assistant.id,
-      })
+      }) : null
       if (extraSystemPrompt) {
         fullSystemPrompt += `\n\n${extraSystemPrompt}`
       }
@@ -5620,6 +5620,10 @@ export function chatRoutes(options: WebChatOptions): Router {
       // API channel via `applyMcpInjection` — both routes must surface the
       // same tool set or assistants degrade silently when consumers switch
       // transports.
+      const admittedTools = filterToolsByCapabilities(allTools, activeCapabilities)
+      for (const name of allTools.keys()) {
+        if (!admittedTools.has(name)) allTools.delete(name)
+      }
       const connectorUserId = await getConnectorUserId(user.id, assistant.workspaceId)
       const {
         enrichConfirmation,

@@ -1541,17 +1541,22 @@ describe('[COMP:api/inter-assistant-executor] createCalleeExecutor', () => {
       } as never
     }
 
-    function anchoredExecutor(savedViewStore: unknown, tools = new Map()) {
+    function anchoredExecutor(savedViewStore: unknown, tools = new Map(), capabilities = ['page', 'home_app:page:read', 'home_app:page:write']) {
       return createCalleeExecutor({
         provider: {} as never,
         tools: tools as never,
         memoryStore: memoryStore() as never,
-        capabilityStore: { listActive: vi.fn().mockResolvedValue([]) } as never,
+        capabilityStore: { listActive: vi.fn().mockResolvedValue(capabilities) } as never,
         savedViewStore: savedViewStore as never,
       })
     }
 
     it('gates, injects doc tools, and runs the loop doc-anchored (happy path)', async () => {
+      mockInjectDoc.mockImplementationOnce(async (opts: { tools: Map<string, unknown> }) => {
+        opts.tools.set('getCurrentPage', { name: 'getCurrentPage', requiresCapability: 'page', isReadOnly: true, execute: vi.fn() })
+        opts.tools.set('delegateDocEdit', { name: 'delegateDocEdit', requiresCapability: 'page', isReadOnly: false, execute: vi.fn() })
+        return { injected: true } as never
+      })
       asWorkspaceCallee()
       yieldsText('edited')
       const store = savedViewStoreWith({ id: PAGE_ID, workspaceId: 'ws-1', clearance: 'internal' })
@@ -1577,6 +1582,22 @@ describe('[COMP:api/inter-assistant-executor] createCalleeExecutor', () => {
       const systemPrompt = mockQueryLoop.mock.calls[0][0].systemPrompt as string
       expect(systemPrompt).toContain('## Anchored page')
       expect(systemPrompt).toContain(PAGE_ID)
+    })
+
+    it('removes late-injected Page tools and authoring instructions when Page is off', async () => {
+      asWorkspaceCallee()
+      yieldsText('Page is unavailable')
+      mockInjectDoc.mockImplementationOnce(async (opts: { tools: Map<string, unknown> }) => {
+        opts.tools.set('getCurrentPage', { name: 'getCurrentPage', requiresCapability: 'page', isReadOnly: true, execute: vi.fn() })
+        opts.tools.set('delegateDocEdit', { name: 'delegateDocEdit', requiresCapability: 'page', isReadOnly: false, execute: vi.fn() })
+        return { injected: true } as never
+      })
+      const store = savedViewStoreWith({ id: PAGE_ID, workspaceId: 'ws-1', clearance: 'internal' })
+      await anchoredExecutor(store, new Map(), [])({ ...baseParams, pageAnchorId: PAGE_ID })
+      const turn = mockQueryLoop.mock.calls[0][0]
+      expect(turn.tools.has('getCurrentPage')).toBe(false)
+      expect(turn.tools.has('delegateDocEdit')).toBe(false)
+      expect(turn.systemPrompt).not.toContain('## Anchored page')
     })
 
     it('routes and meters the anchored doc child through the callee workspace runtime', async () => {
@@ -2425,7 +2446,7 @@ describe('[COMP:sandbox/browser-tools] browser surface on the goal path (workflo
       // production (seeded at creation, backfilled by migration 412); the
       // withheld case is covered below.
       // See docs/architecture/features/builtin-primitives.md.
-      capabilityStore: { listActive: vi.fn().mockResolvedValue(['computer']) } as never,
+      capabilityStore: { listActive: vi.fn().mockResolvedValue(['computer', 'home_app:browsers:read', 'home_app:browsers:write']) } as never,
     })
   }
 

@@ -1,3 +1,4 @@
+import { homeAppToolRequirements } from '@use-brian/shared'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -223,6 +224,7 @@ describe('[COMP:evals/capability-probes] fixture workspace', () => {
     for (const tool of fixture.tools.values()) {
       const cap = (tool as { requiresCapability?: string }).requiresCapability
       if (cap) needed.add(cap)
+      for (const setCapability of homeAppToolRequirements(tool)) needed.add(setCapability)
     }
     expect(needed.size).toBeGreaterThan(0)
     for (const cap of needed) {

@@ -1,3 +1,4 @@
+import { missingToolCapability } from '../tools/capability-gate.js'
 /**
  * MCP tool search — Pattern E adapted for Gemini.
  *
@@ -413,7 +414,7 @@ export function createMcpSearchTools(params: {
     isReadOnly: true,
     requiresConfirmation: false,
 
-    async execute(input) {
+    async execute(input, context) {
       const { query, limit } = input as { query: string; limit?: number }
       const results = searchIndex(
         index,
@@ -422,6 +423,7 @@ export function createMcpSearchTools(params: {
         (entry) => {
           const key = `${entry.server}:${entry.toolName}`
           return !blockedTools.has(key) && !ambiguousEntryKeys.has(key)
+            && (entry.kind !== 'local' || !missingToolCapability(entry.tool, context.activeCapabilities))
         },
       )
 
@@ -918,6 +920,8 @@ async function dispatchLocal(params: {
 }) {
   const { entry, server, tool, toolKey, context, blockedTools, allowedTools } = params
   const targetTool = entry.tool
+  const missing = missingToolCapability(targetTool, context.activeCapabilities)
+  if (missing) return { data: { error: `This assistant does not have the '${missing}' tool capability.` }, isError: true }
 
   // Validate against the tool's own schema before anything else. Direct-
   // injected tools get shape-correct input by construction — the provider's

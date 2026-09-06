@@ -1,5 +1,7 @@
 "use client";
 
+import { HOME_APP_TOOL_CONFIG } from "@use-brian/shared";
+import { HomeAppToolSettings } from "./home-app-tool-settings";
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
@@ -1314,7 +1316,7 @@ function ConnectorsTab({
   const params = useParams<{ workspaceId: string }>();
   const routeWs = params?.workspaceId ?? "";
   const studioHref = (segment: string) => `/w/${routeWs}/studio/${segment}`;
-  const [subTab, setSubTab] = useState<"connectors" | "browser-identities" | "skills">("connectors");
+  const [subTab, setSubTab] = useState<"home-apps" | "connectors" | "browser-identities" | "skills">("home-apps");
   const [userConnectors, setUserConnectors] = useState<UserConnector[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -1539,17 +1541,19 @@ function ConnectorsTab({
 
   return (
     <div className="space-y-6">
-      {/* Sub-tab toggle: Connectors / Browser identities / Skills */}
-      <div className="flex gap-1 border-b border-border pb-2">
-        {(["connectors", "browser-identities", "skills"] as const).map((sub) => (
+      {/* Sub-tab toggle: Mini apps / Connectors / Browser identities / Skills */}
+      <div className="flex gap-1 overflow-x-auto border-b border-border pb-2">
+        {(["home-apps", "connectors", "browser-identities", "skills"] as const).map((sub) => (
           <button
             key={sub}
-            onClick={() => setSubTab(sub)}
-            className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${
+            onClick={() => { setSubTab(sub); if (sub === "connectors") fetchConnectors(); }}
+            className={`shrink-0 text-sm px-3 py-1.5 rounded-lg transition-colors ${
               subTab === sub ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {sub === "skills"
+            {sub === "home-apps"
+              ? t.assistant.toolsTab.homeApps.title
+              : sub === "skills"
               ? t.assistant.toolsTab.subTabSkills
               : sub === "browser-identities"
                 ? t.assistant.toolsTab.subTabBrowserIdentities
@@ -1558,7 +1562,9 @@ function ConnectorsTab({
         ))}
       </div>
 
-      {subTab === "browser-identities" ? (
+      {subTab === "home-apps" ? (
+        <HomeAppToolSettings key={assistantId} assistantId={assistantId} />
+      ) : subTab === "browser-identities" ? (
         <BrowserIdentitiesPanel
           assistantId={assistantId}
           assistantClearance={assistantClearance}
@@ -1757,7 +1763,11 @@ function ConnectorsTab({
                           route (no connector instance to enable/disable), every
                           other row through the connector route. Same control,
                           because to the user it is the same question. */}
-                      <button
+                      {c.scope === "builtin" && HOME_APP_TOOL_CONFIG.some((app) => app.capability === c.id) ? (
+                        <button type="button" className="text-xs text-primary" onClick={(e) => { e.stopPropagation(); setSubTab("home-apps"); }}>
+                          {t.assistant.toolsTab.homeApps.policies}
+                        </button>
+                      ) : <button
                         type="button" role="switch" aria-checked={c.enabled}
                         disabled={toggling === c.id}
                         onClick={(e) => {
@@ -1768,7 +1778,7 @@ function ConnectorsTab({
                         className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${c.enabled ? "bg-primary" : "bg-muted"}`}
                       >
                         <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform duration-200 ${c.enabled ? "translate-x-4" : "translate-x-0"}`} />
-                      </button>
+                      </button>}
                     </>
                   )}
                 </div>
@@ -2816,7 +2826,7 @@ type PrimitiveGrantState = {
   /** Which surface owns the row. Built-in primitives render their switch on
    *  the Tools tab beside the other connectors, so this panel skips them —
    *  two controls for one grant is worse than none. */
-  group?: "primitive" | "admin" | "builtin";
+  group?: "primitive" | "admin" | "builtin" | "home-app";
 };
 
 function PrimitiveGrantsPanel({ assistantId }: { assistantId: string }) {
@@ -2884,7 +2894,7 @@ function PrimitiveGrantsPanel({ assistantId }: { assistantId: string }) {
   // here would give the same grant two controls. Keyed on the server's group
   // discriminator rather than a local slug list so a new built-in cannot leak
   // into this panel by default.
-  const rows = grants.filter((g) => g.group !== "builtin" && copyFor(g.capability));
+  const rows = grants.filter((g) => g.group !== "builtin" && g.group !== "home-app" && copyFor(g.capability));
   if (rows.length === 0) return null;
 
   return (
