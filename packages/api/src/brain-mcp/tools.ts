@@ -96,6 +96,7 @@ import type {
 } from '@use-brian/core'
 import { query, runWithAgentAccess } from '../db/client.js'
 import { searchRecording as searchRecordingFn, readRecordingRange, type RecordingSegmentHit } from '../db/retrieval-store.js'
+import { createListRecordingsTool } from '../recordings/recording-chat-tools.js'
 import { searchFileSegments as searchFileSegmentsFn, readFileSegmentRange, type FileSegmentHit } from '../db/retrieval-store.js'
 import type { BrainKeyScope } from '../db/brain-keys-store.js'
 import type { PageTemplateStore } from '../db/page-templates-store.js'
@@ -401,7 +402,8 @@ type BuildOpts = {
 const READ_TOOL_NAMES = new Set<string>([
   // Unified read
   'searchBrain',
-  // Scoped single-recording retrieval (recording-to-brain)
+  // Recording catalog discovery and scoped transcript retrieval
+  'listRecordings',
   'searchRecording',
   // Scoped single-file retrieval (large-content-artifacts)
   'searchFileContent',
@@ -1213,16 +1215,19 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       "to the key's ceiling, scoped to the key's workspace.",
   })
 
-  // ── Scoped recording retrieval: searchRecording (recording-to-brain).
-  // Hand-rolled (not bridged) — it routes into the dedicated `searchRecording`
-  // scope handler, which is intentionally NOT in KNOWN_SCOPES so an unscoped
-  // searchBrain never floods on a recording's 70-110 segments. Vector + ILIKE
-  // fused, scoped to one recording, through queryWithRLS + the access predicate.
+  // Catalog rows exist before transcript segments. Reuse chat's metadata
+  // lookup so pending recordings are discoverable through the same actor gate.
+  const listRecordings = bridgeCoreTool(createListRecordingsTool(), resolveCtx, workspaceId)
+
+  // Scoped transcript retrieval: vector + ILIKE fused within one recording,
+  // through queryWithRLS + the access predicate. General searchBrain can also
+  // return transcript_segment hits once transcription has persisted them.
   const searchRecordingTool: BrainTool = {
     name: 'searchRecording',
     description:
       'Retrieve passages from ONE transcribed recording, scoped to that recording only ' +
-      '(never the whole company brain). Pass the recording Episode id as `recordingId` plus a `query`; ' +
+      '(never the whole company brain). Use `listRecordings` to find a recording by name/date and ' +
+      'check its status before the transcript is ready. Pass its `recordingId` plus a `query`; ' +
       'returns the most relevant segments with `start_ms` timestamps and `speaker`, so you can cite the ' +
       'exact moment ("around 47:12, Priya said ..."). For a summarize/overview intent that spans many ' +
       'segments, page sequential windows with `fromIndex`/`toIndex` instead of relying on top-K. ' +
@@ -1811,6 +1816,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     ...(askStoreAssistant ? [askStoreAssistant] : []),
     // Reads
     searchBrain,
+    listRecordings,
     searchRecordingTool,
     searchFileContentTool,
     searchKnowledge,

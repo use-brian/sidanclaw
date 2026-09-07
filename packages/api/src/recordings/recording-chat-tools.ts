@@ -178,9 +178,11 @@ export function createListRecordingsTool(): Tool {
   return buildTool({
     name: 'listRecordings',
     description:
-      "Find the user's recordings by WHEN they happened or what they are called — the way to resolve " +
+      "Find the user's recordings by WHEN they happened or what they are called: the way to resolve " +
       '"Tuesday\'s call", "my last meeting with Acme", or "the memos from last week". Returns metadata ' +
-      'only (id, title, kind, when, duration, status), newest first — not transcript text. Use the ' +
+      'only (id, title, kind, when, duration, status), newest first. Includes recordings before ' +
+      'transcription finishes: report their status when queued or processing. An awaiting_upload ' +
+      'row reserves the recording identity but does not yet prove uploaded media exists. Use the ' +
       "returned `recordingId` with `searchRecording` to read what was actually said. If you don't know " +
       'which recording is relevant, search the brain instead and look for transcript hits.',
     inputSchema: listInputSchema,

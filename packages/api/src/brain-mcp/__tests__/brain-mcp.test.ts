@@ -17,6 +17,7 @@ import { hashSecret } from '../../db/api-key-store.js'
 import { mintBrainPlaintext, type BrainKeyStore } from '../../db/brain-keys-store.js'
 import { authenticateBrainRequest } from '../auth.js'
 import { brainMcpRoutes } from '../server.js'
+import { queryWithRLS } from '../../db/client.js'
 import {
   buildBrainTools,
   effectiveBrainClearance,
@@ -53,6 +54,7 @@ vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
 
 vi.mock('../../db/client.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../db/client.js')>()),
+  queryWithRLS: vi.fn(),
   query: vi.fn().mockImplementation(async (sql: string) => {
     if (sql.includes('assistant_capabilities')) {
       return { rows: [{ capability: 'tasks' }, { capability: 'crm' }] }
@@ -236,6 +238,7 @@ const READ_TOOL_NAMES = [
   'listCrmPipelines',
   'previewCrmSegment',
   'listTasks',
+  'listRecordings',
   'searchBrain',
   'searchFileContent',
   'searchKnowledge',
@@ -279,6 +282,49 @@ const WRITE_TOOL_NAMES = [
   'setDealPipelineStage',
   'updateTask',
 ] as const
+
+describe('[COMP:api/brain-mcp] recording discovery before transcription', () => {
+  it.each(['read', 'read_write'] as const)('lists pending recordings with a %s credential and no file storage', async (scope) => {
+    const tools = buildBrainTools({
+      workspaceId: 'ws', scope, keyId: 'k', maxClearance: 'internal',
+      ...ALL_STUBS, fileTools: undefined,
+    })
+    const tool = tools.find((t) => t.name === 'listRecordings')
+    expect(tool).toBeDefined()
+    const states = ['awaiting_upload', 'queued', 'processing', 'failed', 'processed']
+    vi.mocked(queryWithRLS).mockResolvedValueOnce({ rows: states.map((status) => ({
+      id: `recording-${status}`, workspaceId: 'ws', title: null, fileName: 'Team meeting.m4a',
+      kind: 'meeting', status, createdAt: new Date('2026-01-12T10:00:00Z'),
+      durationMs: '120000', bytes: null, transcriptFileId: null, truncated: false,
+      compartments: [], projectIds: [], gcsKey: 'ws/recordings/private-key',
+      storageUri: 'gs://private-bucket/recording',
+    })) } as never)
+
+    const result = await tool!.handler({
+      query: 'Team meeting', kind: 'meeting', since: '2026-01-12T00:00:00Z',
+      until: '2026-01-13T00:00:00Z', limit: 10,
+    })
+    expect(result.isError).toBeUndefined()
+    expect(JSON.parse(textBody(result))).toEqual(states.map((status) => ({
+      recordingId: `recording-${status}`, title: 'Team meeting.m4a', kind: 'meeting',
+      status, occurredAt: '2026-01-12T10:00:00.000Z', durationMs: 120000,
+      truncated: false, hasTranscript: false,
+    })))
+    // Exercise the real shared tool and catalog store, mocking only PostgreSQL.
+    const [userId, sql, params] = vi.mocked(queryWithRLS).mock.calls.at(-1)!
+    expect(userId).toBe('11111111-1111-1111-1111-111111111111')
+    expect(sql).toContain('FROM recordings')
+    expect(sql).toContain('workspace_id = $1')
+    expect(sql).toContain('sensitivity_rank(')
+    expect(sql).toContain('valid_to IS NULL')
+    expect(sql).toContain('retracted_at IS NULL')
+    expect(sql).not.toMatch(/status =|transcript_file_id IS NOT NULL|JOIN transcript/)
+    expect(params).toEqual(expect.arrayContaining([
+      'ws', 'internal', 'meeting', new Date('2026-01-12T00:00:00Z'),
+      new Date('2026-01-13T00:00:00Z'), '%Team meeting%', 10,
+    ]))
+  })
+})
 
 describe('[COMP:api/brain-mcp] buildBrainTools — scope gating', () => {
   it('a read_write key exposes every read tool plus every write tool', () => {
