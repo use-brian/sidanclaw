@@ -246,6 +246,7 @@ type SpyCrm = {
     email: string | null
     externalRef: Record<string, unknown> | null
     stableIdentity?: { provider: string; providerInstanceKey: string; subjectId: string }
+    phone?: string
   }>
   companies: Array<{ name: string; domain: string | null }>
   contactReturns: ContactRecord[]
@@ -298,6 +299,7 @@ function spyCrm(world?: World): SpyCrm {
         email: params.email ?? null,
         externalRef: params.externalRef ?? null,
         ...(params.stableIdentity ? { stableIdentity: params.stableIdentity } : {}),
+        ...(params.phone ? { phone: params.phone } : {}),
       })
       const entityId = `ent-con-${c.contacts.length}`
       const rec = makeContact({
@@ -734,7 +736,7 @@ describe('[COMP:brain/pipeline-b] processEpisode', () => {
       episodes: episodes.port,
     }
 
-    const result = await processEpisode(baseEpisode({ preStampedTags: ['domain:engineering'] }), 'meeting notes …', deps)
+    const result = await processEpisode(baseEpisode({ preStampedTags: ['domain:engineering'] }), 'meeting notes … sarah@notion.so', deps)
 
     expect(result.extracted).toBe(true)
     expect(result.summaryText).toContain('Sarah at Notion')
@@ -1488,7 +1490,7 @@ describe('[COMP:brain/pipeline-b] processEpisode', () => {
     const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
     const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
 
-    const result = await processEpisode(baseEpisode(), 'follow-up', deps)
+    const result = await processEpisode(baseEpisode(), 'follow-up with sarah@notion.so', deps)
 
     expect(crm.contacts).toEqual([
       { name: 'Sarah Lee', email: 'sarah@notion.so', externalRef: null },
@@ -1677,6 +1679,88 @@ describe('[COMP:brain/pipeline-b] processEpisode', () => {
           subjectId: 'U0AQT24KHEV',
         },
       },
+    ])
+  })
+
+  it('takes the phone from the adapter ref, never from the extraction', async () => {
+    const crm = spyCrm()
+    const entities = spyEntities()
+    const extraction = JSON.stringify({
+      summary: 'Chat',
+      entities: [{ kind: 'person', display_name: 'Cindy', canonical_id: null }],
+      edges: [],
+      memories: [],
+      tags: [],
+    })
+    const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
+    const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
+
+    await processEpisode(
+      baseEpisode({
+        personExternalRefs: [{
+          name: 'Cindy',
+          externalRef: { provider: 'whatsapp', id: '85268719565@s.whatsapp.net', instance_id: 'inst-1' },
+          phone: '+85268719565',
+        }],
+      }),
+      'chat window',
+      deps,
+    )
+
+    expect(crm.contacts).toHaveLength(1)
+    expect(crm.contacts[0]).toMatchObject({ name: 'Cindy', phone: '+85268719565' })
+  })
+
+  it('drops an extracted email the source text does not attest', async () => {
+    const crm = spyCrm()
+    const entities = spyEntities()
+    const extraction = JSON.stringify({
+      summary: 'Talked to Ben and Dana',
+      entities: [
+        // Fabricated: the model was asked for an email it did not have.
+        { kind: 'person', display_name: 'Ben Luk', canonical_id: 'benluk@example.com' },
+        // Genuinely present in the note below.
+        { kind: 'person', display_name: 'Dana Reed', canonical_id: 'dana@acme.test' },
+      ],
+      edges: [],
+      memories: [],
+      tags: [],
+    })
+    const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
+    const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
+
+    await processEpisode(baseEpisode({}), 'Ben said hi. Reach Dana at DANA@acme.test.', deps)
+
+    expect(crm.contacts.map((c) => ({ name: c.name, email: c.email }))).toEqual([
+      { name: 'Ben Luk', email: null },
+      // Case differs in the source; attestation is case-insensitive.
+      { name: 'Dana Reed', email: 'dana@acme.test' },
+    ])
+  })
+
+  it('does not treat a chat provider JID as an email address', async () => {
+    const crm = spyCrm()
+    const entities = spyEntities()
+    const extraction = JSON.stringify({
+      summary: 'Chatted with TW',
+      entities: [
+        // A WhatsApp JID passes every generic email check: it has an @, a dot,
+        // and a real TLD. Only the domain gives it away.
+        { kind: 'person', display_name: 'TW', canonical_id: '85292052939@s.whatsapp.net' },
+        { kind: 'person', display_name: 'Real Person', canonical_id: 'real@example.com' },
+      ],
+      edges: [],
+      memories: [],
+      tags: [],
+    })
+    const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
+    const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
+
+    await processEpisode(baseEpisode({}), 'note mentioning real@example.com', deps)
+
+    expect(crm.contacts.map((c) => ({ name: c.name, email: c.email }))).toEqual([
+      { name: 'TW', email: null },
+      { name: 'Real Person', email: 'real@example.com' },
     ])
   })
 
