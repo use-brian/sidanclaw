@@ -12,8 +12,16 @@
  */
 
 const isSecure = process.env.NODE_ENV === "production";
-const COOKIE_DOMAIN =
-  process.env.COOKIE_DOMAIN || (isSecure ? ".usebrian.ai" : undefined);
+
+export function resolveCookieDomain(
+  configured: string | undefined,
+  secure: boolean,
+): string | undefined {
+  if (configured !== undefined) return configured || undefined;
+  return secure ? ".usebrian.ai" : undefined;
+}
+
+const COOKIE_DOMAIN = resolveCookieDomain(process.env.COOKIE_DOMAIN, isSecure);
 
 export function accessTokenCookie(value: string) {
   return {
