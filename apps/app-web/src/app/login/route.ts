@@ -66,11 +66,12 @@ export function GET(request: Request): NextResponse {
 
   const rawError = requestUrl.searchParams.get("error");
   const error = rawError && ERROR_RE.test(rawError) ? rawError : null;
-  if (usebrianEdition() === "outpost" && primaryAuthUrl() === null) {
+  const primary = primaryAuthUrl();
+  if (usebrianEdition() === "outpost" && primary === null) {
     return NextResponse.json({ error: "auth_primary_unconfigured" }, { status: 503 });
   }
   return NextResponse.redirect(
-    buildDelegatedLoginUrl(webAppUrl(), returnUrl.toString(), {
+    buildDelegatedLoginUrl(primary ?? webAppUrl(), returnUrl.toString(), {
       addAccount: requestUrl.searchParams.get("addAccount") === "1",
       error,
     }),
