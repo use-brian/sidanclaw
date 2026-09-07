@@ -39,7 +39,7 @@ import {
   DASHSCOPE_INTL_BASE_URL, DASHSCOPE_INTL_LABEL, wrapProvider,
   createBaseTools, createGoogleMapsTools, GOOGLE_MAPS_GROUNDING_MCP_URL, LAYER_1_SYSTEM_PROMPT,
   createWorkerManager, createWorkerTools,
-  createSchedulingTools, createPollWorker,
+  createSchedulingTools, createPollWorker, createBatchWorker,
   startJitteredInterval, stopJitteredInterval,
   createCacheTool, createReadFileTool, distillFileToText,
   createRateLimiter, sanitizeDeep,
@@ -354,6 +354,7 @@ import { publicChatRoutes } from './routes/public-chat.js'
 import { chatLinkRoutes } from './routes/chat-links.js'
 import { createChatLinkStore } from './db/chat-link-store.js'
 import { channelsRoutes } from './routes/channels.js'
+import { syncWorkspaceNativeSlashCommands } from './routes/native-slash-commands.js'
 import { whatsappByonRoutes } from './routes/whatsapp-byon.js'
 import { whatsappCloudRoutes } from './routes/whatsapp-cloud.js'
 import { whatsappIngestAdminRoutes } from './routes/whatsapp-byon-admin.js'
@@ -604,6 +605,13 @@ import { createControlPlaneReader } from './agent-surface/control-plane-reader.j
 import { buildAgentToolset } from './agent-surface/toolset.js'
 import { createDbBrainKeyStore } from './db/brain-keys-store.js'
 import { brainKeysRoutes } from './routes/brain-keys.js'
+import { createProgrammaticCaptureStore } from './db/programmatic-capture-store.js'
+import { createDbProgrammaticBatchStore } from './db/pending-ingest-batches-store.js'
+import {
+  createProgrammaticBatchProcessor,
+  createProgrammaticCaptureRouter,
+} from './ingest/programmatic-capture.js'
+import { programmaticCaptureRoutes } from './routes/programmatic-capture.js'
 import { createDbWorkspaceLlmProviderSettingsStore, loadLlmProviderKeyEncryptionKey } from './db/workspace-llm-provider-settings.js'
 import { workspaceLlmKeysRoutes } from './routes/workspace-llm-keys.js'
 import { createDbWorkspaceCustomLlmEndpointStore } from './db/workspace-custom-llm-endpoints.js'
@@ -1197,6 +1205,9 @@ export interface BootContext {
   workerManager: ReturnType<typeof createWorkerManager>
   workerRunsStore: ReturnType<typeof createDbWorkerRunsStore>
   skillStore: ReturnType<typeof createDbSkillStore>
+  workspaceSkillStore: ReturnType<typeof createDbWorkspaceSkillStore>
+  workspaceSkillEnablementStore: ReturnType<typeof createDbWorkspaceSkillEnablementStore>
+  workspaceSkillFilesStore: ReturnType<typeof createDbWorkspaceSkillFilesStore>
   communitySkillRegistry: ReturnType<typeof loadSkillRegistry>
   jobStore: ReturnType<typeof createDbJobStore>
   linkedAccountStore: ReturnType<typeof createDbLinkedAccountStore>
@@ -1381,7 +1392,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
       res.header('Access-Control-Allow-Origin', 'null')
       res.header('Vary', 'Origin')
     }
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Client-Timezone')
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Content-Range, Authorization, X-Client-Timezone')
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
     if (req.method === 'OPTIONS') { res.sendStatus(204); return }
     next()
@@ -1580,7 +1591,25 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   setGlobalMailboxContactImportDeps({ crm: crmStore })
   const workspaceFilesStore = createDbWorkspaceFilesStore()
   const workspaceFileUploadsStore = createWorkspaceFileUploadsStore()
-  const workflowStore = createDbWorkflowStore()
+  let syncNativeSlashCommands:
+    | ((userId: string, workspaceId: string) => Promise<void>)
+    | undefined
+  const nativeSlashSyncTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const scheduleNativeSlashCommandSync = (userId: string | undefined, workspaceId: string) => {
+    if (!userId || !syncNativeSlashCommands) return
+    const existing = nativeSlashSyncTimers.get(workspaceId)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      nativeSlashSyncTimers.delete(workspaceId)
+      void syncNativeSlashCommands?.(userId, workspaceId).catch((err) =>
+        console.warn('[channels] native command sync failed:', err))
+    }, 250)
+    timer.unref?.()
+    nativeSlashSyncTimers.set(workspaceId, timer)
+  }
+  const workflowStore = createDbWorkflowStore({
+    onChanged: (userId, workspaceId) => scheduleNativeSlashCommandSync(userId, workspaceId),
+  })
   const workflowRunStore = createDbWorkflowRunStore()
   const pendingApprovalsStore = createPendingApprovalsStore()
   // `onPageLifecycle` feeds page create / update / move into the workflow
@@ -1860,6 +1889,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     | undefined
   const workspaceSkillStore = createDbWorkspaceSkillStore({
     onWritten: (skill) => recomputeSkillEdgesOnWrite?.(skill),
+    onCommandRosterChanged: (userId, workspaceId) =>
+      scheduleNativeSlashCommandSync(userId, workspaceId),
   })
   const workspaceSkillFilesStore = createDbWorkspaceSkillFilesStore({
     onChanged: (workspaceSkillId, retiredResourceIds) => {
@@ -1883,11 +1914,21 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   const communitySkillRegistry = loadSkillRegistry()
 
   const integrationStore = credKey ? createDbChannelIntegrationStore(credKey) : null
+  syncNativeSlashCommands = integrationStore
+    ? (userId: string, workspaceId: string) => syncWorkspaceNativeSlashCommands({
+        userId,
+        workspaceId,
+        skillStore,
+        workflowStore,
+        integrationStore,
+      })
+    : undefined
   // Custom (bridge-driven) channel state + outbox (migration 450). Internal
   // path, no RLS — reachable only through the bridge token or member routes.
   const customChannelStore = createCustomChannelStore()
   const apiKeyStore = createDbApiKeyStore()
   const brainKeyStore = createDbBrainKeyStore()
+  const programmaticCaptureStore = createProgrammaticCaptureStore()
   const llmProviderEncryptionKey = (() => {
     if (!env.LLM_PROVIDER_KEY_ENCRYPTION_KEY) return null
     try {
@@ -2579,6 +2620,22 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   const chatEpisodeIngestor: ChatEpisodeIngestor =
     builtIngestors?.chatEpisodeIngestor ?? (async () => {})
   const brainEpisodeIngestor: BrainEpisodeIngestor | undefined = builtIngestors?.brainEpisodeIngestor
+  const programmaticCapture = brainEpisodeIngestor
+    ? createProgrammaticCaptureRouter({
+        store: programmaticCaptureStore,
+        ingest: brainEpisodeIngestor,
+      })
+    : undefined
+  const programmaticBatchWorker = brainEpisodeIngestor
+    ? createBatchWorker({
+        store: createDbProgrammaticBatchStore(),
+        processBatch: createProgrammaticBatchProcessor({
+          store: programmaticCaptureStore,
+          ingest: brainEpisodeIngestor,
+        }),
+      })
+    : null
+  if (runWorkers) programmaticBatchWorker?.start()
   // The message store owns the enrichment ledger — it builds and leases the
   // windows — so this worker pulls work rather than discovering it. That leaves
   // one owner of "which messages have been enriched", and a consumer that dies
@@ -4606,6 +4663,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     knowledgeRepoWriter,
     gdriveFilesStore,
     skillStore,
+    workflowStore,
     workspaceSkillStore,
     workspaceSkillEnablementStore,
     workspaceSkillFilesStore,
@@ -4790,6 +4848,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     // without doc-sync. See brain-mcp/tools.ts → buildDocPageTools.
     docTools: { savedViewStore, docPageStore, docGateway, pageTemplateStore },
     ingest: brainEpisodeIngestor,
+    programmaticCapture,
     agentTools: { reads: agentToolset.reads, writes: agentToolset.writes },
     // Powers the searchRecording tool's vector arm (recording-to-brain).
     embedder: sharedEmbedder,
@@ -5263,6 +5322,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   }))
   app.use('/api/skills', requireAuth(env.JWT_SECRET), skillRoutes({
     skillStore,
+    syncNativeSlashCommands,
     communityRegistry: communitySkillRegistry,
     workspaceSkillStore,
     workspaceStore,
@@ -5328,6 +5388,11 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   app.use('/api/invitations', optionalAuth(env.JWT_SECRET), invitationRouter)
 
   app.use('/api/workspaces/:workspaceId/brain-keys', requireAuth(env.JWT_SECRET), brainKeysRoutes({ brainKeyStore, workspaceStore }))
+  app.use(
+    '/api/workspaces/:workspaceId/programmatic-capture-profiles',
+    requireAuth(env.JWT_SECRET),
+    programmaticCaptureRoutes({ store: programmaticCaptureStore, workspaceStore }),
+  )
 
   if (llmProviderSettingsStore) {
     app.use('/api/workspaces/:workspaceId/llm-keys', requireAuth(env.JWT_SECRET), workspaceLlmKeysRoutes({ llmProviderSettingsStore, workspaceStore }))
@@ -7900,6 +7965,9 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     workerManager,
     workerRunsStore,
     skillStore,
+    workspaceSkillStore,
+    workspaceSkillEnablementStore,
+    workspaceSkillFilesStore,
     communitySkillRegistry,
     jobStore,
     linkedAccountStore,
@@ -7971,6 +8039,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     // Workspace channels operator surface (Studio → Channels).
     app.use('/api', requireAuth(env.JWT_SECRET), channelsRoutes({
       workspaceStore,
+      skillStore,
+      workflowStore,
       integrationStore: integrationStore ?? undefined,
       apiUrl: env.API_URL,
       discordConnector,
@@ -8074,6 +8144,9 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
             workspaceFilesStore,
             filesApi: filesApi ?? undefined,
             skillStore,
+            workspaceSkillStore,
+            workspaceSkillEnablementStore,
+            workspaceSkillFilesStore,
             workerManager,
             episodicStore,
             sessionStateStore,
@@ -8138,7 +8211,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
         assistantConnectorStore, connectorGrantStore, connectorInstanceStore, knowledgeStore,
         knowledgeCaptureRuleStore,
         gdriveFilesStore, workspaceFilesStore, filesApi: filesApi ?? undefined, analytics,
-        skillStore, deferredConfirmationStore, episodicStore,
+        skillStore, workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
+        deferredConfirmationStore, episodicStore,
         sessionStateStore, crmEmailDraftStore, voiceTranscription, workspaceToolPolicyStore,
         recordingIngest: channelHosts.recordingIngest,
         ingestChannelMediaRef: channelHosts.telegramIngestChannelMediaRef,
@@ -8155,6 +8229,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
         connectorInstanceStore, knowledgeStore, knowledgeCaptureRuleStore, gdriveFilesStore, workspaceFilesStore,
         realtimeThreadTargetStore,
         filesApi: filesApi ?? undefined, analytics, skillStore,
+        workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
         deferredConfirmationStore, episodicStore, sessionStateStore, crmEmailDraftStore, workflowEventDispatcher,
         slackWebhookIngestor: channelHosts.slackWebhookIngestor, connectorActionStore, episodesStore,
         buildConnectorActionAudit: ports.buildConnectorActionAudit,
@@ -8168,6 +8243,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
         workerManager, connectorStore, mcpSettingsStore, assistantConnectorStore, connectorGrantStore,
         connectorInstanceStore, workspaceToolPolicyStore, knowledgeStore, knowledgeCaptureRuleStore, gdriveFilesStore, workspaceFilesStore,
         filesApi: filesApi ?? undefined, analytics, skillStore,
+        workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
         episodicStore, sessionStateStore, crmEmailDraftStore, artifactPromoter, fileStore, workflowEventDispatcher,
       }))
       // Microsoft Teams — public Bot Framework messaging endpoint, per-channel
@@ -8180,7 +8256,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
         integrationStore, channelUserStore,
         workerManager, connectorStore, mcpSettingsStore, assistantConnectorStore, connectorGrantStore,
         connectorInstanceStore, knowledgeStore, knowledgeCaptureRuleStore, gdriveFilesStore, workspaceFilesStore,
-        analytics, skillStore,
+        analytics, skillStore, workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
         episodicStore, sessionStateStore, crmEmailDraftStore, artifactPromoter,
         msteamsWebhookIngestor: channelHosts.msteamsWebhookIngestor,
         fileStore,
@@ -8195,7 +8271,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
           checkCreditBudget: ports.checkCreditBudget, integrationStore, channelUserStore,
           workerManager, connectorStore, mcpSettingsStore, assistantConnectorStore, connectorGrantStore,
           connectorInstanceStore, knowledgeStore, knowledgeCaptureRuleStore, gdriveFilesStore, workspaceFilesStore, analytics,
-          skillStore, episodicStore, sessionStateStore, crmEmailDraftStore, fileStore,
+          skillStore, workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
+          episodicStore, sessionStateStore, crmEmailDraftStore, fileStore,
         }))
       }
       if (env.WECHAT_CONNECTOR_SECRET) {
@@ -8207,7 +8284,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
           checkCreditBudget: ports.checkCreditBudget, integrationStore, channelUserStore,
           workerManager, connectorStore, mcpSettingsStore, assistantConnectorStore, connectorGrantStore,
           connectorInstanceStore, knowledgeStore, knowledgeCaptureRuleStore, gdriveFilesStore, workspaceFilesStore, analytics,
-          skillStore, episodicStore, sessionStateStore, crmEmailDraftStore, fileStore,
+          skillStore, workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
+          episodicStore, sessionStateStore, crmEmailDraftStore, fileStore,
           // Without this the route's staging block is unreachable and every
           // inbound attachment archives as `availability: 'missing'` — the
           // message row lands, the bytes are lost, and nothing says so. iLink
@@ -8253,6 +8331,10 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
           readCachedFile: (id, access) => fileStore.get(id, access),
           analytics,
           skillStore,
+          workflowStore,
+          workspaceSkillStore,
+          workspaceSkillEnablementStore,
+          workspaceSkillFilesStore,
           episodicStore,
           sessionStateStore,
           crmEmailDraftStore,
@@ -8273,7 +8355,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
         checkCreditBudget: ports.checkCreditBudget, integrationStore, customChannelStore, channelUserStore,
         workerManager, connectorStore, mcpSettingsStore, assistantConnectorStore, connectorGrantStore,
         connectorInstanceStore, knowledgeStore, knowledgeCaptureRuleStore, gdriveFilesStore, workspaceFilesStore, analytics,
-        skillStore, episodicStore, sessionStateStore, crmEmailDraftStore, fileStore,
+        skillStore, workflowStore, workspaceSkillStore, workspaceSkillEnablementStore, workspaceSkillFilesStore,
+        episodicStore, sessionStateStore, crmEmailDraftStore, fileStore,
         archiveMedia: chatArchiveLiveMedia,
         voiceTranscription,
         deferredConfirmationStore,
@@ -8313,6 +8396,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     decisionReflectionWorker.stop()
     embeddingWorker.stop()
     pollWorker.stop()
+    programmaticBatchWorker?.stop()
     runQueueWorker.stop()
     crmDomainEventWorker.stop()
     knowledgeSyncWorker.stop()

@@ -132,6 +132,7 @@ import {
 } from "@/components/chrome/chat-activity";
 import { ChatCodeBlock } from "@/components/chrome/chat-code-block";
 import { ChatFileAttachments } from "@/components/chrome/chat-file-attachment";
+import { RecordingUploadStatus } from "@/components/recordings/recording-upload-status";
 import {
   DockRecorderButton,
   DockRecorderNotice,
@@ -1071,7 +1072,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const drop = useFileDrop((files) => void att.upload(files), {
-    disabled: !!pendingQuestion,
+    disabled: !!pendingQuestion || recordingUpload.busy,
   });
 
   // ── Shared sessions ─────────────────────────────────────────────────
@@ -2031,7 +2032,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
       !interlocutor ||
       chat.state.isStreaming ||
       (usesComposerTray && att.uploading) ||
-      (usesComposerTray && recordingUpload.status === "uploading") ||
+      (usesComposerTray && recordingUpload.busy) ||
       pendingQuestion
     ) {
       return false;
@@ -2081,6 +2082,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     const addressed =
       !isRoom ||
       askArmed ||
+      isSlashCommandShaped(trimmed) ||
       mentioned.length > 0 ||
       reply?.role === "assistant" ||
       turnFileIds.length > 0 ||
@@ -3647,7 +3649,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           (canQueueMidTurn && (att.hasReady || pendingRecordings.length > 0)) ||
           !activeAssistant ||
           att.uploading ||
-          recordingUpload.status === "uploading"
+          recordingUpload.busy
         }
         allowEmptySend={att.hasReady || pendingRecordings.length > 0}
         onPaste={(event) => {
@@ -3767,23 +3769,12 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
                 ))}
               </div>
             ) : null}
-            {recordingUpload.status !== "idle" ? (
-              <p
-                role="status"
-                className={cn(
-                  "px-1 py-0.5 text-xs",
-                  recordingUpload.status === "error"
-                    ? "text-destructive"
-                    : "text-muted-foreground",
-                )}
-              >
-                {recordingUpload.status === "uploading"
-                  ? tRecordings.uploading
-                  : recordingUpload.status === "processing"
-                    ? tRecordings.processing
-                    : recordingUpload.message}
-              </p>
-            ) : null}
+            <RecordingUploadStatus
+              status={recordingUpload.status}
+              uploadProgress={recordingUpload.uploadProgress}
+              message={recordingUpload.message}
+              className="px-1"
+            />
           </>
         }
         slotPreInput={
@@ -3792,16 +3783,17 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
               ref={fileInputRef}
               type="file"
               multiple
+              disabled={recordingUpload.busy}
               className="hidden"
               onChange={(event) => {
-                if (event.target.files) void att.upload(event.target.files);
+                if (!recordingUpload.busy && event.target.files) void att.upload(event.target.files);
                 event.target.value = "";
               }}
             />
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={!!pendingQuestion}
+              disabled={!!pendingQuestion || recordingUpload.busy}
               aria-label={tAttach.attach}
               title={tAttach.attach}
               className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50 focus-visible:shadow-none"
@@ -3814,7 +3806,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
             {dockRecorder ? (
               <DockRecorderButton
                 rec={dockRecorder}
-                disabled={!!pendingQuestion}
+                disabled={!!pendingQuestion || recordingUpload.busy}
               />
             ) : null}
             {interlocutorControl}
@@ -4137,7 +4129,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
                   ) : sentCommand ? (
                     <div
                       aria-label={format(t.slashSentAria, {
-                        slug: sentCommand.skill.slug,
+                        slug: sentCommand.command.slug,
                       })}
                       className="max-w-[85%] rounded-2xl rounded-br-md border border-primary/25 bg-primary/[0.07] px-3.5 py-2 text-[14px] leading-[1.5] break-words whitespace-pre-wrap shadow-sm"
                     >
@@ -4147,7 +4139,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
                           aria-hidden
                         />
                         <code className="rounded bg-primary/15 px-1 py-0.5 text-[13px] font-semibold text-primary">
-                          /{sentCommand.skill.slug}
+                          /{sentCommand.command.slug}
                         </code>
                       </span>
                       {sentCommand.args ? (

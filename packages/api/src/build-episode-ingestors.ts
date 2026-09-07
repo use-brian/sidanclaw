@@ -147,6 +147,7 @@ export function buildEpisodeIngestors(deps: EpisodeIngestorDeps): {
       assistantId: input.assistantId,
       createdByUserId: input.userId,
       createdByAssistantId: input.assistantId,
+      personExternalRefs: input.personExternalRefs,
     }
     return processEpisode(pbEpisode, input.content, pipelineDeps(llm))
   }

@@ -47,6 +47,33 @@ export type ChatArchiveEnrichmentWorker = {
   runOnce(): Promise<void>
 }
 
+/**
+ * Map the window's senders onto the provider-verified refs Pipeline B needs to
+ * resolve a person to an existing contact instead of creating another.
+ *
+ * Extraction names people from the rendered text, so the ref is keyed on the
+ * same resolved name the store rendered them under. A participant the store
+ * left unnamed is skipped: it either has no name or shares one with another
+ * sender, and in both cases no name can select it safely.
+ *
+ * The namespace is the archive connector instance from `source_ref`. Without
+ * it a JID is only metadata, so a missing instance id yields no refs at all
+ * rather than identities that could collide across accounts.
+ */
+export function personExternalRefsFor(
+  window: EnrichmentWindow,
+): Array<{ name: string; externalRef: Record<string, unknown>; phone?: string }> {
+  const instanceId = window.source_ref?.archive_instance_id
+  if (typeof instanceId !== 'string' || instanceId.trim() === '') return []
+  return (window.participants ?? [])
+    .filter((p) => p.sender_id.trim() !== '' && p.display_name.trim() !== '')
+    .map((p) => ({
+      name: p.display_name,
+      externalRef: { provider: 'whatsapp', id: p.sender_id, instance_id: instanceId },
+      ...(p.phone ? { phone: p.phone } : {}),
+    }))
+}
+
 export function createChatArchiveEnrichmentWorker(
   deps: ChatArchiveEnrichmentDeps,
 ): ChatArchiveEnrichmentWorker {
@@ -76,6 +103,7 @@ export function createChatArchiveEnrichmentWorker(
         sourceKind: 'channel_window',
         sourceRef: window.source_ref,
         contentRef: window.source_ref,
+        personExternalRefs: personExternalRefsFor(window),
       })
       await deps.client.completeEnrichmentWindow(window.window_id, result.episodeId)
     } catch (err) {

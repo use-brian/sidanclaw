@@ -133,6 +133,12 @@ export type EnrichmentWindow = {
   owner_user_id: string
   workspace_id: string
   rendered_text: string
+  /**
+   * Distinct senders in the window, carrying the provider's own subject id.
+   * The store omits a name two senders share, so an empty `display_name` means
+   * "cannot be matched by name", not "has no name".
+   */
+  participants?: Array<{ sender_id: string; display_name: string; phone?: string }>
   message_count: number
   window_start: string
   window_end: string

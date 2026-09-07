@@ -136,7 +136,7 @@ export type PipelineBEpisode = {
    * See docs/architecture/brain/ingest-pipeline.md → Source adapters →
    * Slack → "Mention resolution".
    */
-  personExternalRefs?: Array<{ name: string; externalRef: Record<string, unknown> }>
+  personExternalRefs?: Array<{ name: string; externalRef: Record<string, unknown>; phone?: string }>
 }
 
 /**
@@ -1235,10 +1235,50 @@ function parseExtraction(rawText: string): ParseResult {
   return { ok: true, payload: result.data }
 }
 
+/**
+ * Chat providers address people with JIDs shaped exactly like an email address:
+ * `85292052939@s.whatsapp.net` has an `@`, a dot, and a real TLD, so neither a
+ * shape check nor the CRM's strict RFC validation rejects it. They are routing
+ * identifiers, not mailboxes, and writing one into a contact's email field puts
+ * an unreachable address in the CRM and invites a send that silently goes
+ * nowhere. Match on the domain, which is the only part that distinguishes them.
+ *
+ * `@lid`, `@broadcast` and `@call` carry no dot and are already excluded by the
+ * shape check; they are listed anyway so the set reads as the provider's
+ * address space rather than as whatever happened to slip through.
+ */
+const NON_EMAIL_IDENTIFIER_DOMAINS = new Set([
+  's.whatsapp.net', // WhatsApp user
+  'c.us', // WhatsApp user, legacy/web form
+  'g.us', // WhatsApp group
+  'lid', // WhatsApp privacy identifier
+  'broadcast', // WhatsApp broadcast list
+  'newsletter', // WhatsApp channel
+  'call', // WhatsApp call
+])
+
+/**
+ * An extracted email is only kept when it actually occurs in the source.
+ *
+ * The extraction prompt asks for an email as a person's `canonical_id`, and a
+ * model asked for a value it does not have will invent a plausible one:
+ * "Ben Luk" became `benluk@example.com`, a syntactically perfect address that
+ * appeared nowhere in 334,943 archived messages. Shape checks cannot catch
+ * that, and a fabricated address is worse than an empty field because someone
+ * will eventually send to it. Requiring the source to attest the value costs
+ * one substring check and rejects the whole class.
+ */
+function attestedEmail(canonical: string | null | undefined, sourceText: string): string | null {
+  if (!emailShape(canonical)) return null
+  return sourceText.toLowerCase().includes(canonical.toLowerCase()) ? canonical : null
+}
+
 function emailShape(canonical: string | null | undefined): canonical is string {
   if (typeof canonical !== 'string') return false
   // Cheap shape check; the CRM layer does the strict validation.
-  return canonical.includes('@') && canonical.includes('.')
+  if (!canonical.includes('@') || !canonical.includes('.')) return false
+  const domain = canonical.slice(canonical.lastIndexOf('@') + 1).trim().toLowerCase()
+  return !NON_EMAIL_IDENTIFIER_DOMAINS.has(domain)
 }
 
 /**
@@ -1700,7 +1740,7 @@ export async function processEpisode(
         )
       : exRaw
     try {
-      const entity = await writeEntity(ex, episode, deps, actorUserId)
+      const entity = await writeEntity(ex, episode, deps, actorUserId, resolvedContent)
       if (entity) {
         entitiesByRef.set(ex.display_name, entity)
         entitiesWritten.push(entity)
@@ -2327,11 +2367,11 @@ async function learnAlias(
 function matchPersonExternalRef(
   refs: PipelineBEpisode['personExternalRefs'],
   displayName: string,
-): Record<string, unknown> | null {
+): { externalRef: Record<string, unknown>; phone?: string } | null {
   if (!refs || refs.length === 0) return null
   const target = displayName.trim().toLowerCase()
   for (const r of refs) {
-    if (r.name.trim().toLowerCase() === target) return r.externalRef
+    if (r.name.trim().toLowerCase() === target) return { externalRef: r.externalRef, phone: r.phone }
   }
   return null
 }
@@ -2341,14 +2381,16 @@ async function writeEntity(
   episode: PipelineBEpisode,
   deps: PipelineBDeps,
   actorUserId: string,
+  sourceText: string,
 ): Promise<EntityRecord | null> {
   // Person mutation identity is separate from retrieval. Names, email,
   // aliases, fuzzy scores, and LLM guesses may rank candidates but cannot
   // select a write target. A source-adapter verified provider subject is the
   // sole automatic authority; otherwise a distinct person is created.
   if (ex.kind === 'person') {
-    const email = emailShape(ex.canonical_id) ? ex.canonical_id : null
-    const externalRef = matchPersonExternalRef(episode.personExternalRefs, ex.display_name)
+    const email = attestedEmail(ex.canonical_id, sourceText)
+    const matched = matchPersonExternalRef(episode.personExternalRefs, ex.display_name)
+    const externalRef = matched?.externalRef ?? null
     const contact = await deps.crm.createContact({
       userId: actorUserId,
       workspaceId: episode.workspaceId,
@@ -2358,6 +2400,9 @@ async function writeEntity(
         externalRef,
         stableIdentity: stableExternalIdentityFromCrmRef(externalRef) ?? undefined,
       } : {}),
+      // The adapter's number, not one the extractor read out of prose: a phone
+      // is contact data, and a wrong one reaches the wrong person.
+      ...(matched?.phone ? { phone: matched.phone } : {}),
       source: 'extracted',
       sourceEpisodeId: episode.id,
       createdByAssistantId: episode.createdByAssistantId,

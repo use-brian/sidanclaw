@@ -91,6 +91,7 @@ export type CrmEmailDraft = {
   bcc: string[];
   subject: string;
   body: string;
+  attachments: string[];
   sourceSessionId: string | null;
   createdAt: string;
   updatedAt: string;
