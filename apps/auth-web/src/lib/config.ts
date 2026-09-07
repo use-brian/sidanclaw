@@ -68,9 +68,9 @@ export function resolvePortalConfig(
   if (rawDomain) {
     const suffix = rawDomain.slice(1).toLowerCase();
     const labels = suffix.split(".");
-    const parsed = parseDomain(suffix);
+    const parsed = parseDomain(suffix, { allowPrivateDomains: true });
     const validLabels = labels.every((label) => /^(?!-)[a-z0-9-]{1,63}(?<!-)$/.test(label));
-    if (!rawDomain.startsWith(".") || !validLabels || !parsed.domain || !parsed.publicSuffix || suffix === parsed.domain || suffix === parsed.publicSuffix) {
+    if (!rawDomain.startsWith(".") || !validLabels || !parsed.domain || !parsed.publicSuffix || suffix === parsed.publicSuffix) {
       throw new Error("COOKIE_DOMAIN must be a dot-prefixed DNS suffix");
     }
     for (const origin of [portalOrigin, appOrigin]) {

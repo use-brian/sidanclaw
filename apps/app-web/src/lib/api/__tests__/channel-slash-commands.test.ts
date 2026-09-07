@@ -12,7 +12,7 @@ beforeEach(() => {
 });
 
 describe("syncChannelSlashCommands", () => {
-  it("POSTs to the encoded channel route and parses the receipt", async () => {
+  it("POSTs to the same-origin encoded channel route and parses the receipt", async () => {
     mockAuthFetch.mockResolvedValue(
       new Response(JSON.stringify({ commandCount: 7, omittedCount: 2 }), {
         status: 200,
@@ -24,7 +24,7 @@ describe("syncChannelSlashCommands", () => {
       syncChannelSlashCommands("workspace/one", "channel/two"),
     ).resolves.toEqual({ commandCount: 7, omittedCount: 2 });
     expect(mockAuthFetch).toHaveBeenCalledWith(
-      "http://localhost:4000/api/workspaces/workspace%2Fone/channels/channel%2Ftwo/slash-commands/sync",
+      "/api/workspaces/workspace%2Fone/channels/channel%2Ftwo/slash-commands/sync",
       { method: "POST" },
     );
   });

@@ -25,6 +25,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("[COMP:app-web/login-delegation] GET /login", () => {
+  it.each(["", "?next=%2Fw%2Ftest&addAccount=1&error=auth_failed"])("delegates Outpost login to auth rather than the app origin (%s)", (query) => {
+    const app = "https://brian-test.awcjack.top";
+    const auth = "https://brian-test-auth.awcjack.top";
+    vi.stubEnv("USEBRIAN_EDITION", "outpost");
+    vi.stubEnv("PUBLIC_APP_URL", app);
+    vi.stubEnv("AUTHED_APP_URL", app);
+    vi.stubEnv("PUBLIC_PRIMARY_AUTH_URL", auth);
+    mockedWebAppUrl.mockReturnValue(app);
+
+    const res = GET(new Request(`http://localhost:3003/login${query}`));
+    const target = new URL(res.headers.get("location")!);
+
+    expect(res.status).toBe(307);
+    expect(target.origin).toBe(auth);
+    expect(target.pathname).toBe("/login");
+    expect(target.searchParams.get("next")).toBe(`${app}${query ? "/w/test" : "/"}`);
+    expect(target.searchParams.get("addAccount")).toBe(query ? "1" : null);
+    expect(target.searchParams.get("error")).toBe(query ? "auth_failed" : null);
+    expect(mockedWebAppUrl).not.toHaveBeenCalled();
+  });
+
   it("server-redirects hosted users to the canonical login without rendering HTML", () => {
     const res = GET(new Request("https://app.usebrian.ai/login"));
     const target = new URL(res.headers.get("location")!);
