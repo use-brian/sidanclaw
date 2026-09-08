@@ -197,6 +197,7 @@ export async function renderBlock(block: Block, deps: BindingDeps): Promise<A2UI
       // renderer verbatim (compiled to SVG client-side). No store call.
       return diagramWidgetFromBlock(block)
     case 'image':
+    case 'drawing':
     case 'file':
     case 'bookmark':
     case 'video':
@@ -227,6 +228,7 @@ function renderDocNativePlaceholder(
   block: {
     kind:
       | 'image'
+      | 'drawing'
       | 'file'
       | 'bookmark'
       | 'video'

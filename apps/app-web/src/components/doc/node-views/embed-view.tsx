@@ -49,6 +49,8 @@ import { chartBlockToWidget, diagramBlockToWidget } from "../block-visual";
 import { BlockChildPage } from "../block-child-page";
 import { BlockImage } from "../block-image";
 import { BlockFile } from "../block-file";
+import { BlockDrawing } from "../block-drawing";
+import { saveDrawing } from '../drawing-transaction';
 import { BlockBookmark, type BookmarkBlock } from "../block-bookmark";
 import { BlockExtractionSlot } from "../block-extraction-slot";
 import { ZoomableVisual } from "../visual-lightbox";
@@ -496,7 +498,9 @@ export function EmbedView(props: NodeViewProps) {
         key={(props.node.attrs.blockId as string | undefined) ?? raw ?? "embed"}
         fallback={() => <EmbedCrashFallback />}
       >
-        {renderEmbed(block, updateBlock, editable)}
+        {block?.kind === "drawing" ? <BlockDrawing block={block} editable={editable}
+          onSave={(next, original) => saveDrawing(props.editor, props.getPos, next, original)}
+        /> : renderEmbed(block, updateBlock, editable)}
       </ErrorBoundary>
     </NodeViewWrapper>
   );

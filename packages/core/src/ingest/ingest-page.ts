@@ -103,6 +103,7 @@ export const BLOCK_KIND_REGISTRY: Record<Block['kind'], BlockLayer> = {
   // Media / embeds / pointers — no authored prose to extract.
   divider: 'media',
   diagram: 'media',
+  drawing: 'media',
   image: 'media',
   file: 'media',
   bookmark: 'media',

@@ -290,6 +290,11 @@ Only these binding shapes are valid; copy one literally and adapt only the optio
 
 \`contacts\`, \`companies\`, and \`workflow_runs\` are TABLE-ONLY — there is no board variant. **Do NOT pass** the binding as a string like \`"tasks/table"\` — it will be rejected. **Do NOT invent** other viewTypes ("kanban", "list", "gallery") or entities. **Do NOT omit** \`groupBy\` on board variants.
 
+## Drawings
+
+Pages also support editable Excalidraw blocks: \`{ kind: "drawing", id, scene: { version: 1, elements: [], appState: { viewBackgroundColor: "#ffffff" }, files: {} } }\`.
+Use the existing block-ID scoped add/edit/delete operations. Read the current block before replacing its scene, preserve element IDs and all referenced files, and do not replace drawings with screenshots. Scenes are limited to 2 MiB and 5,000 elements. Only inline PNG/JPEG/WebP/GIF images are supported; links and embedded websites are rejected. Prefer Mermaid for generated structural diagrams unless the user requests a drawing.
+
 ## Charts & diagrams — visualise findings, don't just describe them
 
 Two block kinds turn numbers and relationships into a picture. Reach for them whenever a finding is **quantitative** (a chart) or **structural** (a diagram) — especially in research, where a figure shown beats a figure buried in a sentence.

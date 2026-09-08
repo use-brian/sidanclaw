@@ -166,6 +166,7 @@ export type SlashMenuBlockKind =
   | "data"
   | "chart"
   | "diagram"
+  | "drawing"
   // Blueprint authoring directive ("/extract") — a non-prose `extraction_slot`
   // embed carrying a section's extraction instruction. Inserted like any embed.
   | "extraction_slot"
@@ -211,6 +212,7 @@ export const FALLBACK_LABELS = {
   bookmark: "Bookmark",
   chart: "Chart",
   diagram: "Diagram",
+  drawing: "Drawing",
   extraction_slot: "Extraction slot",
 } as const;
 
@@ -457,6 +459,7 @@ export const SLASH_MENU_ITEMS: readonly SlashMenuItem[] = [
     icon: Workflow,
     blockKind: "diagram",
   },
+  { id: "drawing", labelKey: "drawing", category: "media", aliases: ["drawing", "draw", "sketch", "excalidraw"], icon: Workflow, blockKind: "drawing" },
   {
     id: "extraction_slot",
     labelKey: "extraction_slot",

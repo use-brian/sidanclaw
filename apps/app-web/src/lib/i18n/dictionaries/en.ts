@@ -1366,6 +1366,7 @@ export const en = {
         bookmark: "Bookmark",
         chart: "Chart",
         diagram: "Diagram",
+        drawing: "Drawing",
         extraction_slot: "Extraction slot",
       },
       empty: "No matches.",
@@ -1487,6 +1488,11 @@ export const en = {
     // is always available (read-only on a non-editable page); "Edit source"
     // and "Update" only when the page is editable.
     diagramSource: {
+      drawing: "Drawing", drawingEdit: "Edit drawing", drawingSave: "Save drawing",
+      drawingHelp: "Draw, then save to embed. Maximum 2 MiB. Raster images only; links and embedded websites are not supported.",
+      drawingError: "Cannot save this drawing. Check the size, image files, and unsupported content.",
+      drawingConflict: "This drawing changed or is no longer editable. Cancel and reopen the latest version.",
+      drawingLoading: "Loading drawing...", drawingFailed: "Drawing could not load. Close and try again.",
       view: "View source",
       edit: "Edit source",
       label: "Mermaid source",
