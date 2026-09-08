@@ -49,7 +49,9 @@ async function fixture(grants: CrmIntegrationGrant[] = [{ operation: 'crm.record
 }
 
 async function snapshot(workspaceId: string) {
-  const tables = ['crm_pipelines', 'crm_pipeline_stages', 'crm_field_definitions', 'crm_segments', 'association_audit_log', 'workspace_audit_log']
+  const tables = ['crm_pipelines', 'crm_pipeline_stages', 'crm_field_definitions', 'crm_segments',
+    'crm_consent_purposes', 'crm_consent_purpose_versions', 'association_membership_plans', 'association_events',
+    'crm_intake_definitions', 'crm_intake_definition_versions', 'association_audit_log', 'workspace_audit_log']
   return Promise.all(tables.map(async (table) => (await pool.query(
     `SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY id),'[]') AS rows FROM ${table} t WHERE workspace_id=$1`, [workspaceId],
   )).rows[0].rows))
