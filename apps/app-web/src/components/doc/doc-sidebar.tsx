@@ -703,8 +703,11 @@ export function DocSidebar(props: Props) {
         </Tooltip>
         <Tooltip label={t.iconStudio} shortcut={surfaceShortcutLabel(3)}>
           <Link
-            href={`/w/${workspaceId}/studio`}
-            {...intentPrefetch(`/w/${workspaceId}/studio`)}
+            // The final route, not the `/studio` redirect (instant-navigation
+            // contract N6): one navigation, one skeleton, and the prefetch
+            // warms the section that actually renders.
+            href={`/w/${workspaceId}/studio/connectors`}
+            {...intentPrefetch(`/w/${workspaceId}/studio/connectors`)}
             aria-label={t.iconStudioAria}
             className={navItemCls(surfaceActive("studio"), !utilityPillOpen) + " relative"}
           >

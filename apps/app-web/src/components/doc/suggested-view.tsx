@@ -60,7 +60,7 @@ import {
   personalChatHandoffPath,
   stashChatHandoff,
 } from "@/lib/chat-handoff";
-import { type PanelId } from "@/lib/doc-page-url";
+import { type PanelId, docEntryPath, panelTabEntry } from "@/lib/doc-page-url";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebarData } from "./doc-sidebar-data";
 
@@ -765,8 +765,9 @@ function ApprovalSummaryCard({
       </button>
     );
   }
+  // The final panel URL, not the legacy `/approvals` redirect (N6).
   return (
-    <Link href={`/w/${workspaceId}/approvals`} className={cardClass}>
+    <Link href={docEntryPath(workspaceId, panelTabEntry("approvals"))} className={cardClass}>
       {inner}
     </Link>
   );
@@ -796,7 +797,7 @@ function cardConfig(kind: ResolvedNeed["kind"], workspaceId: string, t: Suggeste
         Icon: CheckCircle2,
         // The route redirects to the panel; `onOpenPanel` opens it as a tab
         // directly (the href is the no-JS / other-host fallback).
-        href: `/w/${workspaceId}/approvals`,
+        href: docEntryPath(workspaceId, panelTabEntry("approvals")),
         panel: "approvals" as PanelId | null,
         title: t.approvalsTitle,
         fallbackCaption: t.approvalsCaption,
@@ -810,7 +811,7 @@ function cardConfig(kind: ResolvedNeed["kind"], workspaceId: string, t: Suggeste
       return {
         accent: "workflow" as const,
         Icon: Target,
-        href: `/w/${workspaceId}/goals`,
+        href: docEntryPath(workspaceId, panelTabEntry("goals")),
         panel: "goals" as PanelId | null,
         title: t.autopilotTitle,
         fallbackCaption: t.autopilotCaption,

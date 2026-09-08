@@ -166,6 +166,7 @@ export const zhCN: Dictionary = {
   workspace: {
     brain: {
       knowledgeTitle: "知识来源",
+      knowledgeLoading: "正在加载知识库...",
       entriesTitle: "项目",
       searchPlaceholder: "搜索知识库…",
       noKnowledgeSourcesConnected: "尚未连接知识来源。",

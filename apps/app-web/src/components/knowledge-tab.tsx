@@ -212,7 +212,7 @@ export function KnowledgeTab({
   if (loading) {
     return (
       <div className="text-[13px] text-muted-foreground py-6">
-        Loading knowledge base...
+        {t.workspace.brain.knowledgeLoading}
       </div>
     );
   }

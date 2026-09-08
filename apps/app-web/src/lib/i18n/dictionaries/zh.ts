@@ -156,6 +156,7 @@ export const zh: Dictionary = {
   workspace: {
         brain: {
       knowledgeTitle: "知識來源",
+      knowledgeLoading: "正在載入知識庫...",
       entriesTitle: "項目",
       searchPlaceholder: "搜尋知識庫…",
       // knowledge-tab subset

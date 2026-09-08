@@ -171,6 +171,7 @@ export const en = {
   workspace: {
         brain: {
       knowledgeTitle: "Knowledge Sources",
+      knowledgeLoading: "Loading knowledge base...",
       entriesTitle: "Entries",
       searchPlaceholder: "Search knowledge base...",
       // knowledge-tab subset

@@ -156,6 +156,7 @@ export const ja: Dictionary = {
   workspace: {
         brain: {
       knowledgeTitle: "ナレッジ ソース",
+      knowledgeLoading: "ナレッジベースを読み込み中...",
       entriesTitle: "エントリ",
       searchPlaceholder: "ナレッジベースを検索...",
       noKnowledgeSourcesConnected: "ナレッジ ソースが接続されていません。",
