@@ -13,6 +13,7 @@ import { z } from 'zod'
 import { APP_LOCALES } from '@use-brian/shared'
 import { CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, type CrmIntegrationOperation } from './integration-authority.js'
 import { AssociationPlanInputSchema, AssociationEventInputSchema } from '../association/domain.js'
+import { CrmConfigCommandSchema, isCrmConfigCommand } from './config-commands.js'
 
 export const CrmOperationsUuidSchema = z.string().uuid()
 export const CrmOperationsStableKeySchema = z.string().trim().toLowerCase()
@@ -445,6 +446,7 @@ export const SaveCrmPrivacyPolicyCommandSchema = z.object({
 }).strict()
 
 export const CrmOperationsCommandSchema = z.union([
+  CrmConfigCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
   SaveCrmEntitlementPlanCommandSchema,
   SaveCrmEventCommandSchema,
@@ -566,7 +568,7 @@ export function actorAuditIdentity(actor: CrmOperationsActor): {
 }
 
 export function commandRequiresConfigurationAuthority(command: CrmOperationsCommand): boolean {
-  return command.kind === 'save_entitlement_plan'
+  return isCrmConfigCommand(command) || command.kind === 'save_entitlement_plan'
     || command.kind === 'save_event'
     || command.kind === 'save_intake_definition'
     || command.kind === 'create_intake_credential'
@@ -588,6 +590,10 @@ export function assertCrmOperationsAuthority(
   }
   if (context.authority.integration) {
     const operations: Partial<Record<CrmOperationsCommand['kind'], CrmIntegrationOperation>> = {
+      create_record_field: 'crm.catalog.configure', update_record_field: 'crm.catalog.configure',
+      set_record_field_archived: 'crm.catalog.configure', create_pipeline: 'crm.catalog.configure',
+      update_pipeline: 'crm.catalog.configure', create_pipeline_stage: 'crm.catalog.configure',
+      update_pipeline_stage: 'crm.catalog.configure',
       save_intake_definition: 'crm.catalog.configure', save_consent_purpose: 'crm.catalog.configure',
       save_entitlement_plan: 'crm.catalog.configure', save_event: 'crm.catalog.configure',
       record_submission: 'crm.submissions.write', update_submission: 'crm.submissions.write',

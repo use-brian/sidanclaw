@@ -11,7 +11,7 @@
  */
 
 import { Router } from 'express'
-import type { Response } from 'express'
+import type { Request, Response } from 'express'
 import { z } from 'zod'
 import type {
   AccessContext,
@@ -20,7 +20,7 @@ import type {
   DealStage,
   EntityLinksStore,
 } from '@use-brian/core'
-import { EntityMergeError, UndoMergeError, mergeEntities, undoMerge } from '@use-brian/core'
+import { EntityMergeError, UndoMergeError, mergeEntities, undoMerge, CrmConfigCommandSchema, CrmOperationsError, type CrmConfigCommand } from '@use-brian/core'
 import type { WorkspaceStore } from '../db/workspace-store.js'
 import { resolveWorkspaceViewpoint } from '../db/workspace-viewpoint.js'
 import {
@@ -39,17 +39,11 @@ import {
   retireCrmEntitySeparation,
 } from '../db/crm-identity-store.js'
 import {
-  CRM_FIELD_TYPES,
   CRM_PRESET_IDS,
-  CRM_REFERENCE_KINDS,
   addCrmDealParticipant,
   applyCrmFieldPreset,
   appendCrmActivity,
-  archiveCrmFieldDefinition,
-  createCrmFieldDefinition,
-  createCrmPipeline,
   createCrmSavedView,
-  createCrmStage,
   crmRowsToCsv,
   deleteCrmSavedView,
   findCrmDuplicateGroups,
@@ -68,23 +62,18 @@ import {
   reorderCrmFields,
   reorderCrmPipelines,
   reorderCrmStages,
-  restoreCrmFieldDefinition,
   setCrmDealPrimaryContact,
   setCrmArchived,
   setCrmDealPipelineStage,
-  setCrmStageArchived,
   updateCrmCustomFields,
-  updateCrmFieldDefinition,
-  updateCrmPipeline,
-  updateCrmStage,
   validateCrmCustomFieldValues,
   type CrmEntityKind,
-  type CrmFieldType,
   type CrmRecordRelationships,
   type CrmRecordRow,
-  type CrmStageCategory,
 } from '../db/crm-r2.js'
 import { notifyBrainInboxChange } from '../brain-stream/notify.js'
+import { createCrmOperationsService } from '../crm-operations/service.js'
+import { createDbCrmOperationsStore } from '../db/crm-operations-store.js'
 
 type RouteOptions = {
   workspaceStore: WorkspaceStore
@@ -94,7 +83,6 @@ type RouteOptions = {
 }
 
 const CRM_KINDS = new Set<CrmEntityKind>(['person', 'company', 'deal'])
-const STAGE_CATEGORIES = new Set<CrmStageCategory>(['open', 'won', 'lost'])
 const LEGACY_STAGES = new Set<DealStage>([
   'lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost',
 ])
@@ -283,6 +271,38 @@ export function crmRoutes({
     if (role === 'owner' || role === 'admin') return true
     res.status(403).json({ error: 'Owner or admin role required' })
     return false
+  }
+
+  let configurationService = crmOperationsService
+  function configuration(kind: CrmConfigCommand['kind'], ids: Record<string, string>, shape: 'record' | 'ok' | 'stage', status = 200, fixed: Record<string, unknown> = {}) {
+    return async (req: Request, res: Response) => {
+      try {
+        const member = await memberContext(req as never, res)
+        if (!member || !requireAdmin(member.role, res)) return
+        const body = z.record(z.unknown()).parse(req.body ?? {})
+        if (['kind', 'workspaceId', 'actor', 'authority', ...Object.keys(ids), ...Object.keys(fixed)].some((key) => hasOwn(body, key))) {
+          throw new CrmOperationsError('invalid_input', 'Use only configuration fields; workspace, ids and authority come from this route.')
+        }
+        const command = CrmConfigCommandSchema.parse({ ...body, ...fixed, kind,
+          ...Object.fromEntries(Object.entries(ids).map(([key, parameter]) => [key, req.params[parameter]])) })
+        configurationService ??= createCrmOperationsService(createDbCrmOperationsStore())
+        const output = await configurationService.execute({ workspaceId: member.ctx.workspaceId,
+          actor: { kind: 'user', userId: member.ctx.userId },
+          authority: { role: member.role as 'owner' | 'admin', canWrite: true, canConfigure: true, trustedIdentitySources: [] },
+        }, command)
+        const metadata = ['name', 'category', 'probability', 'requiredFields'].some((key) => hasOwn(body, key))
+        res.status(status).json(shape === 'ok' || (shape === 'stage' && !metadata) ? { ok: true } : output.record)
+      } catch (error) {
+        if (error instanceof z.ZodError) { res.status(400).json({ error: 'Invalid configuration', issues: error.issues }); return }
+        if (error instanceof CrmOperationsError) {
+          res.status(error.code === 'not_authorized' ? 403 : error.code === 'not_found' ? 404 : error.code === 'conflict' ? 409 : 400)
+            .json({ error: error.message, code: error.code, details: error.details })
+          return
+        }
+        console.error('[crm-config] configuration command failed')
+        res.status(500).json({ error: 'Configuration unavailable' })
+      }
+    }
   }
 
   async function createRecord(
@@ -980,40 +1000,8 @@ export function crmRoutes({
     res.json(await getCrmConfig(member.ctx.userId, member.ctx.workspaceId, includeArchived))
   })
 
-  router.post('/:workspaceId/pipelines', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const name = text(req.body?.name, 100)
-    if (!name) {
-      res.status(400).json({ error: 'name is required' })
-      return
-    }
-    res.status(201).json(await createCrmPipeline({ ...member.ctx, name }))
-  })
-
-  router.patch('/:workspaceId/pipelines/:pipelineId', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const name = hasOwn(req.body ?? {}, 'name') ? text(req.body?.name, 100) : undefined
-    if (hasOwn(req.body ?? {}, 'name') && !name) {
-      res.status(400).json({ error: 'name cannot be empty' })
-      return
-    }
-    try {
-      const ok = await updateCrmPipeline({
-        userId: member.ctx.userId,
-        workspaceId: member.ctx.workspaceId,
-        pipelineId: req.params.pipelineId,
-        ...(name !== undefined ? { name: name as string } : {}),
-        ...(typeof req.body?.isDefault === 'boolean' ? { isDefault: req.body.isDefault } : {}),
-        ...(typeof req.body?.archived === 'boolean' ? { archived: req.body.archived } : {}),
-      })
-      if (!ok) res.status(404).json({ error: 'Pipeline not found' })
-      else res.json({ ok: true })
-    } catch (error) {
-      res.status(409).json({ error: error instanceof Error ? error.message : String(error) })
-    }
-  })
+  router.post('/:workspaceId/pipelines', configuration('create_pipeline', {}, 'record', 201))
+  router.patch('/:workspaceId/pipelines/:pipelineId', configuration('update_pipeline', { pipelineId: 'pipelineId' }, 'ok'))
 
   router.post('/:workspaceId/pipelines/reorder', async (req, res) => {
     const member = await memberContext(req as never, res)
@@ -1034,87 +1022,8 @@ export function crmRoutes({
     }
   })
 
-  router.post('/:workspaceId/pipelines/:pipelineId/stages', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const name = text(req.body?.name, 100)
-    const category = req.body?.category as CrmStageCategory
-    const probability = finiteNumber(req.body?.probability)
-    if (!name || !STAGE_CATEGORIES.has(category) || probability == null
-      || probability < 0 || probability > 100) {
-      res.status(400).json({ error: 'name, category, and probability 0-100 are required' })
-      return
-    }
-    const stage = await createCrmStage({
-      userId: member.ctx.userId,
-      workspaceId: member.ctx.workspaceId,
-      pipelineId: req.params.pipelineId,
-      name,
-      category,
-      probability,
-      requiredFields: stringArray(req.body?.requiredFields),
-    })
-    if (!stage) res.status(404).json({ error: 'Pipeline not found' })
-    else res.status(201).json(stage)
-  })
-
-  router.patch('/:workspaceId/stages/:stageId', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const category = req.body?.category
-    const probability = finiteNumber(req.body?.probability)
-    if (category !== undefined && !STAGE_CATEGORIES.has(category)) {
-      res.status(400).json({ error: 'Invalid stage category' })
-      return
-    }
-    if (probability !== undefined && probability !== null && (probability < 0 || probability > 100)) {
-      res.status(400).json({ error: 'probability must be between 0 and 100' })
-      return
-    }
-    try {
-      const archived = typeof req.body?.archived === 'boolean' ? req.body.archived : undefined
-      if (archived === false) {
-        const restored = await setCrmStageArchived({
-          userId: member.ctx.userId, workspaceId: member.ctx.workspaceId,
-          stageId: req.params.stageId, archived: false,
-        })
-        if (!restored) {
-          res.status(404).json({ error: 'Stage not found' })
-          return
-        }
-      }
-      const hasMetadata = ['name', 'category', 'probability', 'requiredFields']
-        .some((key) => hasOwn(req.body ?? {}, key))
-      const stage = hasMetadata ? await updateCrmStage({
-        userId: member.ctx.userId,
-        workspaceId: member.ctx.workspaceId,
-        stageId: req.params.stageId,
-        name: text(req.body?.name, 100) ?? undefined,
-        category: category as CrmStageCategory | undefined,
-        probability: probability ?? undefined,
-        requiredFields: Array.isArray(req.body?.requiredFields)
-          ? stringArray(req.body.requiredFields)
-          : undefined,
-      }) : null
-      if (hasMetadata && !stage) {
-        res.status(404).json({ error: 'Stage not found' })
-        return
-      }
-      if (archived === true) {
-        const archivedOk = await setCrmStageArchived({
-          userId: member.ctx.userId, workspaceId: member.ctx.workspaceId,
-          stageId: req.params.stageId, archived: true,
-        })
-        if (!archivedOk) {
-          res.status(404).json({ error: 'Stage not found' })
-          return
-        }
-      }
-      res.json(stage ?? { ok: true })
-    } catch (error) {
-      res.status(409).json({ error: error instanceof Error ? error.message : String(error) })
-    }
-  })
+  router.post('/:workspaceId/pipelines/:pipelineId/stages', configuration('create_pipeline_stage', { pipelineId: 'pipelineId' }, 'record', 201))
+  router.patch('/:workspaceId/stages/:stageId', configuration('update_pipeline_stage', { stageId: 'stageId' }, 'stage'))
 
   router.post('/:workspaceId/pipelines/:pipelineId/stages/reorder', async (req, res) => {
     const member = await memberContext(req as never, res)
@@ -1134,94 +1043,10 @@ export function crmRoutes({
     }
   })
 
-  router.post('/:workspaceId/fields', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const entityKind = req.body?.entityKind as CrmEntityKind
-    const fieldType = req.body?.fieldType as CrmFieldType
-    const fieldKey = text(req.body?.fieldKey, 63)
-    const label = text(req.body?.label, 100)
-    if (!CRM_KINDS.has(entityKind) || !CRM_FIELD_TYPES.includes(fieldType)
-      || !fieldKey || !/^[a-z][a-z0-9_]{0,62}$/.test(fieldKey) || !label) {
-      res.status(400).json({ error: 'Invalid custom field definition' })
-      return
-    }
-    const options = stringArray(req.body?.options)
-    if ((fieldType === 'single_select' || fieldType === 'multi_select') && options.length === 0) {
-      res.status(400).json({ error: 'Select fields require at least one option' })
-      return
-    }
-    if (fieldType === 'entity_reference'
-      && (options.length === 0 || options.some((kind) => !(CRM_REFERENCE_KINDS as readonly string[]).includes(kind)))) {
-      res.status(400).json({ error: 'Reference fields require at least one valid target kind' })
-      return
-    }
-    const field = await createCrmFieldDefinition({
-      userId: member.ctx.userId,
-      workspaceId: member.ctx.workspaceId,
-      entityKind,
-      fieldKey,
-      label,
-      fieldType,
-      options,
-      isRequired: req.body?.isRequired === true,
-    })
-    if (!field) res.status(409).json({ error: 'Custom field limit reached' })
-    else res.status(201).json(field)
-  })
-
-  router.delete('/:workspaceId/fields/:fieldId', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const ok = await archiveCrmFieldDefinition(
-      member.ctx.userId, member.ctx.workspaceId, req.params.fieldId,
-    )
-    if (!ok) res.status(404).json({ error: 'Field not found' })
-    else res.json({ ok: true })
-  })
-
-  router.patch('/:workspaceId/fields/:fieldId', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    const allowed = new Set(['label', 'options', 'isRequired'])
-    const unknown = Object.keys(req.body ?? {}).filter((key) => !allowed.has(key))
-    if (unknown.length > 0) {
-      res.status(400).json({ error: `Field key and type are immutable; unsupported fields: ${unknown.join(', ')}` })
-      return
-    }
-    const label = hasOwn(req.body ?? {}, 'label') ? text(req.body?.label, 100) : undefined
-    if (hasOwn(req.body ?? {}, 'label') && !label) {
-      res.status(400).json({ error: 'label cannot be empty' })
-      return
-    }
-    try {
-      const field = await updateCrmFieldDefinition({
-        userId: member.ctx.userId, workspaceId: member.ctx.workspaceId,
-        fieldId: req.params.fieldId,
-        ...(label !== undefined ? { label: label as string } : {}),
-        ...(Array.isArray(req.body?.options) ? { options: stringArray(req.body.options) } : {}),
-        ...(typeof req.body?.isRequired === 'boolean' ? { isRequired: req.body.isRequired } : {}),
-      })
-      if (!field) res.status(404).json({ error: 'Field not found' })
-      else res.json(field)
-    } catch (error) {
-      res.status(409).json({ error: error instanceof Error ? error.message : String(error) })
-    }
-  })
-
-  router.post('/:workspaceId/fields/:fieldId/restore', async (req, res) => {
-    const member = await memberContext(req as never, res)
-    if (!member || !requireAdmin(member.role, res)) return
-    try {
-      const ok = await restoreCrmFieldDefinition(
-        member.ctx.userId, member.ctx.workspaceId, req.params.fieldId,
-      )
-      if (!ok) res.status(404).json({ error: 'Archived field not found' })
-      else res.json({ ok: true })
-    } catch (error) {
-      res.status(409).json({ error: error instanceof Error ? error.message : String(error) })
-    }
-  })
+  router.post('/:workspaceId/fields', configuration('create_record_field', {}, 'record', 201))
+  router.patch('/:workspaceId/fields/:fieldId', configuration('update_record_field', { fieldId: 'fieldId' }, 'record'))
+  router.delete('/:workspaceId/fields/:fieldId', configuration('set_record_field_archived', { fieldId: 'fieldId' }, 'ok', 200, { archived: true }))
+  router.post('/:workspaceId/fields/:fieldId/restore', configuration('set_record_field_archived', { fieldId: 'fieldId' }, 'ok', 200, { archived: false }))
 
   router.post('/:workspaceId/fields/reorder', async (req, res) => {
     const member = await memberContext(req as never, res)
@@ -1255,6 +1080,13 @@ export function crmRoutes({
       userId: member.ctx.userId,
       workspaceId: member.ctx.workspaceId,
       presetId: presetId as (typeof CRM_PRESET_IDS)[number],
+      execute: (command) => {
+        configurationService ??= createCrmOperationsService(createDbCrmOperationsStore())
+        return configurationService.execute({ workspaceId: member.ctx.workspaceId,
+          actor: { kind: 'user', userId: member.ctx.userId },
+          authority: { role: member.role as 'owner' | 'admin', canWrite: true, canConfigure: true, trustedIdentitySources: [] },
+        }, command)
+      },
     })
     res.json(result)
   })

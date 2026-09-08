@@ -28,6 +28,8 @@ import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-au
 import type { CrmOperationsCommand } from '@use-brian/core'
 import { loadCrmSegmentCatalog } from './crm-segment-store.js'
 import { crmEvidenceRequestHash, resolveCrmEvidenceReplay, type CrmEvidenceRequest } from '../crm-operations/evidence-replay.js'
+import { executeCrmConfigCommand } from './crm-config-commands.js'
+import type { CrmConfigCommand } from '@use-brian/core'
 
 export type CrmOperationsRecord = Record<string, unknown>
 
@@ -81,6 +83,7 @@ export type IdempotencyClaim =
   | { kind: 'conflict'; claimId: string; storedHash: string }
 
 export type CrmOperationsTransaction = {
+  configureCatalog(command: CrmConfigCommand): ReturnType<typeof executeCrmConfigCommand>
   savePrivacyPolicy(command: Extract<CrmOperationsCommand, { kind: 'save_privacy_policy' }>): ReturnType<typeof saveCrmPrivacyPolicy>
   authorizeIntegration(command: CrmOperationsCommand): Promise<void>
   saveEntitlementPlan(input: PlanInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
@@ -271,6 +274,7 @@ function actorAssistantId(actor: CrmOperationsActor): string | null {
 function createTransaction(client: PoolClient, context: CrmOperationsContext): CrmOperationsTransaction {
   const workspaceId = context.workspaceId
   return {
+    configureCatalog: (command) => executeCrmConfigCommand(client, context, command),
     savePrivacyPolicy: (command) => saveCrmPrivacyPolicy(client, context, command),
     authorizeIntegration: (command) => authorizeCrmIntegrationCommand(client, context, command),
     saveEntitlementPlan: (input) => saveCrmEntitlementPlanRecord(client, workspaceId, input),

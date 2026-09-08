@@ -107,18 +107,20 @@ import {
 const WS = 'd126f352-7f5c-48b2-88d0-66694be0c93d'
 const CTX = { userId: 'user-1', workspaceId: WS }
 const CONFIG = { pipelines: [], fields: [] }
+const configExecute = vi.fn()
 
 function makeApp(
   role: string | null = 'member',
   authenticated = true,
   emailDraftStore?: Parameters<typeof crmRoutes>[0]['emailDraftStore'],
+  configService?: Parameters<typeof crmRoutes>[0]['crmOperationsService'],
 ) {
   const workspaceStore = {
     getRole: vi.fn(async (userId: string) => userId === CTX.userId ? role : null),
   }
   return createTestApp(
     '/api/crm',
-    crmRoutes({ workspaceStore: workspaceStore as never, emailDraftStore }),
+    crmRoutes({ workspaceStore: workspaceStore as never, emailDraftStore, crmOperationsService: configService }),
     authenticated ? { userId: CTX.userId } : undefined,
   )
 }
@@ -262,18 +264,16 @@ describe('[COMP:api/crm-r2-route] CRM R2 route authority', () => {
     expect(memberResponse.status).toBe(403)
     expect(createCrmPipeline).not.toHaveBeenCalled()
 
-    vi.mocked(createCrmPipeline).mockResolvedValue({
-      id: 'pipeline-1',
-      name: 'Renewals',
-      isDefault: false,
-      position: 1,
-      stages: [],
-    })
-    const adminResponse = await request(makeApp('admin'))
-      .post(`/api/crm/${WS}/pipelines`)
-      .send({ name: 'Renewals' })
+    const saved = { id: 'pipeline-1', name: 'Renewals', isDefault: false, position: 1, stages: [] }
+    configExecute.mockResolvedValue({ record: saved, created: true })
+    const adminResponse = await request(makeApp('admin', true, undefined, { execute: configExecute }))
+      .post(`/api/crm/${WS}/pipelines`).send({ name: 'Renewals' })
     expect(adminResponse.status).toBe(201)
-    expect(createCrmPipeline).toHaveBeenCalledWith({ ...CTX, name: 'Renewals' })
+    expect(adminResponse.body).toEqual(saved)
+    expect(configExecute).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WS,
+      actor: { kind: 'user', userId: CTX.userId }, authority: expect.objectContaining({ canConfigure: true }) }),
+      { kind: 'create_pipeline', name: 'Renewals', isDefault: false })
+    expect(createCrmPipeline).not.toHaveBeenCalled()
   })
 
   it('creates a deal in the pipeline that owns the requested stable stage', async () => {
@@ -341,6 +341,7 @@ describe('[COMP:api/crm-r2-route] CRM R2 route authority', () => {
       userId: CTX.userId,
       workspaceId: WS,
       presetId: 'services_saas',
+      execute: expect.any(Function),
     })
   })
 })
@@ -358,17 +359,15 @@ describe('[COMP:api/crm-config-http] CRM configuration HTTP boundary', () => {
     expect(denied.status).toBe(403)
     expect(updateCrmPipeline).not.toHaveBeenCalled()
 
-    vi.mocked(updateCrmPipeline).mockResolvedValue(true)
-    const allowed = await request(makeApp('admin'))
-      .patch(`/api/crm/${WS}/pipelines/pipeline-1`)
-      .send({ name: 'Renewals' })
+    const pipelineId = '11111111-1111-4111-8111-111111111111'
+    configExecute.mockResolvedValue({ record: { id: pipelineId }, created: false })
+    const allowed = await request(makeApp('admin', true, undefined, { execute: configExecute }))
+      .patch(`/api/crm/${WS}/pipelines/${pipelineId}`).send({ name: 'Renewals' })
     expect(allowed.status).toBe(200)
-    expect(updateCrmPipeline).toHaveBeenCalledWith({
-      userId: CTX.userId,
-      workspaceId: WS,
-      pipelineId: 'pipeline-1',
-      name: 'Renewals',
-    })
+    expect(allowed.body).toEqual({ ok: true })
+    expect(configExecute).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WS,
+      actor: { kind: 'user', userId: CTX.userId } }), { kind: 'update_pipeline', pipelineId, name: 'Renewals' })
+    expect(updateCrmPipeline).not.toHaveBeenCalled()
   })
 })
 

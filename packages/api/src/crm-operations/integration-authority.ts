@@ -29,6 +29,15 @@ export async function authorizeCrmIntegrationCommand(client: PoolClient, context
   }
 
   switch (command.kind) {
+    case 'create_record_field':
+    case 'update_record_field':
+    case 'set_record_field_archived':
+    case 'create_pipeline':
+    case 'update_pipeline':
+    case 'create_pipeline_stage':
+    case 'update_pipeline_stage':
+      required('crm.catalog.configure', { definitionIds: null, purposeKeys: null, planIds: null, eventIds: null })
+      break
     case 'save_entitlement_plan': {
       const plans = await rows('SELECT id FROM association_membership_plans WHERE workspace_id=$1 AND plan_key=$2 FOR SHARE', [command.key])
       required('crm.catalog.configure', { planIds: plans.length ? plans.map((row) => row.id) : null })

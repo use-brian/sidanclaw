@@ -18,6 +18,7 @@ import {
   CrmSegmentPredicateSchema,
   actorAuditIdentity,
   assertCrmOperationsAuthority,
+  isCrmConfigCommand,
   canonicalCrmRequest,
   crmOperationsSha256,
   validateCrmSegmentCatalog,
@@ -451,7 +452,15 @@ export function createCrmOperationsService(
       const identity = actorAuditIdentity(context.actor)
 
       return store.transaction(context, async (tx) => {
-        if (context.authority.integration) await tx.authorizeIntegration(command)
+        if (context.authority.integration && !isCrmConfigCommand(command)) await tx.authorizeIntegration(command)
+        if (isCrmConfigCommand(command)) {
+          const saved = await tx.configureCatalog(command)
+          if (saved.changed) await audit(tx, context.actor, {
+            action: `crm.${saved.subjectKind}.${saved.created ? 'created' : 'updated'}`,
+            subjectKind: saved.subjectKind, subjectId: recordId(saved.record, saved.subjectKind),
+          })
+          return result(command.kind, saved.record, { created: saved.created, duplicate: !saved.changed })
+        }
         if (command.kind === 'save_privacy_policy') {
           const saved = await tx.savePrivacyPolicy(command)
           if (saved.created) await audit(tx, context.actor, {

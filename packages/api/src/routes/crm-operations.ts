@@ -9,6 +9,7 @@ import { z } from 'zod'
 import {
   AssociationPlanInputSchema,
   AssociationEventInputSchema,
+  CrmConfigCommandSchema,
   CreateCrmIntakeCredentialCommandSchema,
   CrmDeliveryChannelSchema,
   GrantCrmEntitlementCommandSchema,
@@ -221,6 +222,16 @@ export function crmOperationsRoutes(options: Options): Router {
       },
     }
   }
+
+  router.post('/:workspaceId/operations/commands', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    try {
+      const command = CrmConfigCommandSchema.parse(req.body)
+      const output = await options.service.execute(ctx, command)
+      res.status(output.created ? 201 : 200).json(output)
+    } catch (error) { writeError(res, error) }
+  })
 
   router.get('/:workspaceId/operations/intake-definitions', async (req, res) => {
     const ctx = await context(req, res)
