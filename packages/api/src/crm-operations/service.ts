@@ -467,6 +467,12 @@ export function createCrmOperationsService(
             subjectId: recordId(saved.record,'suppression'),details: { evidenceKind: command.evidenceKind,evidenceId: command.evidenceId } })
           return result(command.kind,saved.record,{ duplicate: !saved.changed })
         }
+        if (command.kind === 'save_managed_mailbox_policy') {
+          const saved = await tx.saveManagedMailboxPolicy(command)
+          if (saved.changed) await audit(tx,context.actor,{ action:'crm.mailbox_policy.approved',subjectKind:'mailbox_policy',
+            subjectId:recordId(saved.record,'mailbox policy'),details:{ version:saved.record.version,managed:saved.record.managed } })
+          return result(command.kind,saved.record,{ duplicate:!saved.changed })
+        }
         if (command.kind === 'save_privacy_policy') {
           const saved = await tx.savePrivacyPolicy(command)
           if (saved.created) await audit(tx, context.actor, {

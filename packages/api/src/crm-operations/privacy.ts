@@ -23,6 +23,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_idempotency',
   'crm_privacy_policies',
   'crm_address_suppression_tombstones',
+  'crm_managed_mailbox_policies',
   'association_external_identities',
   'association_enquiries',
   'association_enquiry_notes',

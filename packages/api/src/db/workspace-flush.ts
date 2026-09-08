@@ -197,6 +197,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'workspace_tool_policy',
   'crm_privacy_policies',
   'crm_address_suppression_tombstones',
+  'crm_managed_mailbox_policies',
   'crm_integration_credentials',
   'crm_integration_credential_grants',
   'workspace_knowledge_sources',

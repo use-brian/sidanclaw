@@ -454,10 +454,28 @@ export const ReleaseCrmAddressSuppressionCommandSchema = z.object({
   evidenceId: CrmOperationsUuidSchema,
 }).strict()
 
+export const SaveCrmManagedMailboxPolicyCommandSchema = z.object({
+  kind: z.literal('save_managed_mailbox_policy'),
+  connectorInstanceId: CrmOperationsUuidSchema,
+  providerKey: CrmOperationsStableKeySchema,
+  expectedVersion: z.number().int().min(0).max(2147483646),
+  confirmed: z.literal(true),
+  managed: z.boolean(),
+  purposeKeys: z.array(CrmOperationsStableKeySchema).max(200),
+  templatePurposes: z.record(CrmOperationsStableKeySchema, CrmOperationsStableKeySchema).default({}),
+}).strict().superRefine((policy, ctx) => {
+  if (policy.managed && !policy.purposeKeys.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['purposeKeys'], message: 'Managed mail requires explicit purposes.' })
+  if (new Set(policy.purposeKeys).size !== policy.purposeKeys.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['purposeKeys'], message: 'Purposes must be unique.' })
+  if (Object.keys(policy.templatePurposes).length > 200 || Object.values(policy.templatePurposes).some((key) => !policy.purposeKeys.includes(key))) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['templatePurposes'], message: 'Templates must map to an allowed purpose, with at most 200 mappings.' })
+  }
+})
+
 export const CrmOperationsCommandSchema = z.union([
   CrmConfigCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
+  SaveCrmManagedMailboxPolicyCommandSchema,
   SaveCrmEntitlementPlanCommandSchema,
   SaveCrmEventCommandSchema,
   SaveCrmIntakeDefinitionCommandSchema,
@@ -586,15 +604,16 @@ export function commandRequiresConfigurationAuthority(command: CrmOperationsComm
     || command.kind === 'save_consent_purpose'
     || command.kind === 'save_privacy_policy'
     || command.kind === 'release_address_suppression'
+    || command.kind === 'save_managed_mailbox_policy'
 }
 
 export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
-  if (['save_privacy_policy', 'release_address_suppression'].includes(command.kind) && (context.actor.kind !== 'user'
+  if (['save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy'].includes(command.kind) && (context.actor.kind !== 'user'
     || !['owner', 'admin'].includes(context.authority.role))) {
-    throw new CrmOperationsError('not_authorized', 'Privacy policy approval requires a workspace owner or admin member.')
+    throw new CrmOperationsError('not_authorized', 'Policy approval and suppression release require a workspace owner or admin member.')
   }
   if (context.actor.kind === 'integration_key' && context.authority.integration?.credentialId !== context.actor.credentialId) {
     throw new CrmOperationsError('not_authorized', 'Integration authority must come from its authenticated credential.')

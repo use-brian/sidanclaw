@@ -10,6 +10,7 @@
  * See docs/architecture/integrations/mcp.md → "Built-in connectors".
  */
 
+import { withCrmMailAdmission, type CrmMailContext } from '../crm-operations/delivery-policy.js'
 import { randomUUID } from 'node:crypto'
 import type {
   GmailOutgoingAttachment,
@@ -1240,9 +1241,19 @@ export async function sendGmailMessage(
     from?: string
     subject: string
     body: string
+    crmPurposeKey?: string
+    crmTemplateKey?: string
     attachments?: GmailOutgoingAttachment[]
   },
+  context?: CrmMailContext,
 ): Promise<{ id: string; threadId: string }> {
+  const frozen = { ...params,to: Array.isArray(params.to) ? [...params.to] : params.to,
+    ...(params.cc ? { cc:[...params.cc] } : {}),...(params.bcc ? { bcc:[...params.bcc] } : {}),
+    ...(params.attachments ? { attachments:params.attachments.map((a)=>({ ...a,data:Buffer.from(a.data) })) } : {}) }
+  return withCrmMailAdmission(context,'gmail',frozen,()=>sendGmailToProvider(accessToken,frozen))
+}
+
+async function sendGmailToProvider(accessToken: string, params: Parameters<typeof sendGmailMessage>[1]): Promise<{ id:string; threadId:string }> {
   // With attachments: multipart/mixed through the media-upload endpoint.
   if (params.attachments && params.attachments.length > 0) {
     const raw = buildMultipartMessage({

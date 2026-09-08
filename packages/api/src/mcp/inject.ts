@@ -145,7 +145,7 @@ import {
   MULTI_INSTANCE_CONNECTOR_IDS,
   OFFICIAL_CONNECTOR_TOOLS,
 } from '@use-brian/shared'
-import { connectorInstanceGovernanceId } from '../db/connector-instance-store.js'
+import { connectorInstanceGovernanceId, parseConnectorInstanceGovernanceId } from '../db/connector-instance-store.js'
 // Built-in connector OAuth app creds come through getConnectorConfig (OPEN, file
 // or env), NOT getEnv (closed env schema) — so this open injector imports no
 // closed code. See connector-config.ts + oss-local-brain-wedge.md §12.2.
@@ -1104,6 +1104,7 @@ export async function injectMcpTools(params: {
   // MULTI_INSTANCE_CONNECTOR_IDS and `extrasByProvider` never holds it.
   await injectMsGraphTools(connectors, connectorStore, settingsStore, userId, assistantId, assistantConnectorStore, tools, unavailable, { report: reportHealth })
   await injectMailboxTools({
+    workspaceId:assistantTeamId ?? undefined,
     connectors, settingsStore, userId, assistantId, assistantConnectorStore, tools, unavailable,
     connectorInstanceStore, connectorActionAudit, assistantConnectorGrantsStore,
     healthProbe: { report: reportHealth },
@@ -1191,9 +1192,11 @@ export async function injectMcpTools(params: {
           }
           if (usableMailboxes.length > 0) {
             await injectMailboxTools({
+    workspaceId:assistantTeamId ?? undefined,
               connectors: usableMailboxes,
               settingsStore,
               userId: g.grantedByUserId,
+              deliveryUserId: userId,
               assistantId,
               assistantConnectorStore,
               tools,
@@ -1458,6 +1461,7 @@ export async function injectMcpTools(params: {
           }
           if (usableMailboxes.length > 0) {
             await injectMailboxTools({
+    workspaceId:assistantTeamId ?? undefined,
               connectors: usableMailboxes,
               settingsStore: teamPolicyStore,
               userId,
@@ -1705,6 +1709,7 @@ export async function injectMcpTools(params: {
           .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
         if (inboxInstances.length > 0) {
           await injectAgentmailTools({
+            workspaceId: assistantTeamId ?? undefined,
             provider: effectiveEmailProvider,
             inboxes: inboxInstances.map((i) => ({
               address: (i.connectedEmail ?? i.label).toLowerCase(),
@@ -2502,6 +2507,9 @@ async function injectGoogleTools(
   async function readRefreshToken(connectorId: string): Promise<string | null> {
     const override = credsOverridePerConnector?.[connectorId]
     if (override) return override()
+    // Bind Gmail's token to the same exact account whose policy will admit it.
+    const gmailInstanceId = connectorId === 'gmail' ? connectors.find(c => c.connectorId === 'gmail' && c.connected)?.id : undefined
+    if (gmailInstanceId && resolveInstanceCreds) return resolveInstanceCreds(gmailInstanceId)
     const creds = await connectorStore.getCredentials(userId, connectorId)
     return creds?.client_secret ?? null
   }
@@ -2931,7 +2939,8 @@ async function injectGoogleTools(
           }
 
           try {
-            const result = await sendGmailMessage(token, params)
+            const result = await sendGmailMessage(token, params, { userId:driveEnrichmentContext?.actingUserId ?? userId,workspaceId:driveEnrichmentContext?.workspaceId,
+              connectorInstanceId:parseConnectorInstanceGovernanceId(governanceId)?.instanceId ?? gmailRaw.id })
             if (connectorActionAudit) {
               try {
                 await connectorActionAudit.emit(
@@ -4522,6 +4531,8 @@ async function injectMsGraphTools(
 // exact frozen payload already passed configured governance.
 
 async function injectMailboxTools(params: {
+  deliveryUserId?: string
+  workspaceId?: string
   connectors: Array<{ connectorId: string; connected: boolean; id?: string; createdAt?: Date; name?: string }>
   settingsStore: McpSettingsStore
   userId: string
@@ -4745,6 +4756,7 @@ async function injectMailboxTools(params: {
       }
       const rawApi = createMailboxApi({
         cacheKey: boundId,
+        deliveryContext:{ userId:params.deliveryUserId ?? userId,connectorInstanceId:boundId,workspaceId:params.workspaceId },
         getSettings,
         getSendAsAliases,
         getKnownFolderPaths,
@@ -4883,6 +4895,7 @@ async function injectAgentmailTools(params: {
   inboxes: Array<{ address: string; governanceId: string }>
   settingsStore: McpSettingsStore
   userId: string
+  workspaceId?: string
   assistantId: string
   tools: Map<string, Tool>
   unavailable?: string[]
@@ -4962,6 +4975,11 @@ async function injectAgentmailTools(params: {
     }
   }
 
+  const deliveryContext = (address: string) => ({
+    userId, workspaceId: params.workspaceId,
+    connectorInstanceId: parseConnectorInstanceGovernanceId(governanceByAddress.get(address.toLowerCase()) ?? '')?.instanceId,
+  })
+
   const api: AgentmailToolApi = {
     async listInboxes() {
       return inboxes.map((inbox, i) => ({ address: inbox.address, isDefault: i === 0 }))
@@ -4987,13 +5005,15 @@ async function injectAgentmailTools(params: {
         { ...auditPayload, body: p.body },
         () =>
           provider.sendMessage(p.inboxAddress, {
+            crmPurposeKey: p.crmPurposeKey,
+            crmTemplateKey: p.crmTemplateKey,
             to: p.to,
             cc: p.cc,
             bcc: p.bcc,
             subject: p.subject,
             text: rendered.text,
             html: rendered.html,
-          }),
+          }, deliveryContext(p.inboxAddress)),
         (r) => r.messageId,
       )
     },
@@ -5036,6 +5056,8 @@ async function injectAgentmailTools(params: {
         { ...auditPayload, body: p.body },
         () =>
           provider.createDraft(p.inboxAddress, {
+            crmPurposeKey: p.crmPurposeKey,
+            crmTemplateKey: p.crmTemplateKey,
             to: p.to,
             cc: p.cc,
             bcc: p.bcc,
@@ -5044,7 +5066,7 @@ async function injectAgentmailTools(params: {
             html: rendered.html,
             sendAt: p.sendAt,
             inReplyTo: p.inReplyTo,
-          }),
+          }, deliveryContext(p.inboxAddress)),
         (r) => r.draftId,
       )
       return { draftId: draft.draftId, sendAt: draft.sendAt }

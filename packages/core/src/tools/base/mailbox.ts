@@ -26,6 +26,7 @@
  * [COMP:tools/imap-attachments]
  */
 
+import { CrmOperationsStableKeySchema, CrmOperationsError } from '../../crm/operations-types.js'
 import { z } from 'zod'
 import { buildTool, type Tool } from '../types.js'
 import type { FilesApi } from '../../workspace-files/api.js'
@@ -164,6 +165,8 @@ export type MailboxApi = {
    */
   getAttachment(id: string, partId: string): Promise<MailboxAttachmentBytes>
   sendMessage(params: {
+    crmPurposeKey?: string
+    crmTemplateKey?: string
     to: string[]
     /** Visible carbon-copy recipients (a real `Cc:` header). */
     cc?: string[]
@@ -568,6 +571,8 @@ export function createMailboxTools(
       'If attachment resolution fails, relay the reason honestly and never claim the document was attached. ' +
       accountRoutingDescription,
     inputSchema: z.object({
+      crmPurposeKey: CrmOperationsStableKeySchema.optional().describe('Explicit CRM purpose configured for a managed email account.'),
+      crmTemplateKey: CrmOperationsStableKeySchema.optional().describe('Configured CRM template key, when using a managed template.'),
       to: z.array(z.string()).min(1).max(20).describe('Recipient email addresses.'),
       cc: z.array(z.string()).max(20).optional().describe('CC addresses: copied recipients, visible to everyone on the email.'),
       bcc: z.array(z.string()).max(20).optional().describe('BCC addresses: copied recipients hidden from everyone else on the email.'),
@@ -616,6 +621,8 @@ export function createMailboxTools(
         attachments?: unknown
         inReplyTo?: unknown
         from?: unknown
+        crmPurposeKey?: unknown
+        crmTemplateKey?: unknown
       }
       const resolved = resolveForInput(draft)
       if (!resolved.ok) return null
@@ -653,6 +660,8 @@ export function createMailboxTools(
       ]
       if (cc.length > 0) lines.push(`• Cc: ${cc.join(', ')}`)
       if (bcc.length > 0) lines.push(`• Bcc: ${bcc.join(', ')}`)
+      if (typeof draft.crmPurposeKey === 'string') lines.push(`• CRM purpose: ${draft.crmPurposeKey}`)
+      if (typeof draft.crmTemplateKey === 'string') lines.push(`• CRM template: ${draft.crmTemplateKey}`)
       if (typeof draft.subject === 'string') lines.push(`• Subject: ${draft.subject}`)
       if (typeof draft.body === 'string') lines.push(`• Body: ${draft.body}`)
       const refs = Array.isArray(draft.attachments)
@@ -738,6 +747,8 @@ export function createMailboxTools(
         }
 
         const data = await resolved.api.sendMessage({
+          ...(input.crmPurposeKey ? { crmPurposeKey:input.crmPurposeKey } : {}),
+          ...(input.crmTemplateKey ? { crmTemplateKey:input.crmTemplateKey } : {}),
           to: input.to,
           ...(input.cc?.length ? { cc: input.cc } : {}),
           ...(input.bcc?.length ? { bcc: input.bcc } : {}),
@@ -757,6 +768,9 @@ export function createMailboxTools(
           },
         }
       } catch (err) {
+        if (err instanceof CrmOperationsError && err.details?.reason==='provider_outcome_unknown') {
+          return { data:'The provider may have accepted the email. Verify delivery before retrying.',isError:true }
+        }
         return mailboxFailure(err, { tool: 'imapSendMessage', email: resolved.email, target: `the message to ${input.to.join(', ')}`, send: true })
       }
     },

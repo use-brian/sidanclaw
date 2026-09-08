@@ -27,6 +27,7 @@ import {
   SaveCrmSegmentCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
+  SaveCrmManagedMailboxPolicyCommandSchema,
   UpdateCrmSubmissionCommandSchema,
   UpdateCrmEntitlementCommandSchema,
   UpdateCrmParticipationCommandSchema,
@@ -49,6 +50,7 @@ import {
 } from '../crm-operations/privacy.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
 import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
+import { readCrmManagedMailboxPolicy } from '../crm-operations/delivery-policy.js'
 import { query } from '../db/client.js'
 import { CrmPipelinesQuerySchema, CrmRecordFieldsQuerySchema } from '../db/crm-config-catalog.js'
 
@@ -883,6 +885,21 @@ export function crmOperationsRoutes(options: Options): Router {
     if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
     try { res.json(await listCrmAddressSuppression({ query },ctx.workspaceId,CrmPageQuerySchema.parse(req.query))) }
     catch (error) { writeError(res,error) }
+  })
+  router.get('/:workspaceId/operations/mailbox-policies/:connectorInstanceId', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    if (!ctx.authority.canConfigure) { res.status(403).json({ error:'not_authorized' }); return }
+    try { res.json({ policy:await readCrmManagedMailboxPolicy(ctx.workspaceId,z.string().uuid().parse(req.params.connectorInstanceId)) }) }
+    catch (error) { writeError(res,error) }
+  })
+  router.post('/:workspaceId/operations/mailbox-policies/:connectorInstanceId', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    try {
+      const command = SaveCrmManagedMailboxPolicyCommandSchema.parse({ ...req.body,kind:'save_managed_mailbox_policy',connectorInstanceId:req.params.connectorInstanceId })
+      res.json(await options.service.execute(ctx,command))
+    } catch (error) { writeError(res,error) }
   })
   router.post('/:workspaceId/operations/address-suppression/:tombstoneId/release', async (req,res) => {
     const ctx = await context(req,res)

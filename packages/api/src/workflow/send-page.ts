@@ -179,6 +179,7 @@ export function createSendPagePort(deps: SendPagePortDeps): NonNullable<Executor
     try {
       const sender = await deps.acquireGmailSender({
         userId,
+        workspaceId,
         ...(params.instanceId ? { instanceId: params.instanceId } : {}),
       })
       if (!sender.ok) {
