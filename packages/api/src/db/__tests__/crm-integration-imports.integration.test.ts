@@ -19,7 +19,8 @@ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL })
 const appPool = new pg.Pool({ connectionString: process.env.DATABASE_URL_APP })
 const keys = createCrmIntegrationStore(pool, appPool), sources = createCrmImportSources(pool)
 const operations = createCrmOperationsService(createDbCrmOperationsStore(pool))
-const imports = createCrmProductionImportService({ sources, operations })
+const imports = createCrmProductionImportService({ sources, pool,
+  operationsForTransaction: (client) => createCrmOperationsService(createDbCrmOperationsStore(pool, client)) })
 const grants: CrmIntegrationGrant[] = [
   { operation: 'crm.imports.write', selectors: { purposeKeys: ['updates'] } },
   { operation: 'crm.records.write', selectors: {} },
@@ -71,6 +72,7 @@ describe('[COMP:crm/production-import] Actual machine source, job and row author
       .toEqual({ created_by_user_id: null, confirmed_by_user_id: null })
     const rotated = await f.issue(undefined, first.principal.credentialId)
     expect(await keys.authenticate(first.key.oneTimeSecret)).toBeNull()
+    await expect(imports.resume(first.context, id)).rejects.toMatchObject({ code: 'not_authorized' })
     const completed = await f.post(`imports/${id}/resume`, rotated.key.oneTimeSecret).send({})
     expect(completed.status).toBe(200)
     expect(completed.body).toMatchObject({ status: 'completed', succeededRows: 1, failedRows: 0 })

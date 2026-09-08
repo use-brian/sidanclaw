@@ -194,11 +194,9 @@ function toEntityListRow(row: EntityCompactRow): EntityListRow {
 
 // ── Raw SQL helpers ──────────────────────────────────────────────────
 
-export async function createEntity(params: EntityCreateParams): Promise<EntityRecord> {
+export async function createEntity(params: EntityCreateParams, transactionClient?: pg.PoolClient): Promise<EntityRecord> {
   assertAuthorshipPresent('createEntity', params.createdByUserId)
-  const result = await queryWithRLS<EntityRow>(
-    params.createdByUserId,
-    `INSERT INTO entities (
+  const sql = `INSERT INTO entities (
        kind, display_name, canonical_id, aliases, attributes, sensitivity,
        workspace_id, user_id, assistant_id,
        created_by_user_id, created_by_assistant_id, source_episode_id,
@@ -210,8 +208,8 @@ export async function createEntity(params: EntityCreateParams): Promise<EntityRe
        $10, $11, $12,
        $13, $14::text[], $15::uuid[], $16
      )
-     RETURNING ${FULL_SELECT}`,
-    [
+     RETURNING ${FULL_SELECT}`
+  const values = [
       params.kind,
       params.displayName,
       params.canonicalId ?? null,
@@ -228,8 +226,10 @@ export async function createEntity(params: EntityCreateParams): Promise<EntityRe
       params.compartments ?? [],
       params.projectIds ?? [],
       params.sourceSessionId ?? null,
-    ],
-  )
+    ]
+  const result = transactionClient
+    ? await transactionClient.query<EntityRow>(sql, values)
+    : await queryWithRLS<EntityRow>(params.createdByUserId, sql, values)
   return toEntity(result.rows[0])
 }
 

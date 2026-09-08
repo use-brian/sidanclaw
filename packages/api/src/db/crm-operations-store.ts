@@ -1318,18 +1318,20 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
   }
 }
 
-export function createDbCrmOperationsStore(pool: Pool = getPool()): CrmOperationsStore {
+export function createDbCrmOperationsStore(pool: Pool = getPool(), transactionClient?: PoolClient): CrmOperationsStore {
   return {
     async transaction(context, fn) {
-      const client = await pool.connect()
+      const client = transactionClient ?? await pool.connect()
       try {
-        await client.query('BEGIN')
-        await client.query(`SELECT set_config('app.system_bypass', 'true', true)`)
+        if (!transactionClient) {
+          await client.query('BEGIN')
+          await client.query(`SELECT set_config('app.system_bypass', 'true', true)`)
+        }
         const result = await fn(createTransaction(client, context))
-        await client.query('COMMIT')
+        if (!transactionClient) await client.query('COMMIT')
         return result
       } catch (error) {
-        await client.query('ROLLBACK')
+        if (!transactionClient) await client.query('ROLLBACK')
         if ((error as { constraint?: string }).constraint === 'crm_intake_credential_rotation_fk') {
           throw new CrmOperationsError('not_found', 'Intake rotation source is unavailable.')
         }
@@ -1339,7 +1341,7 @@ export function createDbCrmOperationsStore(pool: Pool = getPool()): CrmOperation
         }
         throw error
       } finally {
-        client.release()
+        if (!transactionClient) client.release()
       }
     },
   }

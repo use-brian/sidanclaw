@@ -2,7 +2,7 @@
  * [COMP:crm/production-import]
  */
 import { createHash } from 'node:crypto'
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import { z } from 'zod'
 import { CrmOperationsError, type CrmIntegrationGrant, type CrmOperationsContext } from '@use-brian/core'
 import { importGrantSnapshot, requireImportCeiling, requireImportOperation } from '../crm-operations/import-authority.js'
@@ -55,10 +55,10 @@ export function createCrmImportSources(pool: Pool = getPool()) {
       if (createHash('sha256').update(bytes).digest('hex') !== source.sourceHash) throw new CrmOperationsError('conflict', 'CRM import source integrity check failed.')
       return { ...source, bytes }
     },
-    async attributionUser(context: CrmOperationsContext): Promise<string> {
+    async attributionUser(context: CrmOperationsContext, transactionClient?: PoolClient): Promise<string> {
       if (context.actor.kind === 'user') return context.actor.userId
       if (context.actor.kind !== 'integration_key') throw new CrmOperationsError('not_authorized', 'Unsupported import principal.')
-      const result = await pool.query<{ userId: string }>(`SELECT coalesce(c.created_by_user_id,w.owner_user_id) AS "userId"
+      const result = await (transactionClient ?? pool).query<{ userId: string }>(`SELECT coalesce(c.created_by_user_id,w.owner_user_id) AS "userId"
         FROM crm_integration_credentials c JOIN workspaces w ON w.id=c.workspace_id
         WHERE c.workspace_id=$1 AND c.id=$2`, [context.workspaceId, context.actor.credentialId])
       if (!result.rows[0]?.userId) throw new CrmOperationsError('not_authorized', 'Import storage attribution is unavailable.')

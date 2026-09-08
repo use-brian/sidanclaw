@@ -1484,14 +1484,23 @@ export function validateCustomFieldValue(
   }
 }
 
+async function customDefinitionsForWrite(ctx: AccessContext, entityKind: CrmEntityKind, client?: PoolClient): Promise<CrmFieldDefinition[]> {
+  if (!client) return (await getCrmConfig(ctx.userId, ctx.workspaceId)).fields.filter((field) => field.entityKind === entityKind)
+  const fields = await client.query<ConfigFieldRow>(`SELECT id, entity_kind AS "entityKind",field_key AS "fieldKey",label,
+    field_type AS "fieldType",options,is_required AS "isRequired",position,archived_at AS "archivedAt"
+    FROM crm_field_definitions WHERE workspace_id=$1 AND entity_kind=$2 AND archived_at IS NULL
+    ORDER BY id FOR SHARE`, [ctx.workspaceId, entityKind])
+  return fields.rows.map((field) => ({ ...field, archivedAt: null,
+    options: Array.isArray(field.options) ? field.options.filter((item): item is string => typeof item === 'string') : [] }))
+}
+
 export async function validateCrmCustomFieldValues(input: {
   ctx: AccessContext
   entityKind: CrmEntityKind
   values: Record<string, unknown>
   requireAll?: boolean
-}): Promise<CrmFieldDefinition[]> {
-  const config = await getCrmConfig(input.ctx.userId, input.ctx.workspaceId)
-  const definitions = config.fields.filter((field) => field.entityKind === input.entityKind)
+}, transactionClient?: PoolClient): Promise<CrmFieldDefinition[]> {
+  const definitions = await customDefinitionsForWrite(input.ctx, input.entityKind, transactionClient)
   const byKey = new Map(definitions.map((field) => [field.fieldKey, field]))
   for (const [key, value] of Object.entries(input.values)) {
     const definition = byKey.get(key)
@@ -1503,7 +1512,7 @@ export async function validateCrmCustomFieldValues(input: {
       throw new Error(`Invalid ${definition.fieldType} value for custom field '${key}'`)
     }
     if (definition.fieldType === 'entity_reference' && value !== null && value !== undefined && value !== '') {
-      const target = await getEntityById(input.ctx, value as string)
+      const target = transactionClient ? await getEntityById(input.ctx, value as string, {}, transactionClient) : await getEntityById(input.ctx, value as string)
       if (!target || target.attributes.crm_archived_at || !definition.options.includes(target.kind)
         || (target.kind === 'person' && target.attributes.self === true)) {
         throw new Error(`Reference for custom field '${key}' must be a visible ${definition.options.join(' or ')}`)
@@ -1524,16 +1533,14 @@ export async function updateCrmCustomFields(input: {
   ctx: AccessContext
   entityId: string
   values: Record<string, unknown>
-}): Promise<EntityRecord | null> {
-  const old = await getEntityById(input.ctx, input.entityId)
+}, transactionClient?: PoolClient): Promise<EntityRecord | null> {
+  const old = transactionClient ? await getEntityById(input.ctx, input.entityId, {}, transactionClient) : await getEntityById(input.ctx, input.entityId)
   if (!old || !['person', 'company', 'deal'].includes(old.kind)) return null
-  const config = await getCrmConfig(input.ctx.userId, input.ctx.workspaceId)
-  const definitions = config.fields.filter((f) => f.entityKind === old.kind)
-  await validateCrmCustomFieldValues({
+  const definitions = await validateCrmCustomFieldValues({
     ctx: input.ctx,
     entityKind: old.kind as CrmEntityKind,
     values: input.values,
-  })
+  }, transactionClient)
   const current = old.attributes.custom_fields
   const custom = current && typeof current === 'object' && !Array.isArray(current)
     ? { ...(current as Record<string, unknown>) }
@@ -1548,7 +1555,7 @@ export async function updateCrmCustomFields(input: {
     }
   }
   const attributes = { ...old.attributes, custom_fields: custom }
-  return updateEntity(input.ctx.userId, input.entityId, { attributes }, input.ctx)
+  return updateEntity(input.ctx.userId, input.entityId, { attributes }, input.ctx, transactionClient)
 }
 
 export type CrmDealParticipant = {

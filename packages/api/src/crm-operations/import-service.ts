@@ -10,6 +10,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
+import type { Pool, PoolClient } from 'pg'
 import type {
   AccessContext,
   CrmOperationsContext,
@@ -21,14 +22,14 @@ import type {
   CrmPage,
   CrmPageQuery,
 } from '@use-brian/core'
-import { CrmOperationsError } from '@use-brian/core'
-import { createCompany, createContact, createDeal, updateContact } from '../db/crm.js'
+import { CrmIntegrationGrantsSchema, CrmOperationsError } from '@use-brian/core'
+import { createCompany, createContact, createDeal, updateContact, type CrmWriteTransaction } from '../db/crm.js'
 import { updateCrmCustomFields } from '../db/crm-r2.js'
 import { getEntityById, updateEntity } from '../db/entities-store.js'
-import { query } from '../db/client.js'
+import { getPool, query } from '../db/client.js'
 import { parseCsv } from '../linkedin-import/csv.js'
 import { createCrmImportSources, type CrmImportSources } from '../db/crm-import-sources.js'
-import { requireImportCeiling, requireImportOperation, requireImportRowAuthority } from './import-authority.js'
+import { importGrantSnapshot, requireImportCeiling, requireImportOperation, requireImportRowAuthority } from './import-authority.js'
 import { crmPageInstant, queryCrmPage } from './pagination.js'
 
 const MAX_IMPORT_BYTES = 30 * 1024 * 1024
@@ -367,10 +368,58 @@ export type CrmProductionImportService = ReturnType<typeof createCrmProductionIm
 export function createCrmProductionImportService(deps: {
   filesApi?: FilesApi
   sources?: CrmImportSources
-  operations: CrmOperationsServicePort
+  operationsForTransaction: (client: PoolClient) => CrmOperationsServicePort
+  pool?: Pool
   entityLinks?: EntityLinksStore
 }) {
   const sources = () => deps.sources ?? createCrmImportSources()
+  function isTransientImportFailure(error: unknown): boolean {
+    const code = (error as { code?: string })?.code ?? ''
+    return ['40001', '40P01', '57P01', '57P02', '57P03'].includes(code) || code.startsWith('08')
+  }
+  async function importTransaction<T>(context: ImportServiceContext,
+    run: (current: ImportServiceContext, client: PoolClient, effects: Array<() => void>) => Promise<T>,
+  ): Promise<T> {
+    const client = await (deps.pool ?? getPool()).connect()
+    const effects: Array<() => void> = []
+    let result: T
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('app.system_bypass','true',true)`)
+      if (context.actor.kind === 'user') {
+        const member = await client.query<{ role: string }>(`SELECT role FROM workspace_members
+          WHERE workspace_id=$1 AND user_id=$2 FOR SHARE`, [context.workspaceId, context.actor.userId])
+        if (!member.rows[0]) throw new CrmOperationsError('not_authorized', 'Current workspace membership is required for imports.')
+        context = { ...context, authority: { ...context.authority, role: member.rows[0].role as CrmOperationsContext['authority']['role'] } }
+      } else if (context.actor.kind === 'integration_key') {
+        const credential = await client.query(`SELECT id FROM crm_integration_credentials
+          WHERE workspace_id=$1 AND id=$2 AND revoked_at IS NULL AND expires_at>clock_timestamp() FOR SHARE`,
+        [context.workspaceId, context.actor.credentialId])
+        if (!credential.rowCount) throw new CrmOperationsError('not_authorized', 'The import credential is no longer active.')
+        const rows = await client.query(`SELECT operation,selectors FROM crm_integration_credential_grants
+          WHERE workspace_id=$1 AND credential_id=$2 ORDER BY operation FOR SHARE`, [context.workspaceId, context.actor.credentialId])
+        const grants = CrmIntegrationGrantsSchema.parse(rows.rows)
+        requireImportCeiling({ credentialId: context.actor.credentialId, grants },
+          context.authority.integration ? importGrantSnapshot(context.authority.integration) : undefined)
+      }
+      result = await run(context, client, effects)
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      if ((error as { code?: string })?.code === '55P03') throw new CrmOperationsError('conflict', 'Import job is already processing.', { reason: 'import_processing' })
+      throw error
+    } finally { client.release() }
+    for (const effect of effects) effect()
+    return result
+  }
+  async function checkpoint(client: PoolClient, workspaceId: string, job: ImportJobRow, terminal: boolean): Promise<void> {
+    await client.query(`UPDATE crm_import_jobs SET status=$3,
+      processed_rows=(SELECT count(*) FROM crm_import_rows WHERE workspace_id=$1 AND job_id=$2),
+      succeeded_rows=(SELECT count(*) FROM crm_import_rows WHERE workspace_id=$1 AND job_id=$2 AND status='completed'),
+      failed_rows=(SELECT count(*) FROM crm_import_rows WHERE workspace_id=$1 AND job_id=$2 AND status='failed'),
+      next_chunk_index=$4,completed_at=CASE WHEN $3='completed' THEN now() ELSE NULL END
+      WHERE workspace_id=$1 AND id=$2`, [workspaceId, job.id, terminal ? 'completed' : 'paused', job.nextChunkIndex + 1])
+  }
   function sourceContext(context: ImportServiceContext, source: { credentialId: string; grants: CrmIntegrationGrant[] }): ImportServiceContext {
     // Even a broader replacement key or member must keep this source's ceiling.
     const grants = requireImportCeiling(context.authority.integration ?? source, source.grants)
@@ -395,6 +444,7 @@ export function createCrmProductionImportService(deps: {
   async function customCatalogFor(
     context: ImportServiceContext,
     input: ImportInput,
+    client?: PoolClient,
   ): Promise<ReadonlyMap<string, ImportCustomDefinition>> {
     const requested = [...new Set(Object.values(input.mapping.columns)
       .filter((target): target is string => typeof target === 'string' && target.startsWith('custom:'))
@@ -402,7 +452,7 @@ export function createCrmProductionImportService(deps: {
     if (requested.length === 0) return new Map()
     if (input.entityKind === 'operations') throw new Error('Operations-only imports cannot map custom entity fields.')
     const entityKind = input.entityKind === 'contact' ? 'person' : input.entityKind
-    const result = await query<{
+    const result = await (client ? client.query.bind(client) : query)<{
       fieldKey: string
       fieldType: ImportCustomDefinition['fieldType']
       options: unknown
@@ -489,8 +539,8 @@ export function createCrmProductionImportService(deps: {
     }
   }
 
-  async function loadJob(workspaceId: string, jobId: string): Promise<ImportJobRow | null> {
-    const result = await query<ImportJobRow>(
+  async function loadJob(workspaceId: string, jobId: string, client?: PoolClient, lock = false): Promise<ImportJobRow | null> {
+    const result = await (client ? client.query.bind(client) : query)<ImportJobRow>(
       `SELECT id, workspace_id AS "workspaceId", staged_file_id AS "stagedFileId",
               source_id AS "sourceId", integration_credential_id AS "integrationCredentialId", integration_grants AS "integrationGrants",
               entity_kind AS "entityKind", status, mapping, mapping_hash AS "mappingHash",
@@ -499,7 +549,7 @@ export function createCrmProductionImportService(deps: {
               failed_rows AS "failedRows", next_chunk_index AS "nextChunkIndex",
               created_by_user_id AS "createdByUserId", created_at AS "createdAt",
               updated_at AS "updatedAt", completed_at AS "completedAt"
-         FROM crm_import_jobs WHERE workspace_id=$1 AND id=$2`,
+         FROM crm_import_jobs WHERE workspace_id=$1 AND id=$2${lock ? ' FOR UPDATE NOWAIT' : ''}`,
       [workspaceId, jobId],
     )
     return result.rows[0] ?? null
@@ -540,8 +590,8 @@ export function createCrmProductionImportService(deps: {
     return jobProjection(result.rows[0])
   }
 
-  async function findImportedEntity(workspaceId: string, importKey: string): Promise<string | null> {
-    const found = await query<{ id: string }>(
+  async function findImportedEntity(workspaceId: string, importKey: string, client: PoolClient): Promise<string | null> {
+    const found = await client.query<{ id: string }>(
       `SELECT id FROM entities
         WHERE workspace_id=$1 AND valid_to IS NULL
           AND attributes->'external_ref'->>'import_key'=$2
@@ -554,16 +604,20 @@ export function createCrmProductionImportService(deps: {
   async function findUniqueTrustedEmailContact(
     workspaceId: string,
     email: string,
+    client: PoolClient,
   ): Promise<{ id: string; attributes: Record<string, unknown> } | null> {
-    const found = await query<{ id: string; attributes: Record<string, unknown> }>(
+    const normalized = email.trim().toLowerCase()
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify(['crm-intake-identity', workspaceId, 'email', normalized])])
+    const found = await client.query<{ id: string; attributes: Record<string, unknown> }>(
       `SELECT id,attributes FROM entities
         WHERE workspace_id=$1 AND kind='person' AND valid_to IS NULL
-          AND retracted_at IS NULL
-          AND lower(COALESCE(attributes->>'email',canonical_id,''))=$2
-        ORDER BY created_at,id LIMIT 2`,
-      [workspaceId, email.trim().toLowerCase()],
+          AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
+          AND lower(btrim(COALESCE(NULLIF(btrim(attributes->>'email'),''),canonical_id,'')))=$2
+        ORDER BY created_at,id LIMIT 2 FOR UPDATE`,
+      [workspaceId, normalized],
     )
-    return found.rows.length === 1 ? found.rows[0]! : null
+    if (found.rows.length > 1) throw new CrmOperationsError('conflict', 'Multiple live contacts match this email; review is required.', { reason: 'identity_review_required' })
+    return found.rows[0] ?? null
   }
 
   async function executeRow(
@@ -571,10 +625,12 @@ export function createCrmProductionImportService(deps: {
     job: ImportJobRow,
     row: { row: number; cells: string[] },
     customCatalog: ReadonlyMap<string, ImportCustomDefinition>,
+    transaction: CrmWriteTransaction,
+    operations: CrmOperationsServicePort,
   ): Promise<string | null> {
     const values = mappedValues(row.cells, job.mapping)
     requireImportRowAuthority(context, job.entityKind, values, job.mapping.trustedIdentitySource)
-    const attributionUserId = context.actor.kind === 'user' ? context.actor.userId : await sources().attributionUser(context)
+    const attributionUserId = context.actor.kind === 'user' ? context.actor.userId : await sources().attributionUser(context, transaction.client)
     const access: AccessContext = {
       workspaceId: context.workspaceId,
       userId: attributionUserId,
@@ -583,7 +639,7 @@ export function createCrmProductionImportService(deps: {
       clearance: 'confidential',
     }
     const importKey = `${job.id}:${row.row}`
-    let entityId = await findImportedEntity(context.workspaceId, importKey)
+    let entityId = await findImportedEntity(context.workspaceId, importKey, transaction.client)
     if (!entityId && job.entityKind === 'contact') {
       let stableIdentity: StableExternalIdentity | undefined
       if (job.mapping.trustedIdentitySource && values.identityProvider && values.identityProviderInstance && values.identitySubject) {
@@ -596,7 +652,7 @@ export function createCrmProductionImportService(deps: {
       const tags = values.tags?.split(/[|;]/).map((tag) => tag.trim()).filter(Boolean)
       const externalRef = { import_key: importKey, import_job_id: job.id, row_number: row.row }
       const trustedMatch = !stableIdentity && job.mapping.trustedIdentitySource && values.email
-        ? await findUniqueTrustedEmailContact(context.workspaceId, values.email)
+        ? await findUniqueTrustedEmailContact(context.workspaceId, values.email, transaction.client)
         : null
       if (trustedMatch) {
         const currentTags = Array.isArray(trustedMatch.attributes.tags)
@@ -612,7 +668,7 @@ export function createCrmProductionImportService(deps: {
           companyId: values.companyId,
           tags: [...new Set([...currentTags, ...(tags ?? [])])],
           externalRef: { ...currentExternalRef, ...externalRef },
-        }, deps.entityLinks)
+        }, deps.entityLinks, access, transaction.client, undefined, transaction.afterCommit)
         if (!record) throw new Error('The trusted email contact is no longer available.')
         entityId = record.id
       } else {
@@ -626,7 +682,7 @@ export function createCrmProductionImportService(deps: {
           externalRef,
           stableIdentity,
           access,
-        }, deps.entityLinks)
+        }, deps.entityLinks, transaction)
         entityId = record.id
       }
     } else if (!entityId && job.entityKind === 'company') {
@@ -637,7 +693,7 @@ export function createCrmProductionImportService(deps: {
         tags: values.tags?.split(/[|;]/).map((tag) => tag.trim()).filter(Boolean),
         externalRef: { import_key: importKey, import_job_id: job.id, row_number: row.row },
         access,
-      })
+      }, transaction)
       entityId = record.id
     } else if (!entityId && job.entityKind === 'deal') {
       const legacyStage = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(values.stage)
@@ -651,9 +707,9 @@ export function createCrmProductionImportService(deps: {
         amount: values.amount ? Number(values.amount) : undefined,
         closeDate: values.closeDate ? new Date(`${values.closeDate}T00:00:00Z`) : undefined,
         externalRef: { import_key: importKey, import_job_id: job.id, row_number: row.row },
-      }, deps.entityLinks)
+      }, deps.entityLinks, transaction)
       entityId = record.id
-      const entity = await getEntityById(access, entityId)
+      const entity = await getEntityById(access, entityId, {}, transaction.client)
       if (entity) {
         await updateEntity(attributionUserId, entityId, {
           displayName: values.name,
@@ -662,13 +718,13 @@ export function createCrmProductionImportService(deps: {
             ...(values.currencyCode ? { currency_code: values.currencyCode.toUpperCase() } : {}),
             ...(values.source ? { source: values.source } : {}),
           },
-        }, access)
+        }, access, transaction.client)
       }
     }
 
     const customValues = customValuesFor(values, customCatalog)
     if (entityId && Object.keys(customValues).length > 0) {
-      await updateCrmCustomFields({ ctx: access, entityId, values: customValues })
+      await updateCrmCustomFields({ ctx: access, entityId, values: customValues }, transaction.client)
     }
 
     const contactId = job.entityKind === 'contact' ? entityId : values.contactId
@@ -677,13 +733,13 @@ export function createCrmProductionImportService(deps: {
       actor: context.actor.kind === 'user' ? { kind: 'import', jobId: job.id, userId: context.actor.userId } : context.actor,
     }
     if (job.entityKind === 'deal' && entityId && values.pipelineId && values.stageId) {
-      await deps.operations.execute(importContext, {
+      await operations.execute(importContext, {
         kind: 'set_deal_pipeline_stage', dealId: entityId,
         pipelineId: values.pipelineId, stageId: values.stageId,
       })
     }
     if (contactId && values.consentPurposeKey) {
-      await deps.operations.execute(importContext, {
+      await operations.execute(importContext, {
         kind: 'record_consent', contactId, purposeKey: values.consentPurposeKey,
         action: values.consentAction as 'granted' | 'withdrawn', source: values.consentSource,
         provider: 'import', providerEventId: `${job.id}:${row.row}:consent:${values.consentPurposeKey}`,
@@ -692,7 +748,7 @@ export function createCrmProductionImportService(deps: {
       })
     }
     if (contactId && values.suppressionChannel) {
-      await deps.operations.execute(importContext, {
+      await operations.execute(importContext, {
         kind: 'record_suppression', contactId,
         channel: values.suppressionChannel as 'all' | 'email' | 'sms' | 'phone' | 'whatsapp' | 'telegram' | 'slack',
         action: values.suppressionAction as 'suppressed' | 'released',
@@ -704,7 +760,7 @@ export function createCrmProductionImportService(deps: {
       })
     }
     if (contactId && values.entitlementPlanId) {
-      await deps.operations.execute(importContext, {
+      await operations.execute(importContext, {
         kind: 'grant_entitlement', contactId, planId: values.entitlementPlanId,
         idempotencyKey: values.entitlementIdempotencyKey,
         status: (values.entitlementStatus || 'pending') as 'pending' | 'active' | 'expired' | 'cancelled',
@@ -714,7 +770,7 @@ export function createCrmProductionImportService(deps: {
       })
     }
     if (contactId && values.participationEventId) {
-      await deps.operations.execute(importContext, {
+      await operations.execute(importContext, {
         kind: 'record_participation', contactId, eventId: values.participationEventId,
         sourceKind: 'import', sourceId: values.participationSourceId,
         status: (values.participationStatus || 'registered') as 'registered' | 'attended' | 'cancelled' | 'no_show',
@@ -728,127 +784,144 @@ export function createCrmProductionImportService(deps: {
 
   async function resume(context: ImportServiceContext, jobId: string): Promise<CrmImportJob> {
     requireImportOperation(context, 'crm.imports.write')
-    const job = await loadJob(context.workspaceId, jobId)
-    if (!job) throw new Error('Import job was not found.')
-    context = jobContext(context, job, 'write')
-    if (job.status === 'completed' || job.status === 'cancelled') return jobProjection(job)
-    const claimed = await query<{ id: string }>(
-      `UPDATE crm_import_jobs SET status='running'
-        WHERE workspace_id=$1 AND id=$2
-          AND (status IN ('ready','paused','failed') OR updated_at < now() - interval '5 minutes')
-        RETURNING id`,
-      [context.workspaceId, jobId],
-    )
-    if (!claimed.rows[0]) throw new Error('Import job is already processing.')
-    const parsed = await parseStaged(context, {
-      stagedFileId: job.stagedFileId ?? undefined, sourceId: job.sourceId ?? undefined,
-      entityKind: job.entityKind,
-      mapping: job.mapping,
+    // Files can use the same bounded pool. Finish their I/O before holding a
+    // connection; source/mapping immutability and hashes are rechecked below.
+    const initial = await loadJob(context.workspaceId, jobId)
+    if (!initial) throw new CrmOperationsError('not_found', 'Import job was not found.')
+    const sourceAuthorityContext = jobContext(context, initial, 'write')
+    const parsed = ['completed', 'cancelled'].includes(initial.status) ? null : await parseStaged(sourceAuthorityContext, {
+      stagedFileId: initial.stagedFileId ?? undefined, sourceId: initial.sourceId ?? undefined,
+      entityKind: initial.entityKind, mapping: initial.mapping,
     })
-    if (parsed.sourceHash !== job.sourceHash) {
-      await query(`UPDATE crm_import_jobs SET status='failed' WHERE workspace_id=$1 AND id=$2`, [context.workspaceId, job.id])
-      throw new Error('The staged import file changed after confirmation.')
-    }
-    const customCatalog = await customCatalogFor(context, {
-      stagedFileId: job.stagedFileId ?? undefined, sourceId: job.sourceId ?? undefined,
-      entityKind: job.entityKind,
-      mapping: job.mapping,
-    })
-    const start = job.nextChunkIndex * CHUNK_ROWS
-    const rows = parsed.rows.slice(start, start + CHUNK_ROWS)
-    const chunkHash = hashBytes(Buffer.from(JSON.stringify(rows.map((row) => row.cells))))
-    const chunk = await query<{ id: string; status: string; inputHash: string }>(
-      `INSERT INTO crm_import_chunks (workspace_id,job_id,chunk_index,input_hash,status,started_at)
-       VALUES ($1,$2,$3,$4,'running',now())
-       ON CONFLICT (job_id,chunk_index) DO UPDATE SET
-         status=CASE WHEN crm_import_chunks.status='completed' THEN 'completed' ELSE 'running' END,
-         started_at=CASE WHEN crm_import_chunks.status='completed' THEN crm_import_chunks.started_at ELSE now() END
-       RETURNING id,status,input_hash AS "inputHash"`,
-      [context.workspaceId, job.id, job.nextChunkIndex, chunkHash],
-    )
-    if (chunk.rows[0].inputHash !== chunkHash) throw new Error('Import chunk input changed after confirmation.')
-    if (chunk.rows[0].status === 'completed') {
-      const current = await loadJob(context.workspaceId, job.id)
-      return jobProjection(current ?? job)
-    }
-    let succeeded = 0
-    let failed = 0
-    for (const row of rows) {
-      const inputHash = rowHash(row.cells, job.mapping)
-      const receipt = await query<{ status: string; inputHash: string }>(
-        `SELECT status,input_hash AS "inputHash" FROM crm_import_rows
-          WHERE workspace_id=$1 AND job_id=$2 AND row_number=$3`,
-        [context.workspaceId, job.id, row.row],
+    return importTransaction(context, async (current, client, effects) => {
+      context = current
+      const job = await loadJob(context.workspaceId, jobId, client, true)
+      if (!job) throw new Error('Import job was not found.')
+      context = jobContext(context, job, 'write')
+      if (job.mapping.trustedIdentitySource && (context.actor.kind !== 'user' || !['owner', 'admin'].includes(context.authority.role))) {
+        throw new CrmOperationsError('not_authorized', 'A current owner or admin is required for trusted identity imports.')
+      }
+      if (job.status === 'completed' || job.status === 'cancelled') return jobProjection(job)
+      if (!parsed || job.mappingHash !== initial.mappingHash || job.sourceHash !== initial.sourceHash) {
+        throw new CrmOperationsError('conflict', 'Import source or mapping changed. Read the job again before retrying.')
+      }
+      const claimed = await client.query<{ id: string }>(
+        `UPDATE crm_import_jobs SET status='running'
+          WHERE workspace_id=$1 AND id=$2
+            AND status NOT IN ('completed','cancelled')
+          RETURNING id`,
+        [context.workspaceId, jobId],
       )
-      if (receipt.rows[0]) {
-        if (receipt.rows[0].inputHash !== inputHash) throw new Error('Import row input changed after confirmation.')
-        if (receipt.rows[0].status === 'completed') succeeded += 1
-        else failed += 1
-        continue
+      if (!claimed.rows[0]) throw new Error('Import job is already processing.')
+      if (parsed.sourceHash !== job.sourceHash) {
+        await client.query(`UPDATE crm_import_jobs SET status='failed' WHERE workspace_id=$1 AND id=$2`, [context.workspaceId, job.id])
+        throw new Error('The staged import file changed after confirmation.')
       }
-      const validation = validateMappedRow(job.entityKind, row, job.mapping, customCatalog)
-      try {
-        if (validation.length > 0) throw new Error(validation.map((error) => error.message).join(' '))
-        const entityId = await executeRow(context, job, row, customCatalog)
-        await query(
-          `INSERT INTO crm_import_rows (workspace_id,job_id,row_number,input_hash,status,entity_id)
-           VALUES ($1,$2,$3,$4,'completed',$5)
-           ON CONFLICT (job_id,row_number) DO NOTHING`,
-          [context.workspaceId, job.id, row.row, inputHash, entityId],
-        )
-        succeeded += 1
-      } catch (error) {
-        const first = validation[0]
-        const message = error instanceof Error ? error.message.slice(0, 1000) : 'Import row failed.'
-        await query(
-          `INSERT INTO crm_import_rows (workspace_id,job_id,row_number,input_hash,status)
-           VALUES ($1,$2,$3,$4,'failed') ON CONFLICT (job_id,row_number) DO NOTHING`,
-          [context.workspaceId, job.id, row.row, inputHash],
-        )
-        await query(
-          `INSERT INTO crm_import_errors (workspace_id,job_id,row_number,error_code,field_key,message,row_snapshot)
-           VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-          [context.workspaceId, job.id, row.row, first?.code ?? 'command_failed',
-            first?.field?.replace(/[^a-z0-9_]/gi, '_').toLowerCase() ?? null,
-            message, JSON.stringify(mappedValues(row.cells, job.mapping))],
-        )
-        failed += 1
+      const customCatalog = await customCatalogFor(context, {
+        stagedFileId: job.stagedFileId ?? undefined, sourceId: job.sourceId ?? undefined,
+        entityKind: job.entityKind,
+        mapping: job.mapping,
+      }, client)
+      const start = job.nextChunkIndex * CHUNK_ROWS
+      const rows = parsed.rows.slice(start, start + CHUNK_ROWS)
+      const chunkHash = hashBytes(Buffer.from(JSON.stringify(rows.map((row) => row.cells))))
+      const chunk = await client.query<{ id: string; status: string; inputHash: string }>(
+        `INSERT INTO crm_import_chunks (workspace_id,job_id,chunk_index,input_hash,status,started_at)
+         VALUES ($1,$2,$3,$4,'running',now())
+         ON CONFLICT (job_id,chunk_index) DO UPDATE SET
+           status=CASE WHEN crm_import_chunks.status='completed' THEN 'completed' ELSE 'running' END,
+           started_at=CASE WHEN crm_import_chunks.status='completed' THEN crm_import_chunks.started_at ELSE now() END
+         RETURNING id,status,input_hash AS "inputHash"`,
+        [context.workspaceId, job.id, job.nextChunkIndex, chunkHash],
+      )
+      if (chunk.rows[0].inputHash !== chunkHash) throw new Error('Import chunk input changed after confirmation.')
+      if (chunk.rows[0].status === 'completed') {
+        await checkpoint(client, context.workspaceId, job, start + rows.length >= parsed.rows.length)
+        return jobProjection((await loadJob(context.workspaceId, job.id, client))!)
       }
-    }
-    const processed = rows.length
-    const terminal = start + processed >= parsed.rows.length
-    await query(
-      `UPDATE crm_import_chunks SET status='completed',processed_rows=$4,succeeded_rows=$5,
-         failed_rows=$6,completed_at=now() WHERE workspace_id=$1 AND job_id=$2 AND chunk_index=$3`,
-      [context.workspaceId, job.id, job.nextChunkIndex, processed, succeeded, failed],
-    )
-    await query(
-      `UPDATE crm_import_jobs SET status=$3,processed_rows=processed_rows+$4,
-         succeeded_rows=succeeded_rows+$5,failed_rows=failed_rows+$6,
-         next_chunk_index=next_chunk_index+1,completed_at=CASE WHEN $3='completed' THEN now() ELSE NULL END
-       WHERE workspace_id=$1 AND id=$2 AND status <> 'cancelled'`,
-      [context.workspaceId, job.id, terminal ? 'completed' : 'paused', processed, succeeded, failed],
-    )
-    console.info('[crm-import] chunk processed', {
-      workspaceId: context.workspaceId, jobId: job.id, chunkIndex: job.nextChunkIndex,
-      processedRows: processed, failedRows: failed,
+      let succeeded = 0
+      let failed = 0
+      for (const row of rows) {
+        const inputHash = rowHash(row.cells, job.mapping)
+        const receipt = await client.query<{ status: string; inputHash: string }>(
+          `SELECT status,input_hash AS "inputHash" FROM crm_import_rows
+            WHERE workspace_id=$1 AND job_id=$2 AND row_number=$3`,
+          [context.workspaceId, job.id, row.row],
+        )
+        if (receipt.rows[0]) {
+          if (receipt.rows[0].inputHash !== inputHash) throw new Error('Import row input changed after confirmation.')
+          if (receipt.rows[0].status === 'completed') succeeded += 1
+          else failed += 1
+          continue
+        }
+        const validation = validateMappedRow(job.entityKind, row, job.mapping, customCatalog)
+        const effectStart = effects.length
+        await client.query('SAVEPOINT crm_import_row')
+        try {
+          if (validation.length > 0) throw new Error(validation.map((error) => error.message).join(' '))
+          const entityId = await executeRow(context, job, row, customCatalog, { client, afterCommit: (effect) => { effects.push(effect) } }, deps.operationsForTransaction(client))
+          await client.query(
+            `INSERT INTO crm_import_rows (workspace_id,job_id,row_number,input_hash,status,entity_id)
+             VALUES ($1,$2,$3,$4,'completed',$5)
+             ON CONFLICT (job_id,row_number) DO NOTHING`,
+            [context.workspaceId, job.id, row.row, inputHash, entityId],
+          )
+          await client.query('RELEASE SAVEPOINT crm_import_row')
+          succeeded += 1
+        } catch (error) {
+          if (isTransientImportFailure(error)) throw error
+          await client.query('ROLLBACK TO SAVEPOINT crm_import_row')
+          effects.length = effectStart
+          const first = validation[0]
+          const message = error instanceof Error ? error.message.slice(0, 1000) : 'Import row failed.'
+          await client.query(
+            `INSERT INTO crm_import_rows (workspace_id,job_id,row_number,input_hash,status)
+             VALUES ($1,$2,$3,$4,'failed') ON CONFLICT (job_id,row_number) DO NOTHING`,
+            [context.workspaceId, job.id, row.row, inputHash],
+          )
+          await client.query(
+            `INSERT INTO crm_import_errors (workspace_id,job_id,row_number,error_code,field_key,message,row_snapshot)
+             VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+            [context.workspaceId, job.id, row.row, first?.code ?? 'command_failed',
+              first?.field?.replace(/[^a-z0-9_]/gi, '_').toLowerCase() ?? null,
+              message, JSON.stringify(mappedValues(row.cells, job.mapping))],
+          )
+          await client.query('RELEASE SAVEPOINT crm_import_row')
+          failed += 1
+        }
+      }
+      const processed = rows.length
+      const terminal = start + processed >= parsed.rows.length
+      await client.query(
+        `UPDATE crm_import_chunks SET status='completed',processed_rows=$4,succeeded_rows=$5,
+           failed_rows=$6,completed_at=now() WHERE workspace_id=$1 AND job_id=$2 AND chunk_index=$3`,
+        [context.workspaceId, job.id, job.nextChunkIndex, processed, succeeded, failed],
+      )
+      await checkpoint(client, context.workspaceId, job, terminal)
+      console.info('[crm-import] chunk processed', {
+        workspaceId: context.workspaceId, jobId: job.id, chunkIndex: job.nextChunkIndex,
+        processedRows: processed, failedRows: failed,
+      })
+      return jobProjection((await loadJob(context.workspaceId, job.id, client))!)
     })
-    return jobProjection((await loadJob(context.workspaceId, job.id))!)
   }
 
   async function cancel(context: ImportServiceContext, jobId: string): Promise<CrmImportJob> {
     requireImportOperation(context, 'crm.imports.write')
-    const original = await loadJob(context.workspaceId, jobId)
-    if (!original) throw new CrmOperationsError('not_found', 'Import job was not found.')
-    jobContext(context, original, 'write')
-    await query(
-      `UPDATE crm_import_jobs SET status='cancelled'
-        WHERE workspace_id=$1 AND id=$2 AND status NOT IN ('completed','cancelled')`,
-      [context.workspaceId, jobId],
-    )
-    const job = await loadJob(context.workspaceId, jobId)
-    if (!job) throw new Error('Import job was not found.')
-    return jobProjection(job)
+    return importTransaction(context, async (current, client) => {
+      context = current
+      const original = await loadJob(context.workspaceId, jobId, client)
+      if (!original) throw new CrmOperationsError('not_found', 'Import job was not found.')
+      jobContext(context, original, 'write')
+      await client.query(
+        `UPDATE crm_import_jobs SET status='cancelled'
+          WHERE workspace_id=$1 AND id=$2 AND status NOT IN ('completed','cancelled')`,
+        [context.workspaceId, jobId],
+      )
+      const job = await loadJob(context.workspaceId, jobId, client)
+      if (!job) throw new Error('Import job was not found.')
+      return jobProjection(job)
+    })
   }
 
   async function list(context: ImportServiceContext, filters: CrmPageQuery = {}): Promise<CrmPage<'jobs', CrmImportJob>> {

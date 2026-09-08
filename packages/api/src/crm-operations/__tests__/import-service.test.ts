@@ -4,7 +4,14 @@ import type { CrmOperationsContext, FilesApi } from '@use-brian/core'
 
 const mocks = vi.hoisted(() => ({ query: vi.fn(), createContact: vi.fn(), updateContact: vi.fn() }))
 
-vi.mock('../../db/client.js', () => ({ query: mocks.query }))
+vi.mock('../../db/client.js', () => ({ query: mocks.query, getPool: () => ({ connect: async () => ({
+  release: () => {},
+  query: (sql: string, values: unknown[]) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE SAVEPOINT)/.test(sql) || sql.includes("set_config('app.system_bypass'") || sql.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] })
+    if (sql.includes('SELECT role FROM workspace_members')) return Promise.resolve({ rows: [{ role: 'admin' }] })
+    return mocks.query(sql, values)
+  },
+}) }) }))
 vi.mock('../../db/crm.js', () => ({
   createContact: mocks.createContact,
   createCompany: vi.fn(),
@@ -70,7 +77,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
   })
 
   it('dry-runs the full staged file without creating database rows', async () => {
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const result = await service.dryRun(context, {
       stagedFileId: fileId,
       entityKind: 'contact',
@@ -84,7 +91,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
   })
 
   it('requires admin authority for a trusted identity mapping', async () => {
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     await expect(service.dryRun({
       ...context,
       authority: { ...context.authority, role: 'member', canConfigure: false },
@@ -101,7 +108,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     mocks.query.mockResolvedValueOnce({
       rows: [{ fieldKey: 'score', fieldType: 'number', options: [] }],
     })
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const result = await service.dryRun(context, {
       stagedFileId: fileId,
       entityKind: 'contact',
@@ -116,7 +123,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
   })
 
   it('commits one bounded chunk and treats a completed resume as a no-op', async () => {
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const checked = await service.dryRun(context, {
       stagedFileId: fileId,
       entityKind: 'contact',
@@ -133,7 +140,8 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     expect(confirmed.status).toBe('ready')
 
     mocks.query
-      .mockResolvedValueOnce({ rows: [job('ready')] }) // load
+      .mockResolvedValueOnce({ rows: [job('ready')] }) // source snapshot
+      .mockResolvedValueOnce({ rows: [job('ready')] }) // locked load
       .mockResolvedValueOnce({ rows: [{ id: jobId }] }) // claim
       .mockResolvedValueOnce({ rows: [{ id: 'chunk', status: 'running', inputHash: createHash('sha256').update(JSON.stringify([['Ada Example', 'ada@example.test']])).digest('hex') }] })
       .mockResolvedValueOnce({ rows: [] }) // receipt
@@ -151,9 +159,9 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       name: 'Ada Example',
       email: 'ada@example.test',
       externalRef: expect.objectContaining({ import_key: `${jobId}:2` }),
-    }), undefined)
+    }), undefined, expect.objectContaining({ client: expect.anything(), afterCommit: expect.any(Function) }))
 
-    mocks.query.mockResolvedValueOnce({ rows: [job('completed')] })
+    mocks.query.mockResolvedValueOnce({ rows: [job('completed')] }).mockResolvedValueOnce({ rows: [job('completed')] })
     await expect(service.resume(context, jobId)).resolves.toMatchObject({ status: 'completed' })
     expect(mocks.createContact).toHaveBeenCalledTimes(1)
   })
@@ -166,7 +174,8 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     const ready = job('ready', { mapping })
     const completed = job('completed', { mapping })
     mocks.query
-      .mockResolvedValueOnce({ rows: [ready] })
+      .mockResolvedValueOnce({ rows: [ready] }) // source snapshot
+      .mockResolvedValueOnce({ rows: [ready] }) // locked load
       .mockResolvedValueOnce({ rows: [{ id: jobId }] })
       .mockResolvedValueOnce({ rows: [{
         id: 'chunk', status: 'running',
@@ -180,12 +189,12 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [completed] })
 
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     await expect(service.resume(context, jobId)).resolves.toMatchObject({ status: 'completed' })
     expect(mocks.updateContact).toHaveBeenCalledWith(userId, entityId, expect.objectContaining({
       name: 'Ada Example', email: 'ada@example.test', tags: ['existing'],
       externalRef: expect.objectContaining({ import_key: `${jobId}:2` }),
-    }), undefined)
+    }), undefined, expect.objectContaining({ workspaceId }), expect.anything(), undefined, expect.any(Function))
     expect(mocks.createContact).not.toHaveBeenCalled()
   })
 
@@ -207,7 +216,8 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     const cells = operationsSource.split('\n')[1]!.split(',')
     readBytes.mockResolvedValueOnce({ ok: true, value: { file: { id: fileId }, bytes: operationsBytes } })
     mocks.query
-      .mockResolvedValueOnce({ rows: [ready] })
+      .mockResolvedValueOnce({ rows: [ready] }) // source snapshot
+      .mockResolvedValueOnce({ rows: [ready] }) // locked load
       .mockResolvedValueOnce({ rows: [{ id: jobId }] })
       .mockResolvedValueOnce({ rows: [{
         id: 'chunk', status: 'running',
@@ -220,7 +230,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [completed] })
 
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     await expect(service.resume(context, jobId)).resolves.toMatchObject({ status: 'completed' })
     expect(operations.execute).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       kind: 'record_consent', provider: 'import',
@@ -247,7 +257,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     const rows = times.map((at) => [...base, at].join(','))
     rows.push([entityId, ...base.slice(1).map(() => ''), times[0]].join(','))
     readBytes.mockResolvedValueOnce({ ok: true, value: { file: { id: fileId }, bytes: Buffer.from([columns.join(','), ...rows, ''].join('\n')) } })
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const result = await service.dryRun(context, { stagedFileId: fileId, entityKind: 'operations',
       mapping: { columns: Object.fromEntries(columns.map((column, index) => [index, column])) } })
     expect(result).toMatchObject({ totalRows: 8, validRows: 2, failedRows: 6 })
