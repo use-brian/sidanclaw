@@ -10,7 +10,7 @@ const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222'
 const DEFINITION_ID = '33333333-3333-4333-8333-333333333333'
 const TOKEN = `sk_intake_${CREDENTIAL_ID}_secret`
 
-function build(options: { maxRequests?: number } = {}) {
+function build(options: { maxRequests?: number; trustProxy?: string } = {}) {
   const service = {
     execute: vi.fn().mockResolvedValue({
       command: 'record_submission', created: true, duplicate: false,
@@ -29,6 +29,7 @@ function build(options: { maxRequests?: number } = {}) {
     listCredentials: vi.fn(),
   }
   const app = express()
+  if (options.trustProxy) app.set('trust proxy', options.trustProxy)
   app.use('/api', crmIntakeRoutes({
     service,
     readStore,
@@ -115,8 +116,52 @@ describe('[COMP:api/crm-intake-route] public atomic CRM intake', () => {
   it('rate-limits by credential candidate plus source address before authentication', async () => {
     const { app, readStore } = build({ maxRequests: 1 })
     expect((await submit(app)).status).toBe(201)
-    expect((await submit(app)).status).toBe(429)
+    const limited = await submit(app)
+    expect(limited.status).toBe(429)
+    expect(limited.headers['retry-after']).toBe('60')
+    expect(limited.body).toMatchObject({ error: 'rate_limited', retryable: true, retryAfterSeconds: 60 })
     expect(readStore.authenticate).toHaveBeenCalledOnce()
+  })
+
+  it('enforces the initial sixty-attempt ceiling and recovers after the indicated delay', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-01-01T00:00:00Z'))
+    try {
+      const { app, service } = build()
+      for (let attempt = 0; attempt < 60; attempt++) expect((await submit(app)).status).toBe(201)
+      const refused = await submit(app)
+      expect(refused.status).toBe(429)
+      expect(service.execute).toHaveBeenCalledTimes(60)
+      clock.mockReturnValue(Date.parse('2026-01-01T00:00:59.999Z'))
+      expect((await submit(app)).status).toBe(429)
+      clock.mockReturnValue(Date.parse('2026-01-01T00:01:00Z'))
+      expect((await submit(app)).status).toBe(201)
+      expect(service.execute).toHaveBeenCalledTimes(61)
+    } finally { clock.mockRestore() }
+  })
+
+  it('ignores rotated forwarded headers when proxy trust is disabled and rejects before parsing', async () => {
+    const { app, readStore } = build({ maxRequests: 1 })
+    const post = () => request(app).post('/api/crm/intake/contact_form/submissions')
+      .set('Authorization', `Bearer ${TOKEN}`).set('Idempotency-Key', 'request-1')
+    expect((await post().set('X-Forwarded-For', '198.51.100.1').send({ fields: {} })).status).toBe(201)
+    const refused = await post().set('X-Forwarded-For', '198.51.100.2')
+      .set('Content-Type', 'application/json').send('{')
+    expect(refused.status).toBe(429)
+    expect(refused.body.error).toBe('rate_limited')
+    expect(readStore.authenticate).toHaveBeenCalledOnce()
+  })
+
+  it('uses only the trusted proxy boundary and closest untrusted hop for source buckets', async () => {
+    const { app, readStore } = build({ maxRequests: 1, trustProxy: 'loopback' })
+    const post = (forwarded: string, credential = CREDENTIAL_ID) => request(app)
+      .post('/api/crm/intake/contact_form/submissions')
+      .set('Authorization', `Bearer sk_intake_${credential}_secret`)
+      .set('Idempotency-Key', 'request-1').set('X-Forwarded-For', forwarded).send({ fields: {} })
+    expect((await post('198.51.100.1, 203.0.113.1')).status).toBe(201)
+    expect((await post('198.51.100.2, 203.0.113.1')).status).toBe(429)
+    expect((await post('198.51.100.2, 203.0.113.2')).status).toBe(201)
+    expect((await post('198.51.100.2, 203.0.113.1', '44444444-4444-4444-8444-444444444444')).status).toBe(201)
+    expect(readStore.authenticate).toHaveBeenCalledTimes(3)
   })
 
   it('rejects bodies above the dedicated 1 MiB parser limit', async () => {

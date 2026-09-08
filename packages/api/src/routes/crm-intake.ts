@@ -39,9 +39,9 @@ export type CrmIntakeRouteOptions = {
 }
 
 function sourceIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for']
-  const head = Array.isArray(forwarded) ? forwarded[0] : forwarded
-  return req.ip ?? head?.split(',')[0]?.trim() ?? 'unknown'
+  // Express applies the deployment's trusted proxy boundary. Never interpret
+  // forwarded headers ourselves when no trusted address was resolved.
+  return req.ip ?? req.socket.remoteAddress ?? 'unknown'
 }
 
 function tokenFrom(req: Request): string | null {
@@ -64,7 +64,17 @@ export function crmIntakeRoutes(options: CrmIntakeRouteOptions): Router {
   const preflightRateLimit = (req: Request, res: Response, next: NextFunction) => {
     const parsed = parseCrmIntakeToken(tokenFrom(req) ?? '')
     const candidate = parsed?.credentialId ?? 'invalid'
-    limiter.middleware(req, res, next, () => `crm-intake:${candidate}:${sourceIp(req)}`)
+    if (!limiter.check(`crm-intake:${candidate}:${sourceIp(req)}`)) {
+      res.setHeader('Retry-After', '60')
+      res.status(429).json({
+        error: 'rate_limited',
+        message: 'Intake request limit reached. Retry the same submission after the indicated delay.',
+        retryable: true,
+        retryAfterSeconds: 60,
+      })
+      return
+    }
+    next()
   }
 
   router.post(
