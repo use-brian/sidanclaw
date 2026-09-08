@@ -25,7 +25,7 @@
  * [COMP:corrections/soft-delete-store]
  */
 
-import type { RowSnapshot, SoftDeletePrimitive, SoftDeleteRepository } from '@use-brian/core'
+import { HardPurgeError, SoftDeleteError, type RowSnapshot, type SoftDeletePrimitive, type SoftDeleteRepository } from '@use-brian/core'
 import { getPool, query } from './client.js'
 import { redactCrmOperationsForContact } from '../crm-operations/privacy.js'
 
@@ -123,10 +123,11 @@ export function createSoftDeleteStore(): SoftDeleteRepository {
       const client = await getPool().connect()
       try {
         await client.query('BEGIN')
-        await client.query(
+        const updated = await client.query(
           `UPDATE ${table} SET valid_to = $3 WHERE id = $1 AND workspace_id = $2`,
           [input.rowId, input.workspaceId, input.now],
         )
+        if (updated.rowCount !== 1) throw new SoftDeleteError('row_not_found', 'The deletion target no longer exists in this workspace.')
         // The row keeps no soft-delete reason column — `correction_audit`
         // is where the who/why for a `valid_to` deletion lives.
         await client.query(
@@ -155,9 +156,17 @@ export function createSoftDeleteStore(): SoftDeleteRepository {
       const client = await getPool().connect()
       try {
         await client.query('BEGIN')
-        // Snapshot before the DELETE — D.7 keeps an existence record of
-        // the vanished row. For `workspace_file`, the GCS object itself
-        // is removed by the operator file-retention path, not here.
+        const target = await client.query<{ isPerson: boolean }>(
+          `SELECT ${table === 'entities' ? "kind='person'" : 'false'} AS "isPerson"
+             FROM ${table} WHERE id=$1 AND workspace_id=$2 FOR UPDATE`,
+          [input.rowId, input.workspaceId],
+        )
+        if (!target.rows.length) throw new HardPurgeError('row_not_found', 'The purge target no longer exists in this workspace.')
+        const erasingPerson = target.rows[0]!.isPerson
+        if (erasingPerson) await redactCrmOperationsForContact(client, input.workspaceId, input.rowId)
+        // D.7 retains an existence record. A person's receipt must not copy
+        // free text or caller-provided snapshots back into the erased data.
+        // File bytes still belong to the operator file-retention path.
         await client.query(
           `INSERT INTO correction_audit
              (workspace_id, action, primitive, row_id, actor_user_id, reason,
@@ -168,14 +177,11 @@ export function createSoftDeleteStore(): SoftDeleteRepository {
             input.primitive,
             input.rowId,
             input.actorUserId,
-            input.reason,
-            input.ticketReference,
-            JSON.stringify(input.snapshot),
+            erasingPerson ? 'Personal data erased' : input.reason,
+            erasingPerson ? null : input.ticketReference,
+            JSON.stringify(erasingPerson ? { erased: true } : input.snapshot),
           ],
         )
-        if (table === 'entities') {
-          await redactCrmOperationsForContact(client, input.workspaceId, input.rowId)
-        }
         await client.query(
           `DELETE FROM ${table} WHERE id = $1 AND workspace_id = $2`,
           [input.rowId, input.workspaceId],

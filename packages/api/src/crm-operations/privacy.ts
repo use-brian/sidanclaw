@@ -111,6 +111,14 @@ export async function redactCrmOperationsForContact(
   )
   if (!person.rows[0]?.isPerson) return
   await retainCrmAddressSuppression(client,workspaceId,contactId)
+  // All four native aliases share the entity identity. Keep an existence
+  // receipt, not another copy of personal free text or historical snapshots.
+  await client.query(
+    `UPDATE correction_audit SET reason='Personal data erased',ticket_reference=NULL,
+            row_snapshot=jsonb_build_object('erased',true),detail=jsonb_build_object('erased',true)
+      WHERE workspace_id=$1 AND row_id=$2 AND primitive IN ('entity','contact','company','deal')`,
+    [workspaceId, contactId],
+  )
   // Match retention's enquiry -> receipt ordering. Holding a receipt before
   // its enquiry would deadlock against a concurrent retention transaction.
   await client.query(`SELECT id FROM association_enquiries WHERE workspace_id=$1 AND contact_id=$2 ORDER BY id FOR UPDATE`,
