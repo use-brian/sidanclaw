@@ -315,9 +315,14 @@
   --graph-entity-memory: #9D8FB8;
   --graph-entity-connector: #5E7CA6;
   --graph-entity-other: #64748B;
+  /* Audit highlight: the accent for entries a turn retrieved (chat-audit).
+     Deliberately outside the entity palette so a lit node reads as "this
+     one was used", not as a kind. Must stay 6-digit hex (canvas math). */
+  --graph-highlight: #D97706;
 }
 .dark {
   --graph-bg: var(--background);
+  --graph-highlight: #FBBF24;
   --graph-fg: #E6E6EA;
   --graph-muted: #8A8A92;
   --graph-border: #3E3E46;
@@ -1917,6 +1922,93 @@
 
   /* Skeleton — neutral block with a slow shimmer sweep. Pair with a
      concrete width/height. */
+  /* Brain graph backdrop — the atmosphere layers that used to be painted on
+     the canvas every frame (three aurora gradients, a dot-grid pattern fill
+     and a vignette gradient per frame). They are CSS now: the aurora blobs
+     are three blurred discs moved by compositor-only transform keyframes on
+     long, non-harmonic periods, the dot grid is a background-image whose
+     pitch/offset the canvas updates from its zoom transform (two CSS vars),
+     and the vignette is a static radial gradient. The canvas itself paints
+     only nodes, edges, labels and community washes — and only when a frame
+     is owed (lib/graph-motion.ts). Spec: graph-view.md → "Backdrop". */
+  .graph-backdrop {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .graph-backdrop__aurora {
+    position: absolute;
+    border-radius: 9999px;
+    filter: blur(64px);
+    will-change: transform;
+    opacity: 0.1;
+    animation: graph-aurora-drift 38s ease-in-out infinite alternate;
+  }
+  .dark .graph-backdrop__aurora {
+    opacity: 0.16;
+  }
+  .graph-backdrop__aurora--a {
+    left: 8%;
+    top: 4%;
+    width: 46%;
+    height: 62%;
+    background: var(--graph-entity-knowledge);
+  }
+  .graph-backdrop__aurora--b {
+    right: 6%;
+    top: 30%;
+    width: 42%;
+    height: 58%;
+    background: var(--graph-entity-person);
+    animation-duration: 47s;
+    animation-delay: -12s;
+  }
+  .graph-backdrop__aurora--c {
+    left: 30%;
+    bottom: -12%;
+    width: 40%;
+    height: 48%;
+    background: var(--graph-entity-company);
+    animation-duration: 59s;
+    animation-delay: -27s;
+  }
+  @keyframes graph-aurora-drift {
+    from { transform: translate3d(-4%, -3%, 0) scale(1); }
+    to { transform: translate3d(5%, 4%, 0) scale(1.08); }
+  }
+  .graph-backdrop__grid {
+    position: absolute;
+    inset: 0;
+    opacity: 0.3;
+    background-image: radial-gradient(
+      circle,
+      var(--graph-muted) 0.75px,
+      transparent 1px
+    );
+    background-size: var(--graph-grid-pitch, 28px) var(--graph-grid-pitch, 28px);
+    background-position: var(--graph-grid-x, 0px) var(--graph-grid-y, 0px);
+  }
+  .dark .graph-backdrop__grid {
+    opacity: 0.18;
+  }
+  .graph-backdrop__vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+      ellipse 75% 70% at 50% 42%,
+      transparent 55%,
+      color-mix(in srgb, var(--foreground) 5%, transparent) 100%
+    );
+  }
+  .dark .graph-backdrop__vignette {
+    background: radial-gradient(
+      ellipse 75% 70% at 50% 42%,
+      transparent 50%,
+      color-mix(in srgb, black 28%, transparent) 100%
+    );
+  }
+
   .skeleton {
     position: relative;
     overflow: hidden;
@@ -2344,6 +2436,7 @@ html[data-vt-back="true"]::view-transition-new(root) {
   .claw-fade-in,
   .claw-blink,
   .skeleton::after,
+  .graph-backdrop__aurora,
   .route-progress__bar,
   .hover-lift,
   .spoiler,

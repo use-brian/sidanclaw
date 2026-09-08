@@ -83,6 +83,7 @@ import {
   type WorkspaceSkillSummary,
 } from "@/lib/api/skills";
 import { BRAIN_REFRESH_EVENT, requestBrainRefresh } from "@/lib/brain-events";
+import { AuditSessionList } from "@/components/brain/audit-session-list";
 import {
   fetchReviewItems,
   filterReviewItems,
@@ -119,6 +120,7 @@ const SECTION_ORDER: BrainSection[] = [
   "skills",
   "blueprints",
   "reviews",
+  "audit",
 ];
 
 /** Entries option order — the FilterStrip chip order minus `all`. */
@@ -392,6 +394,7 @@ export function BrainSidebarPanel({ workspaceId }: { workspaceId: string }) {
     skills: t.brainPage.sections.skills,
     blueprints: t.brainPage.sections.blueprints,
     reviews: t.brainPage.sections.reviews,
+    audit: t.brainPage.sections.audit,
   };
 
   // Suggested-first (same ordering as the library), narrowed by the SHARED
@@ -835,6 +838,35 @@ export function BrainSidebarPanel({ workspaceId }: { workspaceId: string }) {
               );
             })}
           </ul>
+        </>
+      )}
+
+      {/* Audit — the chat-history audit browser's MASTER list: every
+          conversation the viewer may audit (own sessions on any channel +
+          shared rooms), needle-filtered by the shared search. Selecting a
+          row drives the page's `AuditPanel` through `auditSessionId`.
+          Spec: docs/architecture/features/chat-audit.md. */}
+      {brain.section === "audit" && (
+        <>
+          <input
+            type="search"
+            value={brain.search}
+            onChange={(e) => brain.setSearch(e.target.value)}
+            placeholder={t.brainPage.audit.searchPlaceholder}
+            className={cn(
+              "min-w-0 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]",
+              "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
+            )}
+          />
+          <AuditSessionList
+            workspaceId={workspaceId}
+            search={brain.search}
+            selectedId={brain.auditSessionId}
+            onSelect={(id) => {
+              brain.setAuditSessionId(id);
+              ensureBrainRoot();
+            }}
+          />
         </>
       )}
     </div>

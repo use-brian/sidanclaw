@@ -73,4 +73,17 @@ describe("[COMP:app-web/graph-semantic-zoom] graph drill-down lifecycle", () => 
       }),
     );
   });
+
+  it("keys an id focus order-insensitively and separates reveal from mark", () => {
+    const plain = graphScopeCacheKey({ workspaceId: "ws" });
+    const marked = graphScopeCacheKey({ workspaceId: "ws", focusIds: ["b", "a"] });
+    expect(marked).not.toBe(plain);
+    expect(marked).toBe(graphScopeCacheKey({ workspaceId: "ws", focusIds: ["a", "b"] }));
+    expect(graphScopeCacheKey({ workspaceId: "ws", focusIds: ["a", "b"], revealFocus: true })).not.toBe(
+      marked,
+    );
+    // Reveal without ids is not a distinct projection.
+    expect(graphScopeCacheKey({ workspaceId: "ws", revealFocus: true })).toBe(plain);
+    expect(graphScopeCacheKey({ workspaceId: "ws", focusIds: [] })).toBe(plain);
+  });
 });
