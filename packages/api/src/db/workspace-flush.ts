@@ -84,6 +84,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'crm_import_rows',
   'crm_import_chunks',
   'crm_import_jobs',
+  'crm_import_sources',
   'transcript_segments',
   'recording_jobs',
   'recordings',

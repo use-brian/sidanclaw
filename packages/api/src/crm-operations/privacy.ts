@@ -35,6 +35,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_integration_credential_grants',
   'crm_domain_event_outbox',
   'crm_import_jobs',
+  'crm_import_sources',
   'crm_import_chunks',
   'crm_import_rows',
   'crm_import_errors',
@@ -55,6 +56,12 @@ EXPORT_PROJECTIONS.crm_intake_credentials = [
 EXPORT_PROJECTIONS.crm_integration_credentials = [
   'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',
   'expires_at', 'revoked_at', 'last_used_at', 'created_at',
+].join(',')
+// Original CSV bytes are a separate multi-subject processing artifact. The
+// legacy operations export includes its inventory, never an implicit blob dump.
+EXPORT_PROJECTIONS.crm_import_sources = [
+  'id', 'workspace_id', 'source_key', 'source_hash', 'credential_id',
+  'integration_grants', 'created_at', 'octet_length(content_bytes) AS byte_count',
 ].join(',')
 
 export type CrmOperationsPrivacyExport = {

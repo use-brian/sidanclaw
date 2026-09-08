@@ -5,6 +5,7 @@ import { AssociationCommandSchema, CrmOperationsCommandSchema, type CrmIntegrati
 import { createCrmOperationsService } from '../../crm-operations/service.js'
 import { createDbCrmOperationsStore } from '../crm-operations-store.js'
 import { createDbCrmIntakeReadStore } from '../crm-intake-store.js'
+import { createCrmIntegrationRecordReadStore } from '../crm-integration-records.js'
 import { createAssociationService } from '../../association/service.js'
 import { createAssociationStore } from '../association-store.js'
 import { createWorkspaceModulesStore } from '../workspace-modules-store.js'
@@ -79,6 +80,29 @@ describe('[COMP:api/crm-integration-auth] Actual command and joined resource iso
       .rejects.toMatchObject({ code: 'not_authorized' })
     expect((await pool.query('SELECT count(*)::int AS count FROM crm_intake_definitions WHERE workspace_id=$1', [f.workspaceId])).rows[0].count).toBe(0)
     expect((await pool.query('SELECT count(*)::int AS count FROM association_audit_log WHERE workspace_id=$1', [f.workspaceId])).rows[0].count).toBe(0)
+  })
+  it('reads only CRM records in the credential workspace and traverses equal-microsecond timestamps without omission', async () => {
+    const f = await fixture(), other = await fixture()
+    const principal = { workspaceId: f.workspaceId, credentialId: f.credentialId,
+      grants: [{ operation: 'crm.records.read' as const, selectors: {} }] }
+    const records = createCrmIntegrationRecordReadStore(principal, pool)
+    await pool.query(`INSERT INTO entities (workspace_id,kind,display_name,created_by_user_id,source,created_at)
+      SELECT $1,'person','Fixture '||n,$2,'manual','2026-01-01T00:00:00.123456Z'::timestamptz FROM generate_series(1,102) n`, [f.workspaceId, f.userId])
+    const seen: string[] = []
+    let cursor: string | undefined
+    do {
+      const page = await records.list({ limit: 10, cursor })
+      seen.push(...page.records.map((row) => String(row.id)))
+      cursor = page.nextCursor ?? undefined
+    } while (cursor)
+    expect(seen).toHaveLength(103)
+    expect(new Set(seen).size).toBe(103)
+    expect(await records.get(other.contactId)).toBeNull()
+    expect(await records.get(f.contactId)).toMatchObject({ id: f.contactId, kind: 'person' })
+    expect(await records.fields()).toEqual([])
+    await expect(records.list({ kind: 'knowledge' })).rejects.toThrow()
+    await expect(createCrmIntegrationRecordReadStore({ ...principal, grants: [{ operation: 'association.read', selectors: { eventIds: 'all' } }] }, pool).get(f.contactId))
+      .rejects.toMatchObject({ code: 'integration_scope_denied' })
   })
   it('prevents ticket, mixed-order, by-id, provider and registration traversal across event grants', async () => {
     const f = await fixture()

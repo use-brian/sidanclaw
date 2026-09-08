@@ -721,7 +721,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ jobs: await options.importService.list(ctx.workspaceId) })
+      res.json({ jobs: await options.importService.list(ctx) })
     } catch (error) { writeError(res, error) }
   })
 
@@ -738,7 +738,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      const job = await options.importService.get(ctx.workspaceId, jobId.data)
+      const job = await options.importService.get(ctx, jobId.data)
       if (!job) {
         res.status(404).json({ error: 'not_found' })
         return
@@ -796,7 +796,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      const csv = await options.importService.errorsCsv(ctx.workspaceId, jobId.data)
+      const csv = await options.importService.errorsCsv(ctx, jobId.data)
       if (csv === null) {
         res.status(404).json({ error: 'not_found' })
         return

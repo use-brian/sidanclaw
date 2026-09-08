@@ -1,7 +1,7 @@
 /** CRM-only bearer router. Mount before bare JWT /api guards.
  * [COMP:api/crm-integration-auth]
  */
-import { Router, type Request, type Response } from 'express'
+import { Router, raw, type Request, type Response } from 'express'
 import { z } from 'zod'
 import {
   CRM_INTEGRATION_OPERATIONS, CRM_INTEGRATION_RESOURCE_CATALOG,
@@ -11,6 +11,10 @@ import {
 import type { CrmIntegrationPrincipal, CrmIntegrationStore } from '../db/crm-integration-store.js'
 import { CreateCrmIntegrationCredentialSchema } from '../db/crm-integration-store.js'
 import { createDbCrmIntakeReadStore, type DbCrmOperationsReadStore } from '../db/crm-intake-store.js'
+import { createCrmIntegrationRecordReadStore } from '../db/crm-integration-records.js'
+import { MAX_CRM_IMPORT_SOURCE_BYTES, type CrmImportSources } from '../db/crm-import-sources.js'
+import type { CrmProductionImportService } from '../crm-operations/import-service.js'
+import { requireImportOperation } from '../crm-operations/import-authority.js'
 import type { WorkspaceStore } from '../db/workspace-store.js'
 import { associationErrorResponse } from './association.js'
 import { associationMemberContext, crmAssociationRoutes } from './crm-association.js'
@@ -28,6 +32,8 @@ export function crmIntegrationRoutes(options: {
   credentials: Pick<CrmIntegrationStore, 'authenticate'>
   service: CrmOperationsServicePort
   association: AssociationServicePort
+  imports?: CrmProductionImportService
+  importSources?: CrmImportSources
   reads?: (principal: CrmIntegrationPrincipal) => DbCrmOperationsReadStore
 }): Router {
   const router = Router()
@@ -48,6 +54,57 @@ export function crmIntegrationRoutes(options: {
   }
   router.get('/catalog', (_req, res) => res.json({ operations: CRM_INTEGRATION_OPERATIONS,
     selectors: CRM_INTEGRATION_RESOURCE_CATALOG, grants: principal(res).grants }))
+  router.post('/operations/import-sources', (req, res, next) => {
+    try {
+      requireImportOperation(crmIntegrationContext(principal(res)), 'crm.imports.write')
+      if (!req.is('text/csv')) { res.status(415).json({ error: 'csv_required' }); return }
+      UUID.parse(req.get('Idempotency-Key'))
+      next()
+    } catch (error) { associationErrorResponse(error, res) }
+  }, raw({ type: 'text/csv', limit: MAX_CRM_IMPORT_SOURCE_BYTES, inflate: false }), endpoint(async (req, res) => {
+    if (!options.importSources) { res.status(503).json({ error: 'import_unavailable' }); return }
+    if (!Buffer.isBuffer(req.body)) throw new CrmOperationsError('invalid_input', 'CSV bytes are required.')
+    const result = await options.importSources.stage(crmIntegrationContext(principal(res)), UUID.parse(req.get('Idempotency-Key')), req.body)
+    res.status(result.created ? 201 : 200).json(result)
+  }))
+  const imports = () => {
+    if (!options.imports) throw new CrmOperationsError('not_found', 'CRM import service is unavailable.')
+    return options.imports
+  }
+  router.post('/operations/imports/dry-run', endpoint(async (req, res) => {
+    res.json(await imports().dryRun(crmIntegrationContext(principal(res)), req.body))
+  }))
+  router.post('/operations/imports', endpoint(async (req, res) => {
+    res.status(201).json(await imports().confirm(crmIntegrationContext(principal(res)), req.body))
+  }))
+  router.get('/operations/imports', endpoint(async (_req, res) => {
+    res.json({ jobs: await imports().list(crmIntegrationContext(principal(res))) })
+  }))
+  router.get('/operations/imports/:id', endpoint(async (req, res) => {
+    const job = await imports().get(crmIntegrationContext(principal(res)), UUID.parse(req.params.id))
+    if (!job) { res.status(404).json({ error: 'not_found' }); return }
+    res.json(job)
+  }))
+  for (const action of ['resume', 'cancel'] as const) router.post(`/operations/imports/:id/${action}`, endpoint(async (req, res) => {
+    z.object({}).strict().parse(req.body ?? {})
+    res.json(await imports()[action](crmIntegrationContext(principal(res)), UUID.parse(req.params.id)))
+  }))
+  router.get('/operations/imports/:id/errors.csv', endpoint(async (req, res) => {
+    const csv = await imports().errorsCsv(crmIntegrationContext(principal(res)), UUID.parse(req.params.id))
+    if (csv === null) { res.status(404).json({ error: 'not_found' }); return }
+    res.type('text/csv').attachment('crm-import-errors.csv').send(csv)
+  }))
+  router.get('/operations/records', endpoint(async (req, res) => {
+    res.json(await createCrmIntegrationRecordReadStore(principal(res)).list(req.query))
+  }))
+  router.get('/operations/records/:id', endpoint(async (req, res) => {
+    const record = await createCrmIntegrationRecordReadStore(principal(res)).get(req.params.id, req.query)
+    if (!record) { res.status(404).json({ error: 'not_found' }); return }
+    res.json({ record })
+  }))
+  router.get('/operations/record-fields', endpoint(async (_req, res) => {
+    res.json({ fields: await createCrmIntegrationRecordReadStore(principal(res)).fields() })
+  }))
   router.post('/operations/commands', endpoint(async (req, res) => {
     const context = crmIntegrationContext(principal(res))
     if (req.body && ['workspaceId', 'actor', 'authority'].some((key) => Object.hasOwn(req.body, key))) {

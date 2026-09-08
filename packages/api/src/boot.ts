@@ -226,6 +226,7 @@ import { crmIntakeRoutes } from './routes/crm-intake.js'
 import { crmOperationsRoutes } from './routes/crm-operations.js'
 import { createCrmOperationsService } from './crm-operations/service.js'
 import { createCrmProductionImportService } from './crm-operations/import-service.js'
+import { createCrmImportSources } from './db/crm-import-sources.js'
 import {
   crmWorkflowAdmission,
   createCrmDomainEventWorker,
@@ -4783,8 +4784,14 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     store: associationStore,
     associationService,
   }))
+  const crmImportSources = createCrmImportSources()
+  const crmProductionImports = createCrmProductionImportService({
+    filesApi: filesApi ?? undefined, sources: crmImportSources,
+    operations: crmOperationsService, entityLinks: entityLinksStore,
+  })
   app.use('/api/crm/integration', crmIntegrationRoutes({
     credentials: crmIntegrationStore, service: crmOperationsService, association: associationService,
+    imports: crmProductionImports, importSources: crmImportSources,
   }))
 
   app.use('/api/brain/mcp', brainMcpRoutes({
@@ -6521,11 +6528,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     workspaceStore,
     service: crmOperationsService,
     readStore: crmIntakeReadStore,
-    ...(filesApi ? { importService: createCrmProductionImportService({
-      filesApi,
-      operations: crmOperationsService,
-      entityLinks: entityLinksStore,
-    }) } : {}),
+    importService: crmProductionImports,
   }))
   // Brain inbox (verification surface). Open + hosted share this one mount: the
   // route's deps are all open (brain-inbox-store / entities-store / crm / sessions /

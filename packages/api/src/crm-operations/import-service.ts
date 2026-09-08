@@ -17,12 +17,16 @@ import type {
   EntityLinksStore,
   FilesApi,
   StableExternalIdentity,
+  CrmIntegrationGrant,
 } from '@use-brian/core'
+import { CrmOperationsError } from '@use-brian/core'
 import { createCompany, createContact, createDeal, updateContact } from '../db/crm.js'
 import { updateCrmCustomFields } from '../db/crm-r2.js'
 import { getEntityById, updateEntity } from '../db/entities-store.js'
 import { query } from '../db/client.js'
 import { parseCsv } from '../linkedin-import/csv.js'
+import { createCrmImportSources, type CrmImportSources } from '../db/crm-import-sources.js'
+import { requireImportCeiling, requireImportOperation, requireImportRowAuthority } from './import-authority.js'
 
 const MAX_IMPORT_BYTES = 30 * 1024 * 1024
 const MAX_IMPORT_ROWS = 100_000
@@ -69,16 +73,19 @@ export const CrmImportMappingSchema = z.object({
 })
 export type CrmImportMapping = z.infer<typeof CrmImportMappingSchema>
 
-export const CrmImportPreflightSchema = z.object({
-  stagedFileId: z.string().uuid(),
+const ImportInputSchema = z.object({
+  stagedFileId: z.string().uuid().optional(),
+  sourceId: z.string().uuid().optional(),
   entityKind: ImportEntityKindSchema,
   mapping: CrmImportMappingSchema,
 }).strict()
 
-export const CrmImportConfirmSchema = CrmImportPreflightSchema.extend({
+const hasOneSource = (input: { stagedFileId?: string; sourceId?: string }) => !!input.stagedFileId !== !!input.sourceId
+export const CrmImportPreflightSchema = ImportInputSchema.refine(hasOneSource, 'Choose exactly one import source.')
+export const CrmImportConfirmSchema = ImportInputSchema.extend({
   confirmed: z.literal(true),
   dryRunHash: z.string().regex(/^[0-9a-f]{64}$/),
-}).strict()
+}).strict().refine(hasOneSource, 'Choose exactly one import source.')
 
 type ImportInput = z.infer<typeof CrmImportPreflightSchema>
 type ConfirmInput = z.infer<typeof CrmImportConfirmSchema>
@@ -103,7 +110,8 @@ export type CrmImportDryRun = {
 export type CrmImportJob = {
   id: string
   workspaceId: string
-  stagedFileId: string
+  stagedFileId: string | null
+  sourceId: string | null
   entityKind: CrmImportEntityKind
   status: 'ready' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
   mapping: CrmImportMapping
@@ -121,6 +129,8 @@ type ImportJobRow = CrmImportJob & {
   mappingHash: string
   sourceHash: string
   createdByUserId: string | null
+  integrationCredentialId: string | null
+  integrationGrants: CrmIntegrationGrant[] | null
 }
 
 type ParsedImport = {
@@ -128,6 +138,7 @@ type ParsedImport = {
   sourceHash: string
   headers: string[]
   rows: Array<{ row: number; cells: string[]; malformedReason?: string }>
+  sourceAuthority?: { credentialId: string; grants: CrmIntegrationGrant[] }
 }
 
 type ImportCustomDefinition = {
@@ -136,7 +147,7 @@ type ImportCustomDefinition = {
   options: string[]
 }
 
-type ImportServiceContext = CrmOperationsContext & { actor: { kind: 'user'; userId: string } }
+type ImportServiceContext = CrmOperationsContext
 
 function hashBytes(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
@@ -338,17 +349,41 @@ function csvCell(value: unknown): string {
 }
 
 function jobProjection(row: ImportJobRow): CrmImportJob {
-  const { mappingHash: _mappingHash, sourceHash: _sourceHash, createdByUserId: _createdBy, ...job } = row
+  const { mappingHash: _mappingHash, sourceHash: _sourceHash, createdByUserId: _createdBy,
+    integrationCredentialId: _credential, integrationGrants: _grants, ...job } = row
   return job
 }
 
 export type CrmProductionImportService = ReturnType<typeof createCrmProductionImportService>
 
 export function createCrmProductionImportService(deps: {
-  filesApi: FilesApi
+  filesApi?: FilesApi
+  sources?: CrmImportSources
   operations: CrmOperationsServicePort
   entityLinks?: EntityLinksStore
 }) {
+  const sources = () => deps.sources ?? createCrmImportSources()
+  function sourceContext(context: ImportServiceContext, source: { credentialId: string; grants: CrmIntegrationGrant[] }): ImportServiceContext {
+    // Even a broader replacement key or member must keep this source's ceiling.
+    const grants = requireImportCeiling(context.authority.integration ?? source, source.grants)
+    return { ...context, authority: { ...context.authority, canConfigure: false,
+      trustedIdentitySources: [], integration: {
+        credentialId: context.actor.kind === 'integration_key' ? context.actor.credentialId : source.credentialId,
+        grants,
+      } } }
+  }
+  function jobContext(context: ImportServiceContext, job: ImportJobRow, mode: 'read' | 'write'): ImportServiceContext {
+    requireImportOperation(context, mode === 'read' ? 'crm.imports.read' : 'crm.imports.write')
+    if (!job.sourceId) {
+      if (context.authority.integration) throw new CrmOperationsError('not_authorized', 'CRM keys cannot access member file imports.')
+      return context
+    }
+    if (!job.integrationCredentialId || !job.integrationGrants) throw new CrmOperationsError('not_authorized', 'Import job authority is unavailable.')
+    const original = { credentialId: job.integrationCredentialId, grants: job.integrationGrants }
+    requireImportCeiling(context.authority.integration ?? original, original.grants, context.authority.integration ? mode : 'write')
+    return mode === 'write' ? sourceContext(context, original) : context
+  }
+
   async function customCatalogFor(
     context: ImportServiceContext,
     input: ImportInput,
@@ -382,14 +417,23 @@ export function createCrmProductionImportService(deps: {
   }
 
   async function parseStaged(context: ImportServiceContext, input: ImportInput): Promise<ParsedImport> {
-    const read = await deps.filesApi.readBytes({
-      workspaceId: context.workspaceId,
-      userId: context.actor.userId,
-      assistantKind: 'primary',
-      clearance: 'confidential',
-    }, input.stagedFileId)
-    if (!read.ok) throw new Error('The staged import file is unavailable.')
-    const bytes = read.value.bytes
+    requireImportOperation(context, 'crm.imports.write')
+    let bytes: Uint8Array
+    let sourceAuthority: ParsedImport['sourceAuthority']
+    if (input.sourceId) {
+      const source = await sources().read(context, input.sourceId)
+      sourceAuthority = { credentialId: source.credentialId, grants: source.integrationGrants }
+      bytes = source.bytes
+    } else {
+      if (context.actor.kind !== 'user' || context.authority.integration) throw new CrmOperationsError('not_authorized', 'CRM keys must use a CRM import source.')
+      if (!deps.filesApi || !input.stagedFileId) throw new CrmOperationsError('not_found', 'The staged import file is unavailable.')
+      const read = await deps.filesApi.readBytes({
+        workspaceId: context.workspaceId, userId: context.actor.userId,
+        assistantKind: 'primary', clearance: 'confidential',
+      }, input.stagedFileId)
+      if (!read.ok) throw new Error('The staged import file is unavailable.')
+      bytes = read.value.bytes
+    }
     if (bytes.byteLength > MAX_IMPORT_BYTES) throw new Error('CRM imports are limited to 30 MB per staged file.')
     const records = parseCsv(Buffer.from(bytes).toString('utf8'))
     const headerIndex = records.findIndex((record) => record.cells.some((cell) => cell.trim()))
@@ -402,19 +446,24 @@ export function createCrmProductionImportService(deps: {
     for (const rawIndex of Object.keys(input.mapping.columns)) {
       if (Number(rawIndex) >= headers.length) throw new Error(`Mapped column ${rawIndex} does not exist in the staged file.`)
     }
-    return { bytes, sourceHash: hashBytes(bytes), headers, rows }
+    return { bytes, sourceHash: hashBytes(bytes), headers, rows, sourceAuthority }
   }
 
   async function dryRun(context: ImportServiceContext, rawInput: ImportInput): Promise<CrmImportDryRun> {
+    requireImportOperation(context, 'crm.imports.write')
     const input = CrmImportPreflightSchema.parse(rawInput)
     if (input.mapping.trustedIdentitySource && !context.authority.canConfigure) {
-      throw new Error('Trusted identity imports require workspace owner or admin authority.')
+      throw new CrmOperationsError('not_authorized', 'Trusted identity imports require workspace owner or admin authority.')
     }
     const parsed = await parseStaged(context, input)
+    if (parsed.sourceAuthority) context = sourceContext(context, parsed.sourceAuthority)
+    // Reject an unauthorized mapping before returning any source-derived data.
+    requireImportRowAuthority(context, input.entityKind, {}, input.mapping.trustedIdentitySource)
     const customCatalog = await customCatalogFor(context, input)
     let failedRows = 0
     const sampleErrors: CrmImportError[] = []
     for (const row of parsed.rows) {
+      requireImportRowAuthority(context, input.entityKind, mappedValues(row.cells, input.mapping), input.mapping.trustedIdentitySource)
       const errors = validateMappedRow(input.entityKind, row, input.mapping, customCatalog)
       if (errors.length > 0) {
         failedRows += 1
@@ -435,6 +484,7 @@ export function createCrmProductionImportService(deps: {
   async function loadJob(workspaceId: string, jobId: string): Promise<ImportJobRow | null> {
     const result = await query<ImportJobRow>(
       `SELECT id, workspace_id AS "workspaceId", staged_file_id AS "stagedFileId",
+              source_id AS "sourceId", integration_credential_id AS "integrationCredentialId", integration_grants AS "integrationGrants",
               entity_kind AS "entityKind", status, mapping, mapping_hash AS "mappingHash",
               source_hash AS "sourceHash", total_rows AS "totalRows",
               processed_rows AS "processedRows", succeeded_rows AS "succeededRows",
@@ -451,6 +501,7 @@ export function createCrmProductionImportService(deps: {
     const input = CrmImportConfirmSchema.parse(rawInput)
     const preflightInput: ImportInput = {
       stagedFileId: input.stagedFileId,
+      sourceId: input.sourceId,
       entityKind: input.entityKind,
       mapping: input.mapping,
     }
@@ -462,18 +513,20 @@ export function createCrmProductionImportService(deps: {
       `INSERT INTO crm_import_jobs (
          id, workspace_id, staged_file_id, entity_kind, status, mapping,
          mapping_hash, source_hash, trusted_identity, total_rows,
-         created_by_user_id, confirmed_by_user_id
-       ) VALUES ($1,$2,$3,$4,'ready',$5::jsonb,$6,$7,$8,$9,$10,$10)
+         created_by_user_id, confirmed_by_user_id, source_id, integration_credential_id, integration_grants
+       ) VALUES ($1,$2,$3,$4,'ready',$5::jsonb,$6,$7,$8,$9,$10,$10,$11,$12,$13::jsonb)
        RETURNING id, workspace_id AS "workspaceId", staged_file_id AS "stagedFileId",
+         source_id AS "sourceId", integration_credential_id AS "integrationCredentialId", integration_grants AS "integrationGrants",
          entity_kind AS "entityKind", status, mapping, mapping_hash AS "mappingHash",
          source_hash AS "sourceHash", total_rows AS "totalRows",
          processed_rows AS "processedRows", succeeded_rows AS "succeededRows",
          failed_rows AS "failedRows", next_chunk_index AS "nextChunkIndex",
          created_by_user_id AS "createdByUserId", created_at AS "createdAt",
          updated_at AS "updatedAt", completed_at AS "completedAt"`,
-      [id, context.workspaceId, input.stagedFileId, input.entityKind, JSON.stringify(input.mapping),
+      [id, context.workspaceId, input.stagedFileId ?? null, input.entityKind, JSON.stringify(input.mapping),
         mappingHash(input.mapping), parsed.sourceHash, !!input.mapping.trustedIdentitySource,
-        parsed.rows.length, context.actor.userId],
+        parsed.rows.length, context.actor.kind === 'user' ? context.actor.userId : null, input.sourceId ?? null,
+        parsed.sourceAuthority?.credentialId ?? null, parsed.sourceAuthority ? JSON.stringify(parsed.sourceAuthority.grants) : null],
     )
     console.info('[crm-import] job confirmed', { workspaceId: context.workspaceId, jobId: id, totalRows: parsed.rows.length })
     return jobProjection(result.rows[0])
@@ -512,9 +565,11 @@ export function createCrmProductionImportService(deps: {
     customCatalog: ReadonlyMap<string, ImportCustomDefinition>,
   ): Promise<string | null> {
     const values = mappedValues(row.cells, job.mapping)
+    requireImportRowAuthority(context, job.entityKind, values, job.mapping.trustedIdentitySource)
+    const attributionUserId = context.actor.kind === 'user' ? context.actor.userId : await sources().attributionUser(context)
     const access: AccessContext = {
       workspaceId: context.workspaceId,
-      userId: context.actor.userId,
+      userId: attributionUserId,
       assistantId: '',
       assistantKind: 'primary',
       clearance: 'confidential',
@@ -542,7 +597,7 @@ export function createCrmProductionImportService(deps: {
           && typeof trustedMatch.attributes.external_ref === 'object'
           && !Array.isArray(trustedMatch.attributes.external_ref)
           ? trustedMatch.attributes.external_ref as Record<string, unknown> : {}
-        const record = await updateContact(context.actor.userId, trustedMatch.id, {
+        const record = await updateContact(attributionUserId, trustedMatch.id, {
           name: values.name,
           email: values.email,
           phone: values.phone,
@@ -553,7 +608,7 @@ export function createCrmProductionImportService(deps: {
         if (!record) throw new Error('The trusted email contact is no longer available.')
         entityId = record.id
       } else {
-        const record = await createContact(context.actor.userId, {
+        const record = await createContact(attributionUserId, {
           workspaceId: context.workspaceId,
           name: values.name,
           email: values.email,
@@ -567,7 +622,7 @@ export function createCrmProductionImportService(deps: {
         entityId = record.id
       }
     } else if (!entityId && job.entityKind === 'company') {
-      const record = await createCompany(context.actor.userId, {
+      const record = await createCompany(attributionUserId, {
         workspaceId: context.workspaceId,
         name: values.name,
         domain: values.domain,
@@ -580,7 +635,7 @@ export function createCrmProductionImportService(deps: {
       const legacyStage = ['lead', 'qualified', 'proposal', 'negotiation', 'won', 'lost'].includes(values.stage)
         ? values.stage as 'lead' | 'qualified' | 'proposal' | 'negotiation' | 'won' | 'lost'
         : 'lead'
-      const record = await createDeal(context.actor.userId, {
+      const record = await createDeal(attributionUserId, {
         workspaceId: context.workspaceId,
         contactId: values.contactId,
         companyId: values.companyId,
@@ -592,7 +647,7 @@ export function createCrmProductionImportService(deps: {
       entityId = record.id
       const entity = await getEntityById(access, entityId)
       if (entity) {
-        await updateEntity(context.actor.userId, entityId, {
+        await updateEntity(attributionUserId, entityId, {
           displayName: values.name,
           attributes: {
             ...entity.attributes,
@@ -611,7 +666,7 @@ export function createCrmProductionImportService(deps: {
     const contactId = job.entityKind === 'contact' ? entityId : values.contactId
     const importContext: CrmOperationsContext = {
       ...context,
-      actor: { kind: 'import', jobId: job.id, userId: context.actor.userId },
+      actor: context.actor.kind === 'user' ? { kind: 'import', jobId: job.id, userId: context.actor.userId } : context.actor,
     }
     if (job.entityKind === 'deal' && entityId && values.pipelineId && values.stageId) {
       await deps.operations.execute(importContext, {
@@ -662,8 +717,10 @@ export function createCrmProductionImportService(deps: {
   }
 
   async function resume(context: ImportServiceContext, jobId: string): Promise<CrmImportJob> {
+    requireImportOperation(context, 'crm.imports.write')
     const job = await loadJob(context.workspaceId, jobId)
     if (!job) throw new Error('Import job was not found.')
+    context = jobContext(context, job, 'write')
     if (job.status === 'completed' || job.status === 'cancelled') return jobProjection(job)
     const claimed = await query<{ id: string }>(
       `UPDATE crm_import_jobs SET status='running'
@@ -674,7 +731,7 @@ export function createCrmProductionImportService(deps: {
     )
     if (!claimed.rows[0]) throw new Error('Import job is already processing.')
     const parsed = await parseStaged(context, {
-      stagedFileId: job.stagedFileId,
+      stagedFileId: job.stagedFileId ?? undefined, sourceId: job.sourceId ?? undefined,
       entityKind: job.entityKind,
       mapping: job.mapping,
     })
@@ -683,7 +740,7 @@ export function createCrmProductionImportService(deps: {
       throw new Error('The staged import file changed after confirmation.')
     }
     const customCatalog = await customCatalogFor(context, {
-      stagedFileId: job.stagedFileId,
+      stagedFileId: job.stagedFileId ?? undefined, sourceId: job.sourceId ?? undefined,
       entityKind: job.entityKind,
       mapping: job.mapping,
     })
@@ -770,6 +827,10 @@ export function createCrmProductionImportService(deps: {
   }
 
   async function cancel(context: ImportServiceContext, jobId: string): Promise<CrmImportJob> {
+    requireImportOperation(context, 'crm.imports.write')
+    const original = await loadJob(context.workspaceId, jobId)
+    if (!original) throw new CrmOperationsError('not_found', 'Import job was not found.')
+    jobContext(context, original, 'write')
     await query(
       `UPDATE crm_import_jobs SET status='cancelled'
         WHERE workspace_id=$1 AND id=$2 AND status NOT IN ('completed','cancelled')`,
@@ -780,32 +841,54 @@ export function createCrmProductionImportService(deps: {
     return jobProjection(job)
   }
 
-  async function list(workspaceId: string): Promise<CrmImportJob[]> {
+  async function list(context: ImportServiceContext): Promise<CrmImportJob[]> {
+    requireImportOperation(context, 'crm.imports.read')
     const result = await query<ImportJobRow>(
       `SELECT id,workspace_id AS "workspaceId",staged_file_id AS "stagedFileId",
+         source_id AS "sourceId",integration_credential_id AS "integrationCredentialId",integration_grants AS "integrationGrants",
          entity_kind AS "entityKind",status,mapping,mapping_hash AS "mappingHash",
          source_hash AS "sourceHash",total_rows AS "totalRows",processed_rows AS "processedRows",
          succeeded_rows AS "succeededRows",failed_rows AS "failedRows",
          next_chunk_index AS "nextChunkIndex",created_by_user_id AS "createdByUserId",
          created_at AS "createdAt",updated_at AS "updatedAt",completed_at AS "completedAt"
-       FROM crm_import_jobs WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 50`,
-      [workspaceId],
+       FROM crm_import_jobs j WHERE workspace_id=$1
+         AND ($2::jsonb IS NULL OR (source_id IS NOT NULL AND integration_grants IS NOT NULL
+           AND EXISTS (SELECT 1 FROM jsonb_array_elements(j.integration_grants) required WHERE required->>'operation'='crm.imports.write')
+           AND NOT EXISTS (
+             SELECT 1 FROM jsonb_array_elements(j.integration_grants) required
+              WHERE NOT EXISTS (
+                SELECT 1 FROM jsonb_array_elements($2::jsonb) allowed
+                 WHERE allowed->>'operation'=regexp_replace(required->>'operation','\\.write$','.read')
+                   AND NOT EXISTS (
+                     SELECT 1 FROM jsonb_each(required->'selectors') dimension
+                      WHERE NOT coalesce(allowed->'selectors'->dimension.key='"all"'::jsonb
+                        OR (allowed->'selectors'->dimension.key) @> dimension.value,false)
+                   )
+              )
+           )))
+       ORDER BY created_at DESC,id DESC LIMIT 50`,
+      [context.workspaceId, context.authority.integration ? JSON.stringify(context.authority.integration.grants) : null],
     )
-    return result.rows.map(jobProjection)
+    return result.rows.map((row) => { jobContext(context, row, 'read'); return jobProjection(row) })
   }
 
-  async function get(workspaceId: string, jobId: string): Promise<CrmImportJob | null> {
-    const job = await loadJob(workspaceId, jobId)
+  async function get(context: ImportServiceContext, jobId: string): Promise<CrmImportJob | null> {
+    requireImportOperation(context, 'crm.imports.read')
+    const job = await loadJob(context.workspaceId, jobId)
+    if (job) jobContext(context, job, 'read')
     return job ? jobProjection(job) : null
   }
 
-  async function errorsCsv(workspaceId: string, jobId: string): Promise<string | null> {
-    if (!await loadJob(workspaceId, jobId)) return null
+  async function errorsCsv(context: ImportServiceContext, jobId: string): Promise<string | null> {
+    requireImportOperation(context, 'crm.imports.read')
+    const job = await loadJob(context.workspaceId, jobId)
+    if (!job) return null
+    jobContext(context, job, 'read')
     const result = await query<{ rowNumber: number; errorCode: string; fieldKey: string | null; message: string; rowSnapshot: Record<string, unknown> }>(
       `SELECT row_number AS "rowNumber",error_code AS "errorCode",field_key AS "fieldKey",
               message,row_snapshot AS "rowSnapshot"
          FROM crm_import_errors WHERE workspace_id=$1 AND job_id=$2 ORDER BY row_number,id`,
-      [workspaceId, jobId],
+      [context.workspaceId, jobId],
     )
     return [
       ['row', 'error_code', 'field', 'message', 'mapped_values'].join(','),
