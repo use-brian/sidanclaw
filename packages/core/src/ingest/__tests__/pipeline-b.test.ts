@@ -2473,6 +2473,63 @@ describe('[COMP:brain/pipeline-b] extraction prompt spotlighting', () => {
   })
 })
 
+// ── canonical_id rule is worded for the source's medium ───────────────
+//
+// The unconditional "prefer email as canonical_id" asked every source for a
+// value that chat and speech sources do not contain, and a model told to
+// prefer a value it cannot find constructs one. `attestedEmail` refuses to
+// write such a value; these assert the prompt stops asking for it.
+
+describe('[COMP:brain/pipeline-b] person canonical_id prompt rule', () => {
+  const goodOutputs = [
+    JSON.stringify({ summary: 'A note.', entities: [], edges: [], memories: [], tags: [] }),
+    JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' }),
+  ]
+
+  async function extractionPromptFor(sourceKind: PipelineBEpisode['sourceKind']): Promise<string> {
+    const { provider, requests } = capturingProvider(goodOutputs)
+    await processEpisode(baseEpisode({ sourceKind }), 'plain content', makeDeps({ provider }))
+    return requests[0]!.messages
+      .flatMap((m) => (typeof m.content === 'string' ? [m.content] : []))
+      .join('\n')
+  }
+
+  it('never tells any source to prefer an email it may not have', async () => {
+    for (const kind of ['manual_paste', 'email_thread', 'channel_window', 'recording'] as const) {
+      expect(await extractionPromptFor(kind)).not.toContain('prefer email as canonical_id')
+    }
+  })
+
+  it('requires the address to appear in the content for an email-bearing source', async () => {
+    const prompt = await extractionPromptFor('email_thread')
+    expect(prompt).toContain('appears verbatim in the content above')
+    expect(prompt).toContain('NEVER derive')
+  })
+
+  it('tells a chat archive that null is the expected answer', async () => {
+    // channel_window is the WhatsApp/WeChat archive: 334,943 messages, no
+    // email addresses, and the source that produced `benluk@example.com`.
+    const prompt = await extractionPromptFor('channel_window')
+    expect(prompt).toContain('canonical_id MUST be null')
+    expect(prompt).toContain('null is the expected answer')
+  })
+
+  it('tells a chat archive not to read a messaging id as an address', async () => {
+    // `85292052939@s.whatsapp.net` passes every email shape check there is.
+    const prompt = await extractionPromptFor('channel_window')
+    expect(prompt).toContain('@lid')
+    expect(prompt).toContain('85292052939@s.whatsapp.net')
+  })
+
+  it('still permits an address a chat genuinely contains', async () => {
+    // The store's own guard is verbatim-attestation, not source kind. A prompt
+    // that forbade the value outright would discard real data the writer would
+    // have accepted.
+    const prompt = await extractionPromptFor('voice_memo')
+    expect(prompt).toContain('unless an email address appears verbatim in the content above')
+  })
+})
+
 // ── Windowed extraction + truncation handling (2026-07-15 incident) ─────────
 //
 // A 95-min Cantonese transcript reached extraction at 62k tokens (the char cap

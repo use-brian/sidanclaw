@@ -6,7 +6,7 @@ describe('personExternalRefsFor', () => {
   const base = {
     window_id: 'w1',
     source_ref: { archive_instance_id: 'inst-1' } as Record<string, unknown>,
-    owner_user_id: 'o', workspace_id: 'ws', rendered_text: 't',
+    owner_user_id: 'o', workspace_id: 'ws', rendered_text: 't', source: 'whatsapp',
     message_count: 1, window_start: '', window_end: '',
     attempt_count: 0, lease_expires_at: '',
   }
@@ -58,6 +58,32 @@ describe('personExternalRefsFor', () => {
         externalRef: { provider: 'whatsapp', id: 'bbb@s.whatsapp.net', instance_id: 'inst-1' },
       },
     ])
+  })
+
+  it('names the provider from the window, not from an assumption', () => {
+    // The store archives more than one provider into the same queue. Minting a
+    // WeChat subject under `whatsapp` would bind it in the wrong namespace,
+    // where a colliding id belongs to a different person entirely.
+    expect(personExternalRefsFor({
+      ...base,
+      source: 'wechat',
+      participants: [{ sender_id: 'wxid_abc', display_name: 'Cindy' }],
+    })).toEqual([
+      {
+        name: 'Cindy',
+        externalRef: { provider: 'wechat', id: 'wxid_abc', instance_id: 'inst-1' },
+      },
+    ])
+  })
+
+  it('emits nothing when the window does not name a provider', () => {
+    // An unnamed provider is not a default; it is a namespace the consumer does
+    // not know, and a guessed one attaches this person to someone else.
+    expect(personExternalRefsFor({
+      ...base,
+      source: '',
+      participants: [{ sender_id: '8529@s.whatsapp.net', display_name: 'TW' }],
+    })).toEqual([])
   })
 
   it('emits nothing without the connector instance namespace', () => {

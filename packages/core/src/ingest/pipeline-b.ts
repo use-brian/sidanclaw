@@ -498,6 +498,49 @@ export function sourceKindCreatesTasks(sourceKind: SourceKind): boolean {
   return !RETROSPECTIVE_SOURCE_KINDS.has(sourceKind)
 }
 
+// Sources whose content is speech or chat, where an email address is not part
+// of the medium. Asking these for "a person's email" asks for something the
+// text does not contain, and a model told to prefer a value it cannot find
+// constructs one: "Ben Luk" became `benluk@example.com`, an address that
+// appears nowhere in 334,943 archived WhatsApp messages. `attestedEmail`
+// already refuses to WRITE such a value; this stops the prompt from asking for
+// it, which is where the fabrication is invited.
+//
+// Denylist, not allowlist: an unknown or newly added source keeps the
+// email-bearing wording, so this can only narrow the ask, never widen it.
+// Note the rule below is verbatim-only for EVERY source, so a genuine address
+// someone typed into a chat is still extracted — this set only changes what
+// the model is told to expect, not what it is permitted to report.
+const NON_EMAIL_BEARING_SOURCE_KINDS: ReadonlySet<SourceKind> = new Set<SourceKind>([
+  'channel_window', // archived WhatsApp/WeChat history
+  'recording',
+  'voice_memo',
+  'meeting',
+])
+
+/**
+ * The `canonical_id` rule for persons, worded for this episode's medium.
+ *
+ * Both variants say the same thing — the address must appear in the content —
+ * because that is exactly the condition `attestedEmail` enforces at the write
+ * boundary. A prompt that asks for more than the writer accepts spends tokens
+ * generating values that are then discarded, and trains the extractor toward
+ * the one failure the writer exists to catch.
+ */
+function personCanonicalIdRule(sourceKind: SourceKind): string {
+  if (NON_EMAIL_BEARING_SOURCE_KINDS.has(sourceKind)) {
+    return '- Persons: canonical_id MUST be null unless an email address appears '
+      + 'verbatim in the content above. This source is speech or chat and normally '
+      + 'contains none, so null is the expected answer. NEVER derive an address from '
+      + "a person's name, and never treat a messaging identifier "
+      + '(for example 85292052939@s.whatsapp.net, or anything ending @lid or @g.us) '
+      + 'as an email address.'
+  }
+  return '- Persons: use an email address as canonical_id ONLY when that exact '
+    + 'address appears verbatim in the content above; otherwise null. NEVER derive '
+    + "an address from a person's name or employer."
+}
+
 // v2 — explicit drop-with-reason slot. Persisted to analytics only
 // (NOT written to `memories`), so the LLM has a non-empty target for
 // status updates / ack noise / per-cycle counters that otherwise rot
@@ -805,7 +848,7 @@ Output JSON only, matching this exact shape:
   "entities": [
     { "kind": "person" | "company" | "project" | "product" | "repository",
       "display_name": "...",
-      "canonical_id": "<email | domain | url | null>",
+      "canonical_id": "<email | domain | url | null — see the Rules below; null is always valid>",
       "attributes": {} }
   ],
   "edges": [
@@ -843,7 +886,7 @@ Negative examples — DO NOT emit these as memories:
   - "Follow up with Bob next week" → tasks (text="Follow up with Bob", due_iso=<next week>). Memory's why_not_task test fails — this IS a TODO.
 ${taskPolicy}
 Rules:
-- Persons: prefer email as canonical_id; else null.
+${personCanonicalIdRule(episode.sourceKind)}
 - Companies: prefer registrable domain as canonical_id; else null.
 - Repositories: use for code repositories (GitHub, GitLab, Bitbucket, internal git). display_name is the repo name (e.g. "belvedere" or "acme/widget"); prefer the canonical URL (e.g. "https://github.com/acme/widget") as canonical_id when available. Distinct from "project" — a repository is a versioned codebase, a project is a piece of work.
 - Edge endpoints (source_ref / target_ref) MUST match an entity's display_name from this same payload.
