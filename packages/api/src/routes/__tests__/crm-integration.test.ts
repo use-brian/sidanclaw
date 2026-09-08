@@ -35,6 +35,8 @@ describe('[COMP:api/crm-integration-auth] Route isolation and shared adapters', 
     const result = await request(f.app).get('/api/crm/integration/catalog').set('Authorization', `Bearer ${token}`)
     expect(result.status).toBe(200)
     expect(result.body.grants).toEqual(principal.grants)
+    expect(result.body).toMatchObject({ workspaceId, credentialId })
+    expect(result.headers['cache-control']).toBe('no-store')
     expect(JSON.stringify(result.body)).not.toContain(token)
     expect(f.jwtGuard).not.toHaveBeenCalled()
     const response = await request(f.app).post('/api/crm/integration/operations/events').set('Authorization', `Bearer ${token}`).send({

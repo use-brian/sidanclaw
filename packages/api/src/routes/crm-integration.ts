@@ -13,6 +13,7 @@ import type { CrmIntegrationPrincipal, CrmIntegrationStore } from '../db/crm-int
 import { CreateCrmIntegrationCredentialSchema } from '../db/crm-integration-store.js'
 import { createDbCrmIntakeReadStore, type DbCrmOperationsReadStore } from '../db/crm-intake-store.js'
 import { createCrmIntegrationRecordReadStore } from '../db/crm-integration-records.js'
+import { CrmPipelinesQuerySchema, CrmRecordFieldsQuerySchema } from '../db/crm-config-catalog.js'
 import { MAX_CRM_IMPORT_SOURCE_BYTES, type CrmImportSources } from '../db/crm-import-sources.js'
 import type { CrmProductionImportService } from '../crm-operations/import-service.js'
 import { requireImportOperation } from '../crm-operations/import-authority.js'
@@ -54,7 +55,9 @@ export function crmIntegrationRoutes(options: {
   const endpoint = (fn: (req: Request, res: Response) => Promise<void>) => async (req: Request, res: Response) => {
     try { await fn(req, res) } catch (error) { associationErrorResponse(error, res) }
   }
-  router.get('/catalog', (_req, res) => res.json({ operations: CRM_INTEGRATION_OPERATIONS,
+  router.get('/catalog', (_req, res) => res.set('Cache-Control', 'no-store').json({
+    workspaceId: principal(res).workspaceId, credentialId: principal(res).credentialId,
+    operations: CRM_INTEGRATION_OPERATIONS,
     selectors: CRM_INTEGRATION_RESOURCE_CATALOG, grants: principal(res).grants }))
   router.post('/operations/import-sources', (req, res, next) => {
     try {
@@ -111,7 +114,13 @@ export function crmIntegrationRoutes(options: {
     res.json({ record })
   }))
   router.get('/operations/record-fields', endpoint(async (req, res) => {
-    res.json(await createCrmIntegrationRecordReadStore(principal(res)).fields(req.query))
+    res.json(await reads(res).listRecordFields(principal(res).workspaceId, CrmRecordFieldsQuerySchema.parse(req.query)))
+  }))
+  router.get('/operations/pipelines', endpoint(async (req, res) => {
+    const filters = CrmPipelinesQuerySchema.parse(req.query)
+    res.json(await reads(res).listPipelines(principal(res).workspaceId, {
+      ...filters, includeArchived: filters.includeArchived === 'true',
+    }))
   }))
   router.post('/operations/commands', endpoint(async (req, res) => {
     const context = crmIntegrationContext(principal(res))

@@ -7,6 +7,7 @@ import { CrmPageQuerySchema, requireCrmIntegrationOperation } from '@use-brian/c
 import { getPool } from './client.js'
 import type { CrmIntegrationPrincipal } from './crm-integration-store.js'
 import { queryCrmPage } from '../crm-operations/pagination.js'
+import { readCrmFieldCatalog } from './crm-config-catalog.js'
 
 export const CrmIntegrationRecordsQuerySchema = CrmPageQuerySchema.extend({
   kind: z.enum(['person', 'company', 'deal']).default('person'),
@@ -41,13 +42,7 @@ export function createCrmIntegrationRecordReadStore(principal: CrmIntegrationPri
     },
     async fields(raw: unknown = {}) {
       authorize()
-      const input = CrmPageQuerySchema.extend({ entityKind: z.enum(['person', 'company', 'deal']).optional() }).parse(raw)
-      return queryCrmPage(pool.query.bind(pool), { workspaceId: principal.workspaceId, resource: 'crm.record-fields', key: 'fields',
-        query: { limit: input.limit, cursor: input.cursor, createdAfter: input.createdAfter, createdBefore: input.createdBefore },
-        sql: `SELECT id,entity_kind AS "entityKind",field_key AS "fieldKey",label,
-        field_type AS "fieldType",options,is_required AS "isRequired",position,created_at AS "createdAt",updated_at AS "updatedAt"
-        FROM crm_field_definitions WHERE workspace_id=$1 AND archived_at IS NULL AND ($2::text IS NULL OR entity_kind=$2)`,
-        params: [principal.workspaceId, input.entityKind ?? null] })
+      return readCrmFieldCatalog(principal.workspaceId, raw, pool.query.bind(pool))
     },
   }
 }

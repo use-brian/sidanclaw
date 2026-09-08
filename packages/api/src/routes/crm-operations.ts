@@ -46,6 +46,7 @@ import {
   pruneCrmOperationsRetention,
 } from '../crm-operations/privacy.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { CrmPipelinesQuerySchema, CrmRecordFieldsQuerySchema } from '../db/crm-config-catalog.js'
 
 const SaveDefinitionBody = SaveCrmIntakeDefinitionCommandSchema.omit({ kind: true }).strict()
 const CreateCredentialBody = CreateCrmIntakeCredentialCommandSchema.omit({ kind: true }).strict()
@@ -159,10 +160,6 @@ const UpdateEntitlementBody = z.object({
 )
 const RecordParticipationBody = RecordCrmParticipationCommandSchema.omit({ kind: true }).strict()
 const UpdateParticipationBody = UpdateCrmParticipationCommandSchema.omit({ kind: true, participationId: true }).strict()
-const PipelineListQuery = CrmPageQuerySchema.extend({
-  entityKind: z.literal('deal').default('deal'),
-  includeArchived: z.enum(['true', 'false']).optional(),
-}).strict()
 const SetPipelineStageBody = SetDealPipelineStageCommandSchema
   .omit({ kind: true, dealId: true }).strict()
 const OperationsLogQuery = CrmPageQuerySchema
@@ -657,10 +654,23 @@ export function crmOperationsRoutes(options: Options): Router {
     } catch (error) { writeError(res, error) }
   })
 
+  router.get('/:workspaceId/operations/record-fields', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    const filters = CrmRecordFieldsQuerySchema.safeParse(req.query)
+    if (!filters.success) {
+      res.status(400).json({ error: 'invalid_input', issues: filters.error.issues })
+      return
+    }
+    try {
+      res.json(await options.readStore.listRecordFields(ctx.workspaceId, filters.data))
+    } catch (error) { writeError(res, error) }
+  })
+
   router.get('/:workspaceId/operations/pipelines', async (req, res) => {
     const ctx = await context(req, res)
     if (!ctx) return
-    const filters = PipelineListQuery.safeParse(req.query)
+    const filters = CrmPipelinesQuerySchema.safeParse(req.query)
     if (!filters.success) {
       res.status(400).json({ error: 'invalid_input', issues: filters.error.issues })
       return

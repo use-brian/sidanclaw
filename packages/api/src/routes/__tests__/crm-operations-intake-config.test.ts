@@ -41,6 +41,7 @@ function build(role: 'owner' | 'admin' | 'member' = 'owner') {
     listEntitlements: vi.fn().mockResolvedValue({ entitlements: [{ id: ENTITLEMENT_ID, contactId: CONTACT_ID }], nextCursor: null }),
     listEvents: vi.fn().mockResolvedValue({ events: [{ id: EVENT_ID, slug: 'annual-meeting' }], nextCursor: null }),
     listParticipation: vi.fn().mockResolvedValue({ participation: [{ id: PARTICIPATION_ID, eventId: EVENT_ID }], nextCursor: null }),
+    listRecordFields: vi.fn().mockResolvedValue({ fields: [], nextCursor: null }),
     listPipelines: vi.fn().mockResolvedValue({ pipelines: [{
       id: PIPELINE_ID, name: 'Renewals', stages: [{ id: STAGE_ID, name: 'Review' }],
     }], nextCursor: null }),
@@ -62,6 +63,15 @@ function build(role: 'owner' | 'admin' | 'member' = 'owner') {
 }
 
 describe('[COMP:api/crm-operations-route] intake configuration REST adapter', () => {
+  it('discovers fields for members using only the pure paginated read port', async () => {
+    const f = build('member')
+    const result = await request(f.app).get(`/api/crm/${WORKSPACE_ID}/operations/record-fields`)
+      .query({ entityKind: 'deal', includeArchived: 'true', limit: 17 })
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual({ fields: [], nextCursor: null })
+    expect(f.readStore.listRecordFields).toHaveBeenCalledWith(WORKSPACE_ID, { entityKind: 'deal', includeArchived: 'true', limit: 17 })
+    expect(f.service.execute).not.toHaveBeenCalled()
+  })
   it('rejects invalid page parameters before requesting a collection', async () => {
     const f = build()
     for (const path of ['intake-definitions', 'intake-credentials', 'consent-purposes', 'imports']) {

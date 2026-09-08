@@ -20,6 +20,7 @@ import { query } from './client.js'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { verifySecret } from './api-key-store.js'
 import { createDbCrmSegmentStore } from './crm-segment-store.js'
+import { readCrmFieldCatalog } from './crm-config-catalog.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const KEY_PREFIX = 'sk_intake_'
@@ -54,6 +55,7 @@ export type CrmIntakeReadStore = {
 }
 
 export type DbCrmOperationsReadStore = CrmIntakeReadStore & CrmOperationsReadPort & {
+  listRecordFields(workspaceId: string, filters?: unknown): Promise<CrmPage<'fields'>>
   resolveLegacyPipelineStage(workspaceId: string, stageKey: string): Promise<{
     pipelineId: string
     stageId: string
@@ -413,6 +415,11 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
         [workspaceId, filters.contactId ?? null, filters.eventId ?? null,
           filters.sourceKind ?? null, filters.status ?? null, select(workspaceId, 'crm.participation.read', 'eventIds')],
       )
+    },
+
+    async listRecordFields(workspaceId, filters = {}) {
+      authorize(workspaceId, 'crm.records.read')
+      return readCrmFieldCatalog(workspaceId, filters)
     },
 
     async listPipelines(workspaceId, filters = {}) {
