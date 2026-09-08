@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth-fetch", () => ({ authFetch: vi.fn() }));
 
@@ -11,7 +11,27 @@ beforeEach(() => {
   vi.resetAllMocks();
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.resetModules();
+});
+
 describe("syncChannelSlashCommands", () => {
+  it.each(["PUBLIC_API_URL", "NEXT_PUBLIC_API_URL"])("uses the configured hosted API via %s", async (name) => {
+    vi.stubEnv(name, "https://api.usebrian.ai");
+    vi.resetModules();
+    const { authFetch: hostedFetch } = await import("@/lib/auth-fetch");
+    const { syncChannelSlashCommands: hostedSync } = await import("../channels");
+    vi.mocked(hostedFetch).mockResolvedValue(new Response(JSON.stringify({ commandCount: 1, omittedCount: 0 })));
+
+    await hostedSync("workspace/one", "channel/two");
+
+    expect(hostedFetch).toHaveBeenCalledWith(
+      "https://api.usebrian.ai/api/workspaces/workspace%2Fone/channels/channel%2Ftwo/slash-commands/sync",
+      { method: "POST" },
+    );
+  });
+
   it("POSTs to the same-origin encoded channel route and parses the receipt", async () => {
     mockAuthFetch.mockResolvedValue(
       new Response(JSON.stringify({ commandCount: 7, omittedCount: 2 }), {

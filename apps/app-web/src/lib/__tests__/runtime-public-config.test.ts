@@ -70,6 +70,39 @@ describe("[COMP:app-web/runtime-public-config] runtime public config", () => {
     expect(resolveRuntimePublicConfig({ NODE_ENV: "production" }).apiUrl).toBe("");
   });
 
+  it("preserves hosted build-only public configuration", () => {
+    expect(resolveRuntimePublicConfig({}, {
+      NEXT_PUBLIC_API_URL: "https://api.usebrian.ai",
+      NEXT_PUBLIC_DOC_SYNC_URL: "wss://docs.usebrian.ai",
+      NEXT_PUBLIC_PRIMARY_AUTH_URL: "https://usebrian.ai",
+      NEXT_PUBLIC_GOOGLE_API_KEY: "browser-picker-key",
+    })).toMatchObject({
+      apiUrl: "https://api.usebrian.ai",
+      docSyncUrl: "wss://docs.usebrian.ai",
+      primaryAuthUrl: "https://usebrian.ai",
+      googleApiKey: "browser-picker-key",
+      edition: "hosted",
+    });
+  });
+
+  it("lets runtime values, including same-origin, override hosted build defaults", () => {
+    const build = { NEXT_PUBLIC_API_URL: "https://api.usebrian.ai" };
+    expect(resolveRuntimePublicConfig({ PUBLIC_API_URL: "" }, build).apiUrl).toBe("");
+    expect(resolveRuntimePublicConfig({ PUBLIC_API_URL: "https://api.customer.example" }, build).apiUrl)
+      .toBe("https://api.customer.example");
+    expect(resolveRuntimePublicConfig({ NEXT_PUBLIC_API_URL: "https://api.preview.example" }, build).apiUrl)
+      .toBe("https://api.preview.example");
+  });
+
+  it("retains the hosted Drive Picker key alias without serializing secrets", () => {
+    const config = resolveRuntimePublicConfig({
+      GOOGLE_API_KEY: "browser-picker-key",
+      GOOGLE_CLIENT_SECRET: "private-secret",
+    });
+    expect(config.googleApiKey).toBe("browser-picker-key");
+    expect(runtimePublicConfigScript(config)).not.toContain("private-secret");
+  });
+
   it("prefers runtime provider ids over compatibility build values", () => {
     const config = resolveRuntimePublicConfig({
       GOOGLE_CLIENT_ID: "runtime-google",
