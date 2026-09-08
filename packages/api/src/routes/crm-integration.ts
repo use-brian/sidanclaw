@@ -7,6 +7,7 @@ import {
   CRM_INTEGRATION_OPERATIONS, CRM_INTEGRATION_RESOURCE_CATALOG,
   CrmOperationsCommandSchema, CrmOperationsError, assertCrmOperationsAuthority,
   CrmPageQuerySchema, requireCrmIntegrationOperation,
+  type CrmDeliveryServicePort,
   type CrmOperationsContext, type CrmOperationsServicePort, type AssociationServicePort,
 } from '@use-brian/core'
 import type { CrmIntegrationPrincipal, CrmIntegrationStore } from '../db/crm-integration-store.js'
@@ -35,6 +36,7 @@ export function crmIntegrationRoutes(options: {
   credentials: Pick<CrmIntegrationStore, 'authenticate'>
   service: CrmOperationsServicePort
   association: AssociationServicePort
+  deliveries?: CrmDeliveryServicePort
   imports?: CrmProductionImportService
   importSources?: CrmImportSources
   reads?: (principal: CrmIntegrationPrincipal) => DbCrmOperationsReadStore
@@ -122,6 +124,14 @@ export function crmIntegrationRoutes(options: {
       ...filters, includeArchived: filters.includeArchived === 'true',
     }))
   }))
+  router.get('/operations/deliveries/:id', endpoint(async (req,res) => {
+    const context=crmIntegrationContext(principal(res))
+    requireCrmIntegrationOperation(principal(res),'crm.delivery.read')
+    if(!options.deliveries) {res.status(503).json({error:'delivery_unavailable'});return}
+    const receipt=await options.deliveries.get(context,UUID.parse(req.params.id))
+    if(!receipt) {res.status(404).json({error:'not_found'});return}
+    res.set('Cache-Control','no-store').json({receipt})
+  }))
   router.post('/operations/commands', endpoint(async (req, res) => {
     const context = crmIntegrationContext(principal(res))
     if (req.body && ['workspaceId', 'actor', 'authority'].some((key) => Object.hasOwn(req.body, key))) {
@@ -135,7 +145,7 @@ export function crmIntegrationRoutes(options: {
   const commands = [
     ['/intake-definitions', 'save_intake_definition'], ['/consent-purposes', 'save_consent_purpose'],
     ['/entitlement-plans', 'save_entitlement_plan'], ['/events', 'save_event'], ['/submissions', 'record_submission'],
-    ['/entitlements', 'grant_entitlement'], ['/participation', 'record_participation'],
+    ['/deliveries', 'send_message'], ['/entitlements', 'grant_entitlement'], ['/participation', 'record_participation'],
   ] as const
   for (const [path, kind] of commands) router.post(`/operations${path}`, endpoint(async (req, res) => {
     const context = crmIntegrationContext(principal(res))

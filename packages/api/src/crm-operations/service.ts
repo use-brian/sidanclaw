@@ -28,6 +28,7 @@ import {
   type CrmOperationsCommandResult,
   type CrmOperationsContext,
   type CrmOperationsServicePort,
+  type CrmDeliveryServicePort,
 } from '@use-brian/core'
 import type {
   AuditIdentity,
@@ -43,6 +44,7 @@ import { assertIntakeVerificationConfiguration, verifyIntakeIdentity } from './i
 type ServiceClock = () => Date
 
 export type CrmOperationsServiceOptions = {
+  deliveries?: CrmDeliveryServicePort
   now?: ServiceClock
   randomCredentialId?: () => string
   randomSecret?: () => string
@@ -447,6 +449,11 @@ export function createCrmOperationsService(
       const context = CrmOperationsContextSchema.parse(rawContext)
       const command = CrmOperationsCommandSchema.parse(rawCommand)
       assertCrmOperationsAuthority(context, command)
+      if(command.kind==='send_message') {
+        if(!options.deliveries) throw new CrmOperationsError('conflict','CRM delivery is unavailable.',{reason:'delivery_unavailable'})
+        const sent=await options.deliveries.send(context,command)
+        return result(command.kind,{...sent.receipt},{created:!sent.duplicate,duplicate:sent.duplicate})
+      }
       const now = clock()
       const occurredAt = now.toISOString()
       const identity = actorAuditIdentity(context.actor)
@@ -472,6 +479,12 @@ export function createCrmOperationsService(
           if (saved.changed) await audit(tx,context.actor,{ action:'crm.mailbox_policy.approved',subjectKind:'mailbox_policy',
             subjectId:recordId(saved.record,'mailbox policy'),details:{ version:saved.record.version,managed:saved.record.managed } })
           return result(command.kind,saved.record,{ duplicate:!saved.changed })
+        }
+        if(command.kind==='save_mailbox_integration_grant') {
+          const saved=await tx.saveMailboxIntegrationGrant(command)
+          if(saved.changed) await audit(tx,context.actor,{action:'crm.mailbox_integration_grant.approved',subjectKind:'mailbox_integration_grant',
+            subjectId:recordId(saved.record,'mailbox grant'),details:{version:saved.record.version,enabled:saved.record.enabled}})
+          return result(command.kind,saved.record,{duplicate:!saved.changed})
         }
         if (command.kind === 'save_privacy_policy') {
           const saved = await tx.savePrivacyPolicy(command)

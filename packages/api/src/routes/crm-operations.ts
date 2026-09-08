@@ -28,6 +28,9 @@ import {
   SaveCrmPrivacyPolicyCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
   SaveCrmManagedMailboxPolicyCommandSchema,
+  SaveCrmMailboxIntegrationGrantCommandSchema,
+  SendCrmMessageCommandSchema,
+  type CrmDeliveryServicePort,
   UpdateCrmSubmissionCommandSchema,
   UpdateCrmEntitlementCommandSchema,
   UpdateCrmParticipationCommandSchema,
@@ -50,7 +53,7 @@ import {
 } from '../crm-operations/privacy.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
 import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
-import { readCrmManagedMailboxPolicy } from '../crm-operations/delivery-policy.js'
+import { readCrmManagedMailboxPolicy, readCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
 import { query } from '../db/client.js'
 import { CrmPipelinesQuerySchema, CrmRecordFieldsQuerySchema } from '../db/crm-config-catalog.js'
 
@@ -179,6 +182,7 @@ type Options = {
   service: CrmOperationsServicePort
   readStore: DbCrmOperationsReadStore
   importService?: CrmProductionImportService
+  deliveries?: CrmDeliveryServicePort
 }
 
 function writeError(res: Response, error: unknown): void {
@@ -885,6 +889,44 @@ export function crmOperationsRoutes(options: Options): Router {
     if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
     try { res.json(await listCrmAddressSuppression({ query },ctx.workspaceId,CrmPageQuerySchema.parse(req.query))) }
     catch (error) { writeError(res,error) }
+  })
+  router.post('/:workspaceId/operations/deliveries', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    try {
+      const raw=z.record(z.unknown()).parse(req.body)
+      if(Object.hasOwn(raw,'kind')) throw new CrmOperationsError('invalid_input','Use only delivery business fields.')
+      const command=SendCrmMessageCommandSchema.parse({...raw,kind:'send_message'})
+      const result=await options.service.execute(ctx,command)
+      res.status(result.created?201:200).json(result)
+    } catch(error) {writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/deliveries/:deliveryId', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    try {
+      if(!options.deliveries) {res.status(503).json({error:'delivery_unavailable'});return}
+      const receipt=await options.deliveries.get(ctx,CrmOperationsUuidSchema.parse(req.params.deliveryId))
+      if(!receipt) {res.status(404).json({error:'not_found'});return}
+      res.set('Cache-Control','no-store').json({receipt})
+    } catch(error) {writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/mailbox-policies/:connectorInstanceId/integration-grants/:credentialId', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    if(!ctx.authority.canConfigure) {res.status(403).json({error:'not_authorized'});return}
+    try {res.set('Cache-Control','no-store').json({grant:await readCrmMailboxIntegrationGrant(ctx.workspaceId,
+      CrmOperationsUuidSchema.parse(req.params.connectorInstanceId),CrmOperationsUuidSchema.parse(req.params.credentialId))})}
+    catch(error) {writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/mailbox-policies/:connectorInstanceId/integration-grants/:credentialId', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    try {
+      const command=SaveCrmMailboxIntegrationGrantCommandSchema.parse({...req.body,kind:'save_mailbox_integration_grant',
+        connectorInstanceId:req.params.connectorInstanceId,credentialId:req.params.credentialId})
+      res.json(await options.service.execute(ctx,command))
+    } catch(error) {writeError(res,error)}
   })
   router.get('/:workspaceId/operations/mailbox-policies/:connectorInstanceId', async (req,res) => {
     const ctx = await context(req,res)

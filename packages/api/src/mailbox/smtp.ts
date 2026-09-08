@@ -117,7 +117,9 @@ export async function sendComposedMessage(
       auth: { user: account.email, pass: account.appPassword },
     })
     try {
-      await transport.sendMail(frozen)
+      const accepted = await transport.sendMail(frozen)
+      // SMTP may accept only a subset. Never report the whole envelope as sent.
+      if (Array.isArray(accepted.rejected) && accepted.rejected.length) throw new Error('SMTP recipient acceptance was partial')
     } finally {
       transport.close()
     }

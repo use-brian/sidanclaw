@@ -24,6 +24,9 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_privacy_policies',
   'crm_address_suppression_tombstones',
   'crm_managed_mailbox_policies',
+  'crm_mailbox_integration_grants',
+  'crm_delivery_receipts',
+  'crm_delivery_receipt_contacts',
   'association_external_identities',
   'association_enquiries',
   'association_enquiry_notes',
@@ -73,6 +76,18 @@ EXPORT_PROJECTIONS.crm_import_sources = [
 ].join(',')
 EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
 
+// Claim tokens and raw request fingerprints are private replay machinery.
+EXPORT_PROJECTIONS.crm_delivery_receipts = 'workspace_id,delivery_id,connector_instance_id,provider_key,purpose_key,actor_kind,actor_credential_id,acting_user_id,envelope,status,provider_receipt,error_code,accepted_at,confirmed_at,redacted_at,created_at,updated_at'
+
+/** Retire content without reopening a stable delivery identity. Caller holds person locks. */
+export async function redactCrmDeliveryReceipts(client:pg.PoolClient,workspaceId:string,contactId?:string):Promise<void> {
+  await client.query(`UPDATE crm_delivery_receipts r SET envelope=NULL,provider_receipt=NULL,redacted_at=COALESCE(redacted_at,clock_timestamp()),
+    status=CASE WHEN status='dispatching' THEN 'needs_reconciliation' ELSE status END,
+    error_code=CASE WHEN status='dispatching' THEN 'delivery_erased_during_dispatch' ELSE error_code END,updated_at=clock_timestamp()
+    WHERE workspace_id=$1 AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM crm_delivery_receipt_contacts c
+      WHERE c.workspace_id=r.workspace_id AND c.delivery_id=r.delivery_id AND c.contact_id=$2))`,[workspaceId,contactId ?? null])
+}
+
 export type CrmOperationsPrivacyExport = {
   schema: 'crm-operations-privacy-v1'
   workspaceId: string
@@ -112,6 +127,7 @@ export async function redactCrmOperationsForContact(
   )
   if (!person.rows[0]?.isPerson) return
   await retainCrmAddressSuppression(client,workspaceId,contactId)
+  await redactCrmDeliveryReceipts(client,workspaceId,contactId)
   // All four native aliases share the entity identity. Keep an existence
   // receipt, not another copy of personal free text or historical snapshots.
   await client.query(

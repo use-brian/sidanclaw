@@ -454,6 +454,50 @@ export const ReleaseCrmAddressSuppressionCommandSchema = z.object({
   evidenceId: CrmOperationsUuidSchema,
 }).strict()
 
+export const SaveCrmMailboxIntegrationGrantCommandSchema = z.object({
+  kind: z.literal('save_mailbox_integration_grant'),
+  credentialId: CrmOperationsUuidSchema,
+  connectorInstanceId: CrmOperationsUuidSchema,
+  expectedVersion: z.number().int().min(0).max(2147483646),
+  confirmed: z.literal(true),
+  enabled: z.boolean(),
+}).strict()
+
+const DeliveryAddress = z.string().trim().email().max(320).refine(value => !/[\r\n]/.test(value))
+const DeliveryAttachment = z.object({
+  filename: z.string().min(1).max(255).refine(value => !/[\r\n\0]/.test(value)),
+  mime: z.string().min(1).max(150).regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/),
+  contentBase64: z.string().max(8 * 1024 * 1024).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+}).strict()
+export const SendCrmMessageCommandSchema = z.object({
+  kind: z.literal('send_message'),
+  deliveryId: CrmOperationsUuidSchema,
+  connectorInstanceId: CrmOperationsUuidSchema,
+  purposeKey: CrmOperationsStableKeySchema,
+  templateKey: CrmOperationsStableKeySchema.optional(),
+  to: z.array(DeliveryAddress).min(1).max(1000),
+  cc: z.array(DeliveryAddress).max(1000).default([]),
+  bcc: z.array(DeliveryAddress).max(1000).default([]),
+  subject: z.string().max(998).refine(value => !/[\r\n\0]/.test(value)),
+  body: z.string().max(200_000),
+  attachments: z.array(DeliveryAttachment).max(20).default([]),
+}).strict().superRefine((value,ctx) => {
+  if(value.to.length+value.cc.length+value.bcc.length>1000) ctx.addIssue({code:z.ZodIssueCode.custom,message:'A delivery may contain at most 1000 recipients.'})
+  if(new TextEncoder().encode(JSON.stringify(value)).byteLength>8*1024*1024) ctx.addIssue({code:z.ZodIssueCode.custom,message:'A delivery envelope may contain at most 8 MiB.'})
+})
+export type SendCrmMessageCommand = z.infer<typeof SendCrmMessageCommandSchema>
+export type CrmDeliveryReceipt = {
+  deliveryId: string; connectorInstanceId: string; providerKey: string; purposeKey: string;
+  status: 'pending'|'dispatching'|'sent'|'blocked'|'failed'|'needs_reconciliation';
+  errorCode: string|null; providerReceipt: Record<string,unknown>|null;
+  acceptedAt: string|null; confirmedAt: string|null; redactedAt: string|null;
+  createdAt: string; updatedAt: string;
+}
+export type CrmDeliveryServicePort = {
+  send(context: CrmOperationsContext, command: SendCrmMessageCommand): Promise<{receipt: CrmDeliveryReceipt; duplicate: boolean}>
+  get(context: CrmOperationsContext, deliveryId: string): Promise<CrmDeliveryReceipt|null>
+}
+
 export const SaveCrmManagedMailboxPolicyCommandSchema = z.object({
   kind: z.literal('save_managed_mailbox_policy'),
   connectorInstanceId: CrmOperationsUuidSchema,
@@ -476,6 +520,8 @@ export const CrmOperationsCommandSchema = z.union([
   SaveCrmPrivacyPolicyCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
   SaveCrmManagedMailboxPolicyCommandSchema,
+  SaveCrmMailboxIntegrationGrantCommandSchema,
+  SendCrmMessageCommandSchema,
   SaveCrmEntitlementPlanCommandSchema,
   SaveCrmEventCommandSchema,
   SaveCrmIntakeDefinitionCommandSchema,
@@ -605,13 +651,14 @@ export function commandRequiresConfigurationAuthority(command: CrmOperationsComm
     || command.kind === 'save_privacy_policy'
     || command.kind === 'release_address_suppression'
     || command.kind === 'save_managed_mailbox_policy'
+    || command.kind === 'save_mailbox_integration_grant'
 }
 
 export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
-  if (['save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy'].includes(command.kind) && (context.actor.kind !== 'user'
+  if (['save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy', 'save_mailbox_integration_grant'].includes(command.kind) && (context.actor.kind !== 'user'
     || !['owner', 'admin'].includes(context.authority.role))) {
     throw new CrmOperationsError('not_authorized', 'Policy approval and suppression release require a workspace owner or admin member.')
   }
@@ -620,6 +667,7 @@ export function assertCrmOperationsAuthority(
   }
   if (context.authority.integration) {
     const operations: Partial<Record<CrmOperationsCommand['kind'], CrmIntegrationOperation>> = {
+      send_message: 'crm.delivery.dispatch',
       create_record_field: 'crm.catalog.configure', update_record_field: 'crm.catalog.configure',
       set_record_field_archived: 'crm.catalog.configure', create_pipeline: 'crm.catalog.configure',
       update_pipeline: 'crm.catalog.configure', create_pipeline_stage: 'crm.catalog.configure',

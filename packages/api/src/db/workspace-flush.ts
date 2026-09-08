@@ -41,6 +41,7 @@
 
 import { getPool } from './client.js'
 import { notifyWorkspaceChange } from '../brain-stream/notify.js'
+import { redactCrmDeliveryReceipts } from '../crm-operations/privacy.js'
 import { retainWorkspaceAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 
 /**
@@ -110,6 +111,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'entity_merges',
   // Retired-receipt parent FKs refuse deletion unless receipts leave first.
   'crm_intake_idempotency',
+  'crm_delivery_receipt_contacts',
   'entities',
   'memories',
   'consolidation_logs',
@@ -198,6 +200,8 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'crm_privacy_policies',
   'crm_address_suppression_tombstones',
   'crm_managed_mailbox_policies',
+  'crm_mailbox_integration_grants',
+  'crm_delivery_receipts',
   'crm_integration_credentials',
   'crm_integration_credential_grants',
   'workspace_knowledge_sources',
@@ -267,6 +271,7 @@ export async function flushWorkspaceData(
       throw new WorkspaceFlushNotOwnerError()
     }
     await retainWorkspaceAddressSuppression(client,workspaceId)
+    await redactCrmDeliveryReceipts(client,workspaceId)
 
     const optional = await client.query<{ name: string; installed: boolean }>(
       `SELECT name, to_regclass(format('public.%I', name)) IS NOT NULL AS installed

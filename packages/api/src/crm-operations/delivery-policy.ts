@@ -1,11 +1,16 @@
 /** Shared managed-mailbox policy and final recipient admission. [COMP:crm/delivery-policy] */
 import type { PoolClient } from 'pg'
 import { z } from 'zod'
-import { CrmOperationsError, evaluateCrmSendability, type CrmOperationsCommand, type CrmOperationsContext } from '@use-brian/core'
+import { CrmOperationsError, evaluateCrmSendability, type CrmOperationsCommand, type CrmOperationsContext, CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, requireCrmIntegrationResources, type CrmIntegrationAuthority } from '@use-brian/core'
 import { getPool, query } from '../db/client.js'
+import { lockCrmIntegrationCredential } from '../db/crm-integration-store.js'
+import { crmDeliveryHooks, crmMailboxAccountHash, type CrmMailAdmission } from './delivery-scope.js'
 import { readCrmAddressSuppressions } from './suppression-tombstones.js'
 
-export type CrmMailContext = { userId: string; workspaceId?: string; connectorInstanceId?: string }
+type MemberMailContext = { userId: string; workspaceId?: string; connectorInstanceId?: string; expectedAccountHash?: string }
+export type CrmMailContext = MemberMailContext | {
+  workspaceId: string; connectorInstanceId: string; integration: CrmIntegrationAuthority; expectedAccountHash?: string
+}
 export type CrmMailIntent = { crmPurposeKey?: string; crmTemplateKey?: string }
 type Provider = 'gmail' | 'imap' | 'agentmail'
 // This is the closed set of mail transports wired below, not all built-ins.
@@ -23,12 +28,15 @@ type Policy = { id: string; connectorInstanceId: string; providerKey: string; ve
   purposeKeys: string[]; templatePurposes: Record<string,string>; createdAt: Date; updatedAt: Date }
 const projection = `id,connector_instance_id AS "connectorInstanceId",provider_key AS "providerKey",version,managed,
   purpose_keys AS "purposeKeys",template_purposes AS "templatePurposes",created_at AS "createdAt",updated_at AS "updatedAt"`
-const scopeSchema = z.object({ userId: z.string().uuid(),workspaceId: z.string().uuid().optional(),connectorInstanceId: z.string().uuid().optional() }).strict()
+const scopeSchema = z.union([
+  z.object({ userId:z.string().uuid(),workspaceId:z.string().uuid().optional(),connectorInstanceId:z.string().uuid().optional(),expectedAccountHash:z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
+  z.object({ workspaceId:z.string().uuid(),connectorInstanceId:z.string().uuid(),integration:CrmIntegrationAuthoritySchema,expectedAccountHash:z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
+])
 const key = z.string().regex(/^[a-z][a-z0-9_-]{0,62}$/)
 const intentSchema = z.object({ crmPurposeKey: key,crmTemplateKey: key.optional() }).strict()
 const denied = (reason: string, details: Record<string,unknown> = {}) => new CrmOperationsError('conflict','Managed email delivery requires review.',{ reason,...details })
 
-async function member(client: PoolClient, scope: CrmMailContext, admin = false) {
+async function member(client: PoolClient, scope: MemberMailContext, admin = false) {
   const workspaceId = scope.workspaceId ?? (await client.query<{ id: string }>(
     `SELECT id FROM workspaces WHERE owner_user_id=$1 AND is_personal=true`,[scope.userId])).rows[0]?.id
   if (!workspaceId) throw denied('delivery_workspace_unavailable')
@@ -37,19 +45,22 @@ async function member(client: PoolClient, scope: CrmMailContext, admin = false) 
   return workspaceId
 }
 async function connector(client: PoolClient, workspaceId: string, scope: CrmMailContext, provider?: Provider) {
-  const rows = await client.query<{ id: string; scope: string; userId: string | null; workspaceId: string | null; provider: Provider; connected: boolean; health: string }>(
-    `SELECT id,scope,user_id AS "userId",workspace_id AS "workspaceId",provider,connected,health_status AS health FROM connector_instance
+  const userId = 'userId' in scope ? scope.userId : null
+  const rows = await client.query<{ credentials: Buffer|null; connectedEmail: string|null; id: string; scope: string; userId: string | null; workspaceId: string | null; provider: Provider; connected: boolean; health: string }>(
+    `SELECT credentials,connected_email AS "connectedEmail",id,scope,user_id AS "userId",workspace_id AS "workspaceId",provider,connected,health_status AS health FROM connector_instance
      WHERE ($1::uuid IS NOT NULL AND id=$1) OR ($1::uuid IS NULL AND scope='user' AND user_id=$2 AND provider=$3)
-     ORDER BY created_at,id LIMIT 1 FOR SHARE`,[scope.connectorInstanceId ?? null,scope.userId,provider ?? null])
+     ORDER BY created_at,id LIMIT 1 FOR SHARE`,[scope.connectorInstanceId ?? null,userId,provider ?? null])
   const row = rows.rows[0]
   if (!row || !isMailTransport(row.provider) || (provider && row.provider!==provider)
     || !row.connected || row.health==='auth_failed') throw denied('delivery_connector_unavailable')
   if (row.scope==='workspace' && row.workspaceId!==workspaceId) throw new CrmOperationsError('not_authorized','The mailbox is unavailable in this workspace.')
-  if (row.workspaceId!==workspaceId && row.userId!==scope.userId) {
+  if (row.workspaceId!==workspaceId && row.userId!==userId) {
     const grant = await client.query(`SELECT id FROM connector_grant WHERE connector_instance_id=$1 AND target_type='workspace' AND target_id=$2 FOR SHARE`,[row.id,workspaceId])
     if (!grant.rowCount) throw new CrmOperationsError('not_authorized','The mailbox is unavailable in this workspace.')
   }
-  return row
+  const accountHash = crmMailboxAccountHash(row)
+  if(scope.expectedAccountHash && scope.expectedAccountHash!==accountHash) throw denied('delivery_account_changed')
+  return {...row,accountHash}
 }
 const lockKey = (workspaceId: string, instanceId: string) => `crm-mailbox:${workspaceId}:${instanceId}`
 
@@ -90,17 +101,36 @@ function recipients(envelope: Envelope) {
 }
 
 /** Invocation is inside the final admission transaction, after approvals. */
-export async function withCrmMailAdmission<T>(rawScope: CrmMailContext | undefined, provider: Provider, envelope: Envelope, invoke: () => Promise<T>): Promise<T> {
+type AdmittedAction<T> = (admission: CrmMailAdmission, client: PoolClient) => Promise<T>
+export function withCrmMailAdmission<T>(scope: CrmMailContext | undefined, provider: Provider | undefined, envelope: Envelope, invoke: AdmittedAction<T>): Promise<T> {
+  return runCrmMailAdmission(scope,provider,envelope,invoke,true)
+}
+/** Commit a receipt claim under admission locks before any external operation. */
+export function inspectCrmMailAdmission<T>(scope: CrmMailContext, envelope: Envelope, inspect: AdmittedAction<T>): Promise<T> {
+  return runCrmMailAdmission(scope,undefined,envelope,inspect,false)
+}
+async function runCrmMailAdmission<T>(rawScope: CrmMailContext | undefined, provider: Provider | undefined, envelope: Envelope, invoke: AdmittedAction<T>, providerInvocation: boolean): Promise<T> {
   const scope = scopeSchema.safeParse(rawScope)
   if (!scope.success) throw denied('delivery_context_required')
   const client = await getPool().connect()
   let invoking = false, accepted = false
   try {
     await client.query('BEGIN')
-    const workspaceId = await member(client,scope.data)
+    const integration = 'integration' in scope.data ? scope.data.integration : undefined
+    const current = integration ? await lockCrmIntegrationCredential(client,scope.data.workspaceId!,integration.credentialId) : undefined
+    if(integration && current) for(const authority of [integration,current]) requireCrmIntegrationOperation(authority,'crm.delivery.dispatch')
+    const workspaceId = 'userId' in scope.data ? await member(client,scope.data) : scope.data.workspaceId
     const instance = await connector(client,workspaceId,scope.data,provider)
     await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',[lockKey(workspaceId,instance.id)])
     const policy = (await client.query<Policy>(`SELECT ${projection} FROM crm_managed_mailbox_policies WHERE workspace_id=$1 AND connector_instance_id=$2 FOR SHARE`,[workspaceId,instance.id])).rows[0]
+    if(integration && current) {
+      for(const authority of [integration,current]) requireCrmIntegrationResources(authority,'crm.delivery.dispatch',{
+        purposeKeys:envelope.crmPurposeKey ?? null,providerKeys:policy?.providerKey ?? null,
+      })
+      const grant=await client.query(`SELECT id FROM crm_mailbox_integration_grants WHERE workspace_id=$1 AND credential_id=$2 AND connector_instance_id=$3 AND enabled FOR SHARE`,[workspaceId,integration.credentialId,instance.id])
+      if(!grant.rowCount) throw new CrmOperationsError('not_authorized','The integration has no current send grant for this mailbox.')
+    }
+    const contactIds = new Set<string>()
     if (policy?.managed || envelope.crmPurposeKey || envelope.crmTemplateKey) {
       if (!policy?.managed) throw denied('mailbox_management_unconfigured')
       if (envelope.scheduled) throw denied('managed_provider_scheduling_unavailable')
@@ -127,6 +157,7 @@ export async function withCrmMailAdmission<T>(rawScope: CrmMailContext | undefin
         if (retained.length) throw denied('delivery_recipient_blocked',{ recipientIndex: index,reasonCodes: ['address_suppression'] })
         if (matches.length!==1) throw denied(matches.length ? 'delivery_identity_ambiguous' : 'delivery_identity_unresolved',{ recipientIndex: index })
         const contactId = matches[0]!.id
+        contactIds.add(contactId)
         const stamp = `to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt",to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt"`
         const consent = await client.query<{ id: string; action:'granted'|'withdrawn'; occurredAt:string; createdAt:string }>(`SELECT id,action,${stamp} FROM association_consent_events
           WHERE workspace_id=$1 AND contact_id=$2 AND purpose=$3 ORDER BY occurred_at DESC,created_at DESC,id DESC LIMIT 1`,[workspaceId,contactId,crmPurposeKey])
@@ -136,9 +167,19 @@ export async function withCrmMailAdmission<T>(rawScope: CrmMailContext | undefin
         if (verdict.verdict!=='allowed') throw denied('delivery_recipient_not_allowed',{ recipientIndex:index,verdict:verdict.verdict,reasonCodes:verdict.reasons })
       }
     }
-    invoking = true
-    const result = await invoke()
-    accepted = true
+    const admission:CrmMailAdmission = {workspaceId,connectorInstanceId:instance.id,provider:instance.provider,
+      providerKey:policy?.providerKey ?? null,contactIds:[...contactIds],accountHash:instance.accountHash}
+    const hooks=providerInvocation ? crmDeliveryHooks(rawScope) : undefined
+    await hooks?.beforeInvoke(client,admission)
+    if (integration) {
+      const active = await client.query(`SELECT revoked_at IS NULL AND expires_at>clock_timestamp() AS active
+        FROM crm_integration_credentials WHERE workspace_id=$1 AND id=$2`,[workspaceId,integration.credentialId])
+      if(!active.rows[0]?.active) throw new CrmOperationsError('credential_revoked','The CRM integration credential is no longer active.')
+    }
+    invoking = providerInvocation
+    const result = await invoke(admission,client)
+    accepted = providerInvocation
+    await hooks?.afterInvoke(client,admission,result)
     await client.query('COMMIT')
     return result
   } catch (error) {
@@ -153,4 +194,40 @@ export async function withCrmMailAdmission<T>(rawScope: CrmMailContext | undefin
     throw error
   }
   finally { client.release() }
+}
+
+export async function saveCrmMailboxIntegrationGrant(client:PoolClient,context:CrmOperationsContext,
+  command:Extract<CrmOperationsCommand,{kind:'save_mailbox_integration_grant'}>) {
+  if(context.actor.kind!=='user') throw new CrmOperationsError('not_authorized','A current owner or admin must approve mailbox integration access.')
+  const scope={userId:context.actor.userId,workspaceId:context.workspaceId,connectorInstanceId:command.connectorInstanceId}
+  await member(client,scope,true)
+  if(command.enabled) {
+    await lockCrmIntegrationCredential(client,context.workspaceId,command.credentialId)
+    await connector(client,context.workspaceId,scope)
+  } else {
+    // Revocation remains possible after a credential expires or a mailbox disconnects.
+    const credential=await client.query('SELECT id FROM crm_integration_credentials WHERE workspace_id=$1 AND id=$2 FOR SHARE',[context.workspaceId,command.credentialId])
+    if(!credential.rowCount) throw new CrmOperationsError('not_found','The integration credential is unavailable.')
+  }
+  await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',[lockKey(context.workspaceId,command.connectorInstanceId)])
+  if(command.enabled) {
+    const managed=await client.query('SELECT id FROM crm_managed_mailbox_policies WHERE workspace_id=$1 AND connector_instance_id=$2 AND managed FOR SHARE',[context.workspaceId,command.connectorInstanceId])
+    if(!managed.rowCount) throw denied('mailbox_management_unconfigured')
+  }
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`crm-mailbox-grant:${context.workspaceId}:${command.credentialId}:${command.connectorInstanceId}`])
+  const cols=`id,credential_id AS "credentialId",connector_instance_id AS "connectorInstanceId",version,enabled`
+  const existing=(await client.query(`SELECT ${cols} FROM crm_mailbox_integration_grants WHERE workspace_id=$1 AND credential_id=$2 AND connector_instance_id=$3 FOR UPDATE`,[context.workspaceId,command.credentialId,command.connectorInstanceId])).rows[0]
+  if(!command.enabled && !existing) throw new CrmOperationsError('not_found','The mailbox integration grant is unavailable.')
+  if((existing?.version ?? 0)!==command.expectedVersion) throw denied('stale_mailbox_grant_version')
+  if(existing && existing.enabled===command.enabled) return {record:existing,changed:false}
+  const record=(await client.query(`INSERT INTO crm_mailbox_integration_grants(workspace_id,credential_id,connector_instance_id,version,enabled,approved_by_user_id)
+    VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(workspace_id,credential_id,connector_instance_id) DO UPDATE SET
+      version=EXCLUDED.version,enabled=EXCLUDED.enabled,approved_by_user_id=EXCLUDED.approved_by_user_id,updated_at=clock_timestamp()
+    RETURNING ${cols}`,[context.workspaceId,command.credentialId,command.connectorInstanceId,command.expectedVersion+1,command.enabled,context.actor.userId])).rows[0]
+  return {record,changed:true}
+}
+
+export async function readCrmMailboxIntegrationGrant(workspaceId:string,instanceId:string,credentialId:string) {
+  return (await query(`SELECT id,credential_id AS "credentialId",connector_instance_id AS "connectorInstanceId",version,enabled
+    FROM crm_mailbox_integration_grants WHERE workspace_id=$1 AND connector_instance_id=$2 AND credential_id=$3`,[workspaceId,instanceId,credentialId])).rows[0] ?? null
 }

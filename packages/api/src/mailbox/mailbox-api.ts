@@ -810,11 +810,8 @@ export function createMailboxApi(opts: CreateMailboxApiOptions): MailboxApi {
             const sent = await resolveSentPath(client)
             if (sent) await client.append(sent, composed.raw, ['\\Seen'])
           })
-        } catch (err) {
-          console.warn(
-            '[mailbox] Sent-copy APPEND failed (send succeeded):',
-            err instanceof Error ? err.message : String(err),
-          )
+        } catch {
+          console.warn('[mailbox] Sent-copy APPEND failed (send succeeded).')
         }
       }
 
