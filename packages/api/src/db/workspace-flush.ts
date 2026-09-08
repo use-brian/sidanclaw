@@ -202,6 +202,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'usage_tracking',
   'oss_usage_tracking',
   'workspace_goal_defaults',
+  'workspace_modules',
   'usage_sessions',
   'bulk_ingest_surcharges',
   'recording_surcharges',

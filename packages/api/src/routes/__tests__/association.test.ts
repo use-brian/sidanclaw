@@ -5,6 +5,7 @@ import type { BrainAuth } from '../../brain-mcp/auth.js'
 import type { BrainKeyStore } from '../../db/brain-keys-store.js'
 import type { AssociationStore } from '../../db/association-store.js'
 import { AssociationError } from '../../association/domain.js'
+import { WorkspaceModuleError } from '../../db/workspace-modules-store.js'
 import type { CrmOperationsServicePort } from '@use-brian/core'
 import { associationRoutes } from '../association.js'
 
@@ -264,4 +265,14 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
       kind: 'update_participation', participationId: RECORD_ID, status: 'attended',
     })
   })
+  it.each(['module_disabled', 'module_draining'] as const)('returns a 409 for %s at the existing commerce route', async (code) => {
+    const store = fakeStore()
+    vi.mocked(store.upsertTicket).mockRejectedValue(new WorkspaceModuleError(code, 'Module unavailable'))
+    const response = await request(makeApp(store))
+      .post(`/api/association/events/${RECORD_ID}/tickets`)
+      .send({ key: 'standard', name: 'Standard', currency: 'USD', priceMinor: 0 })
+    expect(response.status).toBe(409)
+    expect(response.body.error).toBe(code)
+  })
+
 })

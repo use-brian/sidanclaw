@@ -18,6 +18,10 @@ function fakePool(
     if (normalized === 'BEGIN' || normalized === 'COMMIT' || normalized === 'ROLLBACK') {
       return { rows: [], rowCount: 0 }
     }
+    if (normalized.includes('FROM workspace_modules') && normalized.endsWith('FOR SHARE')) {
+      return { rows: [{ workspaceId: WID, moduleKey: 'association', state: 'enabled', version: 1,
+        enabledAt: null, disableRequestedAt: null, disabledAt: null, updatedAt: null, updatedByUserId: null }], rowCount: 1 }
+    }
     return resolve(normalized, params)
   })
   const release = vi.fn()

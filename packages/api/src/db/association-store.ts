@@ -11,6 +11,7 @@
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import { getPool } from './client.js'
+import { lockAssociationModule, requireAssociationAdmission } from './workspace-modules-store.js'
 import {
   AssociationError,
   associationFingerprint,
@@ -714,6 +715,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async upsertTicket(workspaceId, eventId, input, actor) {
       return transaction(pool, async (client) => {
+        const module = await lockAssociationModule(client, workspaceId)
+        requireAssociationAdmission(module)
         const event = await client.query(
           `SELECT 1 FROM association_events WHERE workspace_id = $1 AND id = $2`,
           [workspaceId, eventId],
@@ -792,6 +795,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async createOrder(workspaceId, input, actor) {
       return transaction(pool, async (client) => {
+        const module = await lockAssociationModule(client, workspaceId)
         const fingerprint = associationFingerprint(input)
         const existing = await client.query<DbRow>(
           `SELECT id, request_fingerprint AS "requestFingerprint"
@@ -806,6 +810,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           const record = await getOrderRecord(client, workspaceId, String(existing.rows[0].id))
           return { record: record!, created: false }
         }
+        requireAssociationAdmission(module)
         await requirePerson(client, workspaceId, input.contactId)
         const ticketIds = input.lines.map((line) => line.ticketId)
         const ticketsResult = await client.query<{
@@ -968,17 +973,19 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
               priced.unitPrice, lineDiscount, lineTotal,
               priced.membershipId ? 'member' : 'public', priced.membershipId],
           )
-          for (const attendee of priced.input.attendees) {
+          for (const [attendeeIndex, attendee] of priced.input.attendees.entries()) {
             if (attendee.contactId) await requirePerson(client, workspaceId, attendee.contactId)
             await client.query(
               `INSERT INTO association_registrations
                  (workspace_id, order_id, order_line_id, event_id, ticket_id,
                   attendee_contact_id, attendee_name, attendee_email,
-                  attendee_metadata, status, reservation_expires_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'reserved',$10)`,
+                  attendee_metadata, status, reservation_expires_at,
+                  source_kind, source_id, request_fingerprint)
+               VALUES ($1,$2,$3::uuid,$4,$5,$6,$7,$8,$9,'reserved',$10,'commerce',$3::text,$11)`,
               [workspaceId, orderId, lineResult.rows[0].id, priced.ticket.event_id,
                 priced.ticket.id, attendee.contactId ?? null, attendee.name,
-                attendee.email ?? null, attendee.metadata, reservationExpiresAt],
+                attendee.email ?? null, attendee.metadata, reservationExpiresAt,
+                associationFingerprint({ order: fingerprint, ticketId: priced.ticket.id, attendeeIndex })],
             )
           }
         }
@@ -1002,6 +1009,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async reconcileProviderEvent(workspaceId, orderId, input, actor) {
       return transaction(pool, async (client) => {
+        await lockAssociationModule(client, workspaceId)
         const replay = await client.query<{
           order_id: string
           target_status: OrderStatus
@@ -1139,6 +1147,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async updateRegistration(workspaceId, id, input, actor) {
       return transaction(pool, async (client) => {
+        await lockAssociationModule(client, workspaceId)
         const current = await client.query<{ status: RegistrationStatus }>(
           `SELECT status FROM association_registrations
             WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,

@@ -30,6 +30,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'association_registrations',
   'association_audit_log',
   'workspace_audit_log',
+  'workspace_modules',
   'crm_domain_event_outbox',
   'crm_import_jobs',
   'crm_import_chunks',

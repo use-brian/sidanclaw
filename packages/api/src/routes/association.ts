@@ -10,6 +10,7 @@
 
 import { Router, type Request, type RequestHandler, type Response } from 'express'
 import { z } from 'zod'
+import { WorkspaceModuleError } from '../db/workspace-modules-store.js'
 import {
   CrmOperationsError,
   type CrmOperationsActor,
@@ -156,6 +157,12 @@ function listInput(value: unknown, res: Response) {
 }
 
 function errorResponse(error: unknown, res: Response): void {
+  if (error instanceof WorkspaceModuleError) {
+    const status = error.code === 'not_authorized' ? 403 : error.code === 'not_found' ? 404
+      : error.code === 'invalid_input' ? 422 : 409
+    res.status(status).json({ error: error.code, message: error.message, details: error.details })
+    return
+  }
   if (error instanceof CrmOperationsError) {
     const status = error.code === 'not_found' ? 404
       : error.code === 'conflict' || error.code === 'idempotency_conflict' ? 409
