@@ -42,6 +42,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { useT } from "@/lib/i18n/client";
+import { cn } from "@/lib/utils";
+import { isCoarsePointer } from "@/lib/viewport";
 import { BlockActionMenu } from "./block-action-menu";
 import type { BlockTarget } from "./block-actions";
 import { createBlockDragHandlePlugin, blockDragHandleKey } from "./block-drag-handle";
@@ -142,8 +144,15 @@ export function DocDragHandle({
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const grip = document.createElement("div");
-    grip.className =
-      "doc-drag-handle flex h-6 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+    // A coarse pointer gets a 44px grip (responsive contract M3) — it sits
+    // IN the column on a phone (see `gripProps` in the plugin), so the size
+    // is a real tap target rather than a hover cue. The pointer class is read
+    // once here: the grip is built once per editor and never re-classed.
+    const coarse = isCoarsePointer();
+    grip.className = cn(
+      "doc-drag-handle flex items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+      coarse ? "size-11 bg-background/90 shadow-sm ring-1 ring-border" : "h-6 w-5",
+    );
     grip.setAttribute("role", "button");
     grip.setAttribute("aria-label", menuLabel);
     grip.setAttribute("title", menuLabel);
@@ -156,6 +165,10 @@ export function DocDragHandle({
       editor,
       element: grip,
       onNodeChange: ({ node, pos }) => handleNodeChange({ node, pos }),
+      // Long-press = the touch twin of the grip click (M2 / M9). The plugin
+      // has already latched the pressed block and revealed the grip, so the
+      // menu anchors to a grip that is really on screen.
+      onLongPress: () => openMenuRef.current(),
     });
     editor.registerPlugin(plugin);
     return () => {

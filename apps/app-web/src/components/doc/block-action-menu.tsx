@@ -44,7 +44,7 @@
  * [COMP:app-web/block-action-menu]
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
@@ -61,6 +61,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
+import { useCoarsePointer } from "@/lib/viewport";
 import { BLOCK_HASH_PREFIX, docBlockHash } from "@/lib/doc-page-url";
 import { TURN_INTO_ITEMS, type TurnIntoKind } from "./turn-into-menu";
 import {
@@ -196,14 +197,30 @@ export function BlockActionMenu({
   };
   const [copied, setCopied] = useState(false);
   const [style, setStyle] = useState<React.CSSProperties>({ visibility: "hidden" });
+  // Touch mode (responsive contract M2 / M5): submenus open on TAP and render
+  // as a second level INSIDE the menu (a hover fly-out beside a 240px menu
+  // has nowhere to go on a 390px phone), and every row is a 44px target.
+  const coarse = useCoarsePointer();
 
   // Position against the grip's viewport rect (fixed; the portal escapes the
-  // tippy transform). Opens just below the gutter grip.
-  useEffect(() => {
+  // tippy transform). Opens just below the grip, clamped inside the viewport:
+  // on a phone the grip sits at the block's RIGHT edge, so an unclamped menu
+  // would open off-screen, and an inline submenu can grow the menu past the
+  // bottom edge. Layout effect + measured height so the clamp lands before
+  // paint; re-run when a submenu opens or closes (`sub`).
+  useLayoutEffect(() => {
     if (!anchorEl) return;
     const r = anchorEl.getBoundingClientRect();
-    setStyle({ position: "fixed", top: r.bottom + 4, left: r.left });
-  }, [anchorEl]);
+    const margin = 8;
+    const menuWidth = ref.current?.offsetWidth || 240;
+    const menuHeight = ref.current?.offsetHeight || 0;
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - menuWidth - margin));
+    let top = r.bottom + 4;
+    if (menuHeight > 0 && top + menuHeight > window.innerHeight - margin) {
+      top = Math.max(margin, window.innerHeight - margin - menuHeight);
+    }
+    setStyle({ position: "fixed", top, left });
+  }, [anchorEl, sub]);
 
   // Outside-click + Esc dismissal (turn-into-menu.tsx idiom).
   useEffect(() => {
@@ -342,7 +359,14 @@ export function BlockActionMenu({
       style={style}
       // Keep the editor selection/focus intact when clicking inside the menu.
       onMouseDown={(e) => e.preventDefault()}
-      className="z-[60] w-60 rounded-md border border-border bg-popover py-1 text-sm shadow-lg"
+      data-coarse={coarse ? "true" : undefined}
+      className={
+        "z-[60] w-60 max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-md border border-border bg-popover py-1 text-sm shadow-lg" +
+        // 44px rows on touch (M3): every menu item and radio swatch.
+        (coarse
+          ? " [&_[role=menuitem]]:min-h-11 [&_[role=menuitemradio]]:min-h-11 [&_[role=menuitemradio]]:min-w-11"
+          : "")
+      }
     >
       {(isTextblock || isEmbed) && turnIntoItems.length > 0 ? (
         <SubmenuRow
@@ -351,6 +375,8 @@ export function BlockActionMenu({
           open={sub === "turn"}
           onOpen={() => openSub("turn")}
           onClose={scheduleCloseSub}
+          inline={coarse}
+          onToggle={() => setSub((cur) => (cur === "turn" ? null : "turn"))}
         >
           {turnIntoItems.map((it) => {
             const Ic = it.icon;
@@ -379,6 +405,8 @@ export function BlockActionMenu({
           open={sub === "color"}
           onOpen={() => openSub("color")}
           onClose={scheduleCloseSub}
+          inline={coarse}
+          onToggle={() => setSub((cur) => (cur === "color" ? null : "color"))}
           wide
         >
           <ColorGrid
@@ -492,13 +520,24 @@ function MenuButton({
   );
 }
 
-/** A row that flies a child list out to the right on hover (Notion submenu). */
+/**
+ * A row that flies a child list out to the right on hover (Notion submenu).
+ *
+ * `inline` is the touch mode (responsive contract M2 / M5): there is no hover
+ * to open on and no room beside a 240px menu on a phone, so the row toggles on
+ * TAP (`onToggle`) and the child list renders as a second level INSIDE the
+ * menu, directly under the row, with the chevron turned down. The hover
+ * handlers are not bound in that mode: a tap fires a synthetic `mouseenter`
+ * first, which would open the fly-out before the tap could toggle it.
+ */
 function SubmenuRow({
   icon: Icon,
   label,
   open,
   onOpen,
   onClose,
+  onToggle,
+  inline = false,
   wide,
   children,
 }: {
@@ -507,28 +546,44 @@ function SubmenuRow({
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
+  /** Tap toggle for `inline` mode. */
+  onToggle?: () => void;
+  /** Render the child list inside the menu instead of a hover fly-out. */
+  inline?: boolean;
   wide?: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <div className="relative" onMouseEnter={onOpen} onMouseLeave={onClose}>
+    <div
+      className="relative"
+      onMouseEnter={inline ? undefined : onOpen}
+      onMouseLeave={inline ? undefined : onClose}
+    >
       <button
         type="button"
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={open}
+        onClick={inline ? onToggle : undefined}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground transition-colors hover:bg-muted"
       >
         <Icon className="h-4 w-4 flex-shrink-0 text-muted-foreground" aria-hidden />
         <span className="flex-1 truncate">{label}</span>
-        <ChevronRight size={14} className="text-muted-foreground" aria-hidden />
+        <ChevronRight
+          size={14}
+          className={"text-muted-foreground" + (inline && open ? " rotate-90" : "")}
+          aria-hidden
+        />
       </button>
       {open ? (
         <div
           role="menu"
+          data-submenu={inline ? "inline" : "flyout"}
           className={
-            "absolute left-full top-0 z-[61] ml-1 rounded-md border border-border bg-popover p-1 shadow-lg " +
-            (wide ? "w-56" : "w-52")
+            inline
+              ? "mx-2 mb-1 rounded-md border border-border/70 bg-muted/30 p-1"
+              : "absolute left-full top-0 z-[61] ml-1 rounded-md border border-border bg-popover p-1 shadow-lg " +
+                (wide ? "w-56" : "w-52")
           }
         >
           {children}
