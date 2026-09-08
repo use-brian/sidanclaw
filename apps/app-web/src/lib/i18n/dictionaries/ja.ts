@@ -5854,6 +5854,7 @@ export const ja: Dictionary = {
       importCsv: "CSVをインポート", importDescription: "レコード種別を選び、CSV列を対応付け、ローカルのサンプルを確認してから、ファイル全体をサーバーで検証・処理します。", exportCsv: "CSVをエクスポート",
       reviewDuplicates: "重複を確認", duplicatesDescription: "メール、ドメインの完全一致と正規化した名前による候補です。",
       archivedRecords: "アーカイブ済み", archivedDescription: "有効なCRMから除外したレコードを復元できます。", noArchived: "アーカイブ済みレコードはありません。", restore: "復元", archivedLoading: "アーカイブ済みレコードを読み込み中...", archivedLoadFailed: "アーカイブ済みレコードを読み込めませんでした。", restoreFailed: "レコードを復元できませんでした。",
+      archiveFailed: "レコードをアーカイブできませんでした。", duplicateBadge: "重複した名前", duplicateBadgeTitle: "このリストに同名の人物が他にもあります。重複を確認して統合またはアーカイブしてください。", duplicateNamesBanner: "このリストには {count} 件の重複した名前があります。",
       archive: "アーカイブ", archiveTitle: "CRMレコードをアーカイブしますか？", archiveDescription: "{name}をアーカイブします。有効なCRMから外れますが後で復元できます。",
       name: "名前", email: "メール", phone: "電話", domain: "ドメイン", amount: "金額", currency: "通貨", company: "会社", contact: "担当者", noCompany: "会社なし", noContact: "担当者なし", tags: "タグ", tagsPlaceholder: "見込み客, 顧客", closeDate: "完了予定日", source: "流入元", probability: "確度", winLossReason: "受注・失注理由", owner: "所有者", noOwner: "所有者なし", myRecords: "自分のレコード", bulkOwner: "所有者を設定", unassigned: "未割り当て", memberUnknown: "不明なメンバー", memberUnavailable: "利用できないメンバー",
       recordNotFound: "CRMレコードが見つかりません", recordNotFoundDescription: "このレコードはアーカイブ、削除されたか、表示権限がない可能性があります。", recordLoadFailed: "CRMレコードを読み込めませんでした", recordLoadFailedDescription: "一覧は引き続き利用できます。このレコードを再試行するかCRMに戻ってください。", returnToCrm: "CRMに戻る",

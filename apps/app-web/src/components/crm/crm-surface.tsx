@@ -103,6 +103,8 @@ import {
   searchFromCrmView,
   sortDeals,
   crmViewFromSearch,
+  duplicateContactNameKeys,
+  isDuplicateContactName,
   CONTACT_QUICK_FILTERS,
   DEAL_QUICK_FILTERS,
   DEAL_SORT_KEYS,
@@ -143,7 +145,7 @@ import {
   type CrmRecordRef,
   type RecordCommits,
 } from "./crm-record-detail";
-import { CrmActions } from "./crm-actions";
+import { CrmActions, type CrmActionDialog } from "./crm-actions";
 import { CrmConfigDialog } from "./crm-config";
 import { CrmReportingDialog } from "./crm-reporting";
 import { CrmSavedViews } from "./crm-saved-views";
@@ -468,6 +470,13 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
     () => crmTagOptions(contacts, companies),
     [contacts, companies],
   );
+  // Computed over every contact loaded, not the filtered or grouped view: a
+  // pair split across two groups is still the same person twice, and hiding
+  // the flag because a filter separated them is how the duplicate survives.
+  const duplicateNameKeys = useMemo(
+    () => duplicateContactNameKeys(allContacts),
+    [allContacts],
+  );
   const ownerOptions = useMemo(
     () => roster.map((member) => ({
       id: member.userId,
@@ -630,6 +639,9 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
 
   // ── Mutations (in-place adjusts) ──────────────────────────────────────
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Lifted so the duplicate flag in the contacts list can open the same
+  // review dialog the actions menu opens — one dialog, two entry points.
+  const [actionDialog, setActionDialog] = useState<CrmActionDialog>(null);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState<Set<string>>(new Set());
@@ -1331,6 +1343,8 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                 section={view.section}
                 data={data}
                 config={config}
+                activeDialog={actionDialog}
+                onDialogChange={setActionDialog}
                 onChanged={reload}
                 onCreated={async (created) => {
                   await refreshCrm();
@@ -1637,6 +1651,17 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
           </div>
         )}
 
+        {view.section === "contacts" && duplicateNameKeys.size > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/25 bg-amber-500/5 px-4 py-2 text-xs">
+            <span>
+              {format(t.r2.duplicateNamesBanner, { count: String(duplicateNameKeys.size) })}
+            </span>
+            <Button size="xs" variant="outline" onClick={() => setActionDialog("duplicates")}>
+              {t.r2.reviewDuplicates}
+            </Button>
+          </div>
+        )}
+
         {mutationError && (
           <div
             role="alert"
@@ -1731,6 +1756,8 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
               hasSelection={selectedVisible.length > 0}
               onToggleAll={toggleAll}
               commits={commits}
+              duplicateNameKeys={duplicateNameKeys}
+              onReviewDuplicates={() => setActionDialog("duplicates")}
               onOpenRecord={(row) =>
                 openRecord("contact", row.id)
               }
@@ -2121,6 +2148,8 @@ function ContactsTable({
   hasSelection,
   onToggleAll,
   commits,
+  duplicateNameKeys,
+  onReviewDuplicates,
   onOpenRecord,
   empty,
 }: {
@@ -2136,6 +2165,9 @@ function ContactsTable({
   hasSelection: boolean;
   onToggleAll: () => void;
   commits: RecordCommits;
+  /** Normalized names held by more than one contact — see the list banner. */
+  duplicateNameKeys: ReadonlySet<string>;
+  onReviewDuplicates: () => void;
   onOpenRecord: (row: CrmContactRow) => void;
   empty: string;
 }) {
@@ -2158,7 +2190,21 @@ function ContactsTable({
           />
           {columns.map((column) => {
             if (column.source === "custom") return <CustomValue key={column.key} row={row} column={column} referenceNames={referenceNames} />;
-            if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className="truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline">{row.name}</button>;
+            if (column.key === "name") return (
+              <span key={column.key} className="flex min-w-0 items-center gap-1.5">
+                <button type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className="truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline">{row.name}</button>
+                {isDuplicateContactName(row.name, duplicateNameKeys) && (
+                  <button
+                    type="button"
+                    onClick={onReviewDuplicates}
+                    title={t.r2.duplicateBadgeTitle}
+                    className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
+                  >
+                    {t.r2.duplicateBadge}
+                  </button>
+                )}
+              </span>
+            );
             if (column.key === "email") return <TextFieldCell key={column.key} value={row.email} placeholder={t.noValue} ariaLabel={t.emailLabel} inputType="email" onCommit={commits.contactEmail(row)} />;
             if (column.key === "phone") return <TextFieldCell key={column.key} value={row.phone} placeholder={t.noValue} ariaLabel={t.phoneLabel} inputType="tel" onCommit={commits.contactPhone(row)} />;
             if (column.key === "company") return <CompanyCell key={column.key} companyId={row.companyId} companies={companies} onCommit={commits.contactCompany(row)} />;

@@ -5672,6 +5672,7 @@ export const zhCN: Dictionary = {
       archivedLoadFailed: "无法加载已归档记录。",
       restoreFailed: "无法还原记录。",
       archive: "归档",
+      archiveFailed: "无法归档此记录。", duplicateBadge: "重复名称", duplicateBadgeTitle: "此列表中另有同名人物。请检查重复记录以合并或归档。", duplicateNamesBanner: "此列表中有 {count} 个名称重复出现。",
       archiveTitle: "归档CRM记录？",
       archiveDescription: "归档{name}？它会离开使用中CRM，但之后可以还原。",
       name: "名称",

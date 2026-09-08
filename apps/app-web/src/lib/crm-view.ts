@@ -490,6 +490,51 @@ export function crmTagOptions(
   return [...tags].sort((a, b) => a.localeCompare(b));
 }
 
+/**
+ * Normalize a display name for duplicate comparison.
+ *
+ * Mirrors `normalizedName` in the server's `findCrmDuplicateGroups` exactly
+ * (case-fold, NFKD, drop everything that is not a letter or digit) so a row
+ * flagged in the list is a row the duplicate dialog will actually show. A
+ * looser rule here would flag pairs the dialog then refuses to group, which
+ * reads as a broken flag rather than a stricter server.
+ */
+function normalizedContactName(value: string): string {
+  return value.toLowerCase().normalize("NFKD").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * Names held by more than one contact in the given rows.
+ *
+ * A hint computed from what is already on screen — no request, and no claim to
+ * be complete: with a paged collection this sees the loaded page only, and the
+ * duplicate dialog remains the authoritative pass. Flagging is safe to do on
+ * partial data because a shared name is evidence for a person to judge, never
+ * an action taken on their behalf.
+ */
+export function duplicateContactNameKeys(
+  contacts: readonly CrmContactRow[],
+): Set<string> {
+  const seen = new Set<string>();
+  const repeated = new Set<string>();
+  for (const contact of contacts) {
+    const key = normalizedContactName(contact.name);
+    if (key === "") continue;
+    if (seen.has(key)) repeated.add(key);
+    else seen.add(key);
+  }
+  return repeated;
+}
+
+/** True when this row shares its name with another row in the same set. */
+export function isDuplicateContactName(
+  name: string,
+  duplicateKeys: ReadonlySet<string>,
+): boolean {
+  const key = normalizedContactName(name);
+  return key !== "" && duplicateKeys.has(key);
+}
+
 // ── Applying the state ──────────────────────────────────────────────────
 
 /** Any-of over the company set (`"none"` = unlinked); empty = unfiltered. */
