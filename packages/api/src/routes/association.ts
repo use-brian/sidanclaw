@@ -13,6 +13,9 @@ import { z } from 'zod'
 import { WorkspaceModuleError } from '../db/workspace-modules-store.js'
 import {
   CrmOperationsError,
+  CrmIntegrationScopeError,
+  type AssociationContext,
+  type AssociationServicePort,
   type CrmOperationsActor,
   type CrmOperationsContext,
   type CrmOperationsServicePort,
@@ -34,6 +37,7 @@ import {
   MembershipInputSchema,
   MembershipUpdateSchema,
   OrderCreateSchema,
+  OrderStatusSchema,
   PlanInputSchema,
   ProviderEventInputSchema,
   RegistrationStatusSchema,
@@ -41,6 +45,7 @@ import {
   TicketInputSchema,
   type AssociationActor,
 } from '../association/domain.js'
+import { createAssociationService } from '../association/service.js'
 import { createAssociationStore, type AssociationStore } from '../db/association-store.js'
 import { createDbCrmOperationsStore } from '../db/crm-operations-store.js'
 import { createCrmOperationsService } from '../crm-operations/service.js'
@@ -50,6 +55,7 @@ type Options = {
   authorizationStore?: OAuthAuthorizationStore
   store?: AssociationStore
   crmService?: CrmOperationsServicePort
+  associationService?: AssociationServicePort
   authenticate?: (req: Request) => Promise<BrainAuth | null>
 }
 
@@ -97,6 +103,18 @@ function crmContextFor(auth: BrainAuth): CrmOperationsContext {
   }
 }
 
+function associationContextFor(auth: BrainAuth): AssociationContext {
+  const context = crmContextFor(auth)
+  return { ...context, authority: { ...context.authority, canRead: true, canReconcileProvider: auth.scope === 'read_write' } }
+}
+
+/** Preserve the pre-existing catalog authority of these two legacy machine
+ * endpoints. Ordinary CRM tools keep crmContextFor's canConfigure=false. */
+function crmCatalogContextFor(auth: BrainAuth): CrmOperationsContext {
+  const context = crmContextFor(auth)
+  return { ...context, authority: { ...context.authority, canConfigure: auth.scope === 'read_write' } }
+}
+
 function associationMembership(
   workspaceId: string,
   record: Record<string, unknown>,
@@ -106,25 +124,6 @@ function associationMembership(
     workspaceId,
     ...rest,
     providerMembershipId: providerEntitlementId ?? null,
-  }
-}
-
-function associationRegistration(
-  workspaceId: string,
-  record: Record<string, unknown>,
-  status: 'cancelled' | 'checked_in',
-): Record<string, unknown> {
-  const { contactId, metadata, ...rest } = record
-  return {
-    workspaceId,
-    ...rest,
-    attendeeContactId: contactId ?? null,
-    attendeeMetadata: metadata ?? {},
-    orderId: null,
-    orderLineId: null,
-    ticketId: null,
-    reservationExpiresAt: null,
-    status,
   }
 }
 
@@ -156,7 +155,9 @@ function listInput(value: unknown, res: Response) {
   return { limit: pagination.limit, cursor }
 }
 
-function errorResponse(error: unknown, res: Response): void {
+export function associationErrorResponse(error: unknown, res: Response): void {
+  if (error instanceof CrmIntegrationScopeError) { res.status(403).json({ error: error.code, message: error.message }); return }
+  if (error instanceof z.ZodError) { res.status(400).json({ error: 'invalid_input', issues: error.issues.slice(0, 10) }); return }
   if (error instanceof WorkspaceModuleError) {
     const status = error.code === 'not_authorized' ? 403 : error.code === 'not_found' ? 404
       : error.code === 'invalid_input' ? 422 : 409
@@ -188,7 +189,7 @@ function endpoint(
     try {
       await fn(req, res as AuthedResponse)
     } catch (error) {
-      errorResponse(error, res)
+      associationErrorResponse(error, res)
     }
   }
 }
@@ -197,6 +198,7 @@ export function associationRoutes(opts: Options): Router {
   const router = Router()
   const store = opts.store ?? createAssociationStore()
   const crmService = opts.crmService ?? createCrmOperationsService(createDbCrmOperationsStore())
+  const associationService = opts.associationService ?? createAssociationService({ store, crmService })
   const authenticate = opts.authenticate ?? ((req: Request) =>
     authenticateBrainRequest(req, {
       brainKeyStore: opts.brainKeyStore,
@@ -335,11 +337,9 @@ export function associationRoutes(opts: Options): Router {
   router.post('/plans', endpoint(async (req, res) => {
     const input = parsed(PlanInputSchema, req.body, res)
     if (!input) return
-    const result = await store.upsertPlan(
-      res.locals.associationAuth.workspaceId,
-      input,
-      actorFor(res.locals.associationAuth),
-    )
+    const result = await crmService.execute(crmCatalogContextFor(res.locals.associationAuth), {
+      kind: 'save_entitlement_plan', ...input,
+    })
     res.status(result.created ? 201 : 200).json({ plan: result.record, created: result.created })
   }))
 
@@ -402,11 +402,9 @@ export function associationRoutes(opts: Options): Router {
   router.post('/events', endpoint(async (req, res) => {
     const input = parsed(EventInputSchema, req.body, res)
     if (!input) return
-    const result = await store.upsertEvent(
-      res.locals.associationAuth.workspaceId,
-      input,
-      actorFor(res.locals.associationAuth),
-    )
+    const result = await crmService.execute(crmCatalogContextFor(res.locals.associationAuth), {
+      kind: 'save_event', ...input,
+    })
     res.status(result.created ? 201 : 200).json({ event: result.record, created: result.created })
   }))
 
@@ -428,102 +426,70 @@ export function associationRoutes(opts: Options): Router {
 
   router.post('/events/:eventId/tickets', endpoint(async (req, res) => {
     const eventId = parsed(UUID, req.params.eventId, res)
-    const input = parsed(TicketInputSchema, req.body, res)
-    if (!eventId || !input) return
-    const result = await store.upsertTicket(
-      res.locals.associationAuth.workspaceId,
-      eventId,
-      input,
-      actorFor(res.locals.associationAuth),
-    )
+    const ticket = parsed(TicketInputSchema, req.body, res)
+    if (!eventId || !ticket) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'save_ticket', eventId, ticket })
     res.status(result.created ? 201 : 200).json({ ticket: result.record, created: result.created })
   }))
 
   router.get('/events/:eventId/tickets', endpoint(async (req, res) => {
     const eventId = parsed(UUID, req.params.eventId, res)
     if (!eventId) return
-    const tickets = await store.listTickets(res.locals.associationAuth.workspaceId, eventId)
-    res.json({ tickets })
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'list_tickets', eventId })
+    res.json({ tickets: result.items })
   }))
 
   router.get('/events/:eventId/registrations', endpoint(async (req, res) => {
     const eventId = parsed(UUID, req.params.eventId, res)
-    const query = parsed(z.object({
-      limit: z.string().optional(),
-      cursor: z.string().optional(),
-      status: RegistrationStatusSchema.optional(),
-    }), req.query, res)
+    const query = parsed(ListPageSchema.extend({ status: RegistrationStatusSchema.optional() }), req.query, res)
     if (!eventId || !query) return
-    const pagination = listInput(query, res)
-    if (!pagination) return
-    const result = await store.listEventRegistrations(
-      res.locals.associationAuth.workspaceId,
-      eventId,
-      { ...pagination, ...(query.status ? { status: query.status } : {}) },
-    )
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'list_registrations', eventId, ...query })
     res.json({ registrations: result.items, nextCursor: result.nextCursor })
   }))
 
   router.patch('/registrations/:id', endpoint(async (req, res) => {
-    const id = parsed(UUID, req.params.id, res)
-    const input = parsed(RegistrationUpdateSchema, req.body, res)
-    if (!id || !input) return
-    const management = await store.getRegistrationManagement(
-      res.locals.associationAuth.workspaceId,
-      id,
-    )
-    if (!management) throw new AssociationError('not_found', 'registration not found')
-    const registration = management.sourceKind === 'commerce'
-      ? await store.updateRegistration(
-        res.locals.associationAuth.workspaceId,
-        id,
-        input,
-        actorFor(res.locals.associationAuth),
-      )
-      : associationRegistration(
-        res.locals.associationAuth.workspaceId,
-        (await crmService.execute(crmContextFor(res.locals.associationAuth), {
-          kind: 'update_participation',
-          participationId: id,
-          status: input.status === 'checked_in' ? 'attended' : 'cancelled',
-        })).record,
-        input.status,
-      )
-    res.json({ registration })
+    const registrationId = parsed(UUID, req.params.id, res)
+    const update = parsed(RegistrationUpdateSchema, req.body, res)
+    if (!registrationId || !update) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'update_registration', registrationId, update })
+    res.json({ registration: result.record })
   }))
 
   router.post('/orders', endpoint(async (req, res) => {
-    const input = parsed(OrderCreateSchema, req.body, res)
-    if (!input) return
-    const result = await store.createOrder(
-      res.locals.associationAuth.workspaceId,
-      input,
-      actorFor(res.locals.associationAuth),
-    )
+    const order = parsed(OrderCreateSchema, req.body, res)
+    if (!order) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'create_order', order })
     res.status(result.created ? 201 : 200).json({ order: result.record, created: result.created })
   }))
 
-  router.get('/orders/:id', endpoint(async (req, res) => {
-    const id = parsed(UUID, req.params.id, res)
-    if (!id) return
-    const order = await store.getOrder(res.locals.associationAuth.workspaceId, id)
-    if (!order) {
-      res.status(404).json({ error: 'not_found', message: 'order not found' })
-      return
-    }
-    res.json({ order })
+  router.get('/orders', endpoint(async (req, res) => {
+    const query = parsed(ListPageSchema.extend({ eventId: UUID.optional(), contactId: UUID.optional(), status: OrderStatusSchema.optional() }), req.query, res)
+    if (!query) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'list_orders', ...query })
+    res.json({ orders: result.items, nextCursor: result.nextCursor })
   }))
 
+  router.get('/orders/:id', endpoint(async (req, res) => {
+    const orderId = parsed(UUID, req.params.id, res)
+    if (!orderId) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'get_order', orderId })
+    res.json({ order: result.record })
+  }))
+
+  for (const [path, kind] of [['cancel', 'cancel_order'], ['confirm-free', 'confirm_free_order']] as const) {
+    router.post(`/orders/:id/${path}`, endpoint(async (req, res) => {
+      const orderId = parsed(UUID, req.params.id, res)
+      if (!orderId) return
+      const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind, orderId })
+      res.json({ order: result.record, changed: result.created })
+    }))
+  }
+
   router.post('/orders/:id/provider-events', endpoint(async (req, res) => {
-    const id = parsed(UUID, req.params.id, res)
-    const input = parsed(ProviderEventInputSchema, req.body, res)
-    if (!id || !input) return
-    const result = await store.reconcileProviderEvent(
-      res.locals.associationAuth.workspaceId,
-      id,
-      input,
-      actorFor(res.locals.associationAuth),
-    )
+    const orderId = parsed(UUID, req.params.id, res)
+    const event = parsed(ProviderEventInputSchema, req.body, res)
+    if (!orderId || !event) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'reconcile_provider_event', orderId, event })
     res.status(result.created ? 201 : 200).json({ order: result.record, reconciled: result.created })
   }))
 

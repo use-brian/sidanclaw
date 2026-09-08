@@ -10,6 +10,8 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, type CrmIntegrationOperation } from './integration-authority.js'
+import { AssociationPlanInputSchema, AssociationEventInputSchema } from '../association/domain.js'
 
 export const CrmOperationsUuidSchema = z.string().uuid()
 export const CrmOperationsStableKeySchema = z.string().trim().toLowerCase()
@@ -45,6 +47,12 @@ export const CrmOperationsActorSchema = z.discriminatedUnion('kind', [
     userId: CrmOperationsUuidSchema.optional(),
   }),
   z.object({ kind: z.literal('brain_key'), credentialId: CrmOperationsUuidSchema }),
+  z.object({ kind: z.literal('integration_key'), credentialId: CrmOperationsUuidSchema }),
+  z.object({
+    kind: z.literal('system_job'),
+    job: z.enum(['association_expiry', 'association_reconciliation', 'entitlement_expiry', 'entitlement_reconciliation', 'crm_retention', 'crm_delivery']),
+    runId: CrmOperationsUuidSchema,
+  }),
   z.object({
     kind: z.literal('oauth_token'),
     credentialId: CrmOperationsUuidSchema,
@@ -78,6 +86,7 @@ export const CrmOperationsAuthoritySchema = z.object({
   canWrite: z.boolean(),
   canConfigure: z.boolean(),
   trustedIdentitySources: z.array(CrmOperationsStableKeySchema).max(50).default([]),
+  integration: CrmIntegrationAuthoritySchema.optional(),
 })
 export type CrmOperationsAuthority = z.infer<typeof CrmOperationsAuthoritySchema>
 
@@ -382,7 +391,12 @@ export const SetDealPipelineStageCommandSchema = z.object({
 // Several command schemas use cross-field refinements and therefore become
 // ZodEffects. A regular union preserves those validations; discriminatedUnion
 // cannot introspect a discriminator through ZodEffects in Zod 3.
+export const SaveCrmEntitlementPlanCommandSchema = AssociationPlanInputSchema.and(z.object({ kind: z.literal('save_entitlement_plan') }))
+export const SaveCrmEventCommandSchema = AssociationEventInputSchema.and(z.object({ kind: z.literal('save_event') }))
+
 export const CrmOperationsCommandSchema = z.union([
+  SaveCrmEntitlementPlanCommandSchema,
+  SaveCrmEventCommandSchema,
   SaveCrmIntakeDefinitionCommandSchema,
   CreateCrmIntakeCredentialCommandSchema,
   RevokeCrmIntakeCredentialCommandSchema,
@@ -485,6 +499,7 @@ export function actorAuditIdentity(actor: CrmOperationsActor): {
     case 'workflow':
       return { actorKind: actor.kind, actorCredentialId: actor.runId, actingUserId: actor.userId ?? null }
     case 'brain_key':
+    case 'integration_key':
     case 'intake_key':
       return { actorKind: actor.kind, actorCredentialId: actor.credentialId, actingUserId: null }
     case 'oauth_token':
@@ -494,11 +509,15 @@ export function actorAuditIdentity(actor: CrmOperationsActor): {
       return { actorKind: actor.kind, actorCredentialId: actor.eventId, actingUserId: null }
     case 'import':
       return { actorKind: actor.kind, actorCredentialId: actor.jobId, actingUserId: actor.userId }
+    case 'system_job':
+      return { actorKind: actor.kind, actorCredentialId: `${actor.job}:${actor.runId}`, actingUserId: null }
   }
 }
 
 export function commandRequiresConfigurationAuthority(command: CrmOperationsCommand): boolean {
-  return command.kind === 'save_intake_definition'
+  return command.kind === 'save_entitlement_plan'
+    || command.kind === 'save_event'
+    || command.kind === 'save_intake_definition'
     || command.kind === 'create_intake_credential'
     || command.kind === 'revoke_intake_credential'
     || command.kind === 'save_consent_purpose'
@@ -508,6 +527,32 @@ export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
+  if (context.actor.kind === 'integration_key' && context.authority.integration?.credentialId !== context.actor.credentialId) {
+    throw new CrmOperationsError('not_authorized', 'Integration authority must come from its authenticated credential.')
+  }
+  if (context.authority.integration) {
+    const operations: Partial<Record<CrmOperationsCommand['kind'], CrmIntegrationOperation>> = {
+      save_intake_definition: 'crm.catalog.configure', save_consent_purpose: 'crm.catalog.configure',
+      save_entitlement_plan: 'crm.catalog.configure', save_event: 'crm.catalog.configure',
+      record_submission: 'crm.submissions.write', update_submission: 'crm.submissions.write',
+      record_consent: 'crm.consent.write', record_suppression: 'crm.consent.write',
+      save_segment: 'crm.records.write', archive_segment: 'crm.records.write',
+      grant_entitlement: 'crm.entitlements.write', update_entitlement: 'crm.entitlements.write',
+      record_participation: 'crm.participation.write', update_participation: 'crm.participation.write',
+      set_deal_pipeline_stage: 'crm.records.write',
+    }
+    const operation = operations[command.kind]
+    if (!operation) throw new CrmOperationsError('not_authorized', 'This operation is not available to integration credentials.')
+    requireCrmIntegrationOperation(context.authority.integration, operation)
+    if (context.authority.trustedIdentitySources.length) {
+      throw new CrmOperationsError('not_authorized', 'Integration configuration cannot nominate trusted identity sources.')
+    }
+  }
+  if (context.actor.kind === 'system_job') {
+    const expiry = context.actor.job === 'entitlement_expiry' && command.kind === 'update_entitlement' && command.status === 'expired'
+    const reconcile = context.actor.job === 'entitlement_reconciliation' && ['grant_entitlement', 'update_entitlement'].includes(command.kind)
+    if (!expiry && !reconcile) throw new CrmOperationsError('not_authorized', 'This job cannot perform that CRM command.')
+  }
   if (!context.authority.canWrite) {
     throw new CrmOperationsError('not_authorized', 'This principal has read-only CRM authority.')
   }

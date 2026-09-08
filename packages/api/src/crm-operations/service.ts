@@ -59,6 +59,8 @@ function actorScope(actor: CrmOperationsActor): string {
     case 'assistant': return `assistant:${actor.assistantId}:${actor.sessionId}`
     case 'workflow': return `workflow:${actor.workflowId}:${actor.runId}`
     case 'brain_key': return `brain_key:${actor.credentialId}`
+    case 'integration_key': return `integration_key:${actor.credentialId}`
+    case 'system_job': return `system_job:${actor.job}:${actor.runId}`
     case 'oauth_token': return `oauth_token:${actor.credentialId}`
     case 'intake_key': return `intake_key:${actor.credentialId}`
     case 'home_app': return `home_app:${actor.credentialId}`
@@ -434,6 +436,17 @@ export function createCrmOperationsService(
       const identity = actorAuditIdentity(context.actor)
 
       return store.transaction(context, async (tx) => {
+        if (context.authority.integration) await tx.authorizeIntegration(command)
+        if (command.kind === 'save_entitlement_plan' || command.kind === 'save_event') {
+          const saved = command.kind === 'save_entitlement_plan'
+            ? await tx.saveEntitlementPlan(command) : await tx.saveEvent(command)
+          const subjectKind = command.kind === 'save_entitlement_plan' ? 'entitlement_plan' : 'event'
+          await audit(tx, context.actor, {
+            action: `crm.${subjectKind}.${saved.created ? 'created' : 'updated'}`,
+            subjectKind, subjectId: recordId(saved.record, subjectKind),
+          })
+          return result(command.kind, saved.record, { created: saved.created })
+        }
         if (command.kind === 'record_submission') {
           return executeSubmission(tx, context, command, now)
         }

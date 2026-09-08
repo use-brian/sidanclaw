@@ -622,6 +622,12 @@ import { createDbCompartmentStore } from './db/compartment-store.js'
 import { compartmentRoutes } from './routes/compartments.js'
 import { brainMcpRoutes } from './brain-mcp/server.js'
 import { associationRoutes } from './routes/association.js'
+import { createAssociationService } from './association/service.js'
+import { createAssociationStore } from './db/association-store.js'
+import { createWorkspaceModulesStore } from './db/workspace-modules-store.js'
+import { createCrmIntegrationStore } from './db/crm-integration-store.js'
+import { crmIntegrationRoutes, crmIntegrationCredentialRoutes } from './routes/crm-integration.js'
+import { crmAssociationRoutes, associationMemberContext, workspaceModuleRoutes } from './routes/crm-association.js'
 import { createStoreToolResolver } from './home-apps/store-tools-resolver.js'
 import { appsShopifyRoutes } from './routes/apps-shopify.js'
 import { agentAllowedToolsFor } from './brain-mcp/store-tools.js'
@@ -1585,6 +1591,10 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   const crmStore = createDbCrmStore()
   const crmEmailDraftStore = createDbCrmEmailDraftStore()
   const crmOperationsService = createCrmOperationsService(createDbCrmOperationsStore())
+  const associationStore = createAssociationStore()
+  const workspaceModulesStore = createWorkspaceModulesStore()
+  const associationService = createAssociationService({ store: associationStore, modules: workspaceModulesStore, crmService: crmOperationsService })
+  const crmIntegrationStore = createCrmIntegrationStore()
   const crmIntakeReadStore = createDbCrmIntakeReadStore()
   setGlobalMailboxContactImportDeps({ crm: crmStore })
   const workspaceFilesStore = createDbWorkspaceFilesStore()
@@ -4770,6 +4780,11 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     brainKeyStore,
     authorizationStore: oauthAuthorizationStore,
     crmService: crmOperationsService,
+    store: associationStore,
+    associationService,
+  }))
+  app.use('/api/crm/integration', crmIntegrationRoutes({
+    credentials: crmIntegrationStore, service: crmOperationsService, association: associationService,
   }))
 
   app.use('/api/brain/mcp', brainMcpRoutes({
@@ -6495,6 +6510,13 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     emailDraftStore: crmEmailDraftStore,
     crmOperationsService,
   }))
+  app.use('/api/crm/:workspaceId/association', requireAuth(env.JWT_SECRET), crmAssociationRoutes({
+    service: associationService, context: associationMemberContext(workspaceStore),
+  }))
+  app.use('/api/workspaces', requireAuth(env.JWT_SECRET), workspaceModuleRoutes({
+    workspaceStore, modules: workspaceModulesStore, service: associationService,
+  }))
+  app.use('/api/crm', requireAuth(env.JWT_SECRET), crmIntegrationCredentialRoutes({ workspaceStore, credentials: crmIntegrationStore }))
   app.use('/api/crm', requireAuth(env.JWT_SECRET), crmOperationsRoutes({
     workspaceStore,
     service: crmOperationsService,

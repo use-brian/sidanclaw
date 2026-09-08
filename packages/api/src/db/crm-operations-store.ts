@@ -20,6 +20,10 @@ import {
   type CrmSegmentPredicate,
 } from '@use-brian/core'
 import { getPool } from './client.js'
+import { saveCrmEntitlementPlanRecord, saveCrmEventRecord } from './association-store.js'
+import type { PlanInput, EventInput } from '../association/domain.js'
+import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
+import type { CrmOperationsCommand } from '@use-brian/core'
 import { loadCrmSegmentCatalog } from './crm-segment-store.js'
 
 export type CrmOperationsRecord = Record<string, unknown>
@@ -72,6 +76,9 @@ export type IdempotencyClaim =
   | { kind: 'conflict'; claimId: string; storedHash: string }
 
 export type CrmOperationsTransaction = {
+  authorizeIntegration(command: CrmOperationsCommand): Promise<void>
+  saveEntitlementPlan(input: PlanInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
+  saveEvent(input: EventInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
   getIntakeDefinition(definitionKey: string): Promise<StoredIntakeDefinition | null>
   intakeCredentialMayUse(credentialId: string, definitionId: string): Promise<boolean>
   claimIdempotency(params: {
@@ -249,6 +256,9 @@ function actorAssistantId(actor: CrmOperationsActor): string | null {
 function createTransaction(client: PoolClient, context: CrmOperationsContext): CrmOperationsTransaction {
   const workspaceId = context.workspaceId
   return {
+    authorizeIntegration: (command) => authorizeCrmIntegrationCommand(client, context, command),
+    saveEntitlementPlan: (input) => saveCrmEntitlementPlanRecord(client, workspaceId, input),
+    saveEvent: (input) => saveCrmEventRecord(client, workspaceId, input),
     async getIntakeDefinition(definitionKey) {
       const result = await client.query<DbRecord>(
         `SELECT d.id, d.workspace_id AS "workspaceId", d.definition_key AS "definitionKey",

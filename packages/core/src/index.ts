@@ -133,3 +133,6 @@ export {
   type DecisionVisibility,
   type StableExternalIdentity,
 } from './decision-learning/types.js'
+
+export * from './association/domain.js'
+export * from './association/operations.js'

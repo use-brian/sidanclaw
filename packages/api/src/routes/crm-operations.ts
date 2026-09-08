@@ -7,6 +7,8 @@
 import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 import {
+  AssociationPlanInputSchema,
+  AssociationEventInputSchema,
   CreateCrmIntakeCredentialCommandSchema,
   CrmDeliveryChannelSchema,
   GrantCrmEntitlementCommandSchema,
@@ -81,13 +83,13 @@ const SuppressionBody = z.object({
   (value) => (value.provider === undefined) === (value.providerEventId === undefined),
   'provider and providerEventId must be supplied together',
 )
-const SubmissionQuery = z.object({
+export const SubmissionQuery = z.object({
   status: z.enum(['new', 'in_progress', 'resolved', 'spam']).optional(),
   definitionKey: CrmOperationsStableKeySchema.optional(),
   ownerUserId: CrmOperationsUuidSchema.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const SendabilityQuery = z.object({
+export const SendabilityQuery = z.object({
   channel: CrmDeliveryChannelSchema,
   purposeKey: CrmOperationsStableKeySchema,
 }).strict()
@@ -103,21 +105,21 @@ const SegmentPreviewQuery = z.object({
 }).strict()
 const EntitlementStatus = z.enum(['pending', 'active', 'expired', 'cancelled'])
 const ParticipationStatus = z.enum(['registered', 'attended', 'cancelled', 'no_show'])
-const EntitlementPlansQuery = z.object({
+export const EntitlementPlansQuery = z.object({
   published: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const EntitlementsQuery = z.object({
+export const EntitlementsQuery = z.object({
   contactId: CrmOperationsUuidSchema.optional(),
   planId: CrmOperationsUuidSchema.optional(),
   status: EntitlementStatus.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const EventsQuery = z.object({
+export const EventsQuery = z.object({
   status: z.enum(['draft', 'published', 'cancelled', 'completed']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const ParticipationQuery = z.object({
+export const ParticipationQuery = z.object({
   contactId: CrmOperationsUuidSchema.optional(),
   eventId: CrmOperationsUuidSchema.optional(),
   status: ParticipationStatus.optional(),
@@ -503,6 +505,17 @@ export function crmOperationsRoutes(options: Options): Router {
     } catch (error) { writeError(res, error) }
   })
 
+  router.post('/:workspaceId/operations/entitlement-plans', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    const body = AssociationPlanInputSchema.safeParse(req.body)
+    if (!body.success) { res.status(400).json({ error: 'invalid_input', issues: body.error.issues }); return }
+    try {
+      const output = await options.service.execute(ctx, { kind: 'save_entitlement_plan', ...body.data })
+      res.status(output.created ? 201 : 200).json(output)
+    } catch (error) { writeError(res, error) }
+  })
+
   router.get('/:workspaceId/operations/entitlement-plans', async (req, res) => {
     const ctx = await context(req, res)
     if (!ctx) return
@@ -558,6 +571,17 @@ export function crmOperationsRoutes(options: Options): Router {
       res.json(await options.service.execute(ctx, UpdateCrmEntitlementCommandSchema.parse({
         kind: 'update_entitlement', entitlementId: entitlementId.data, ...body.data,
       })))
+    } catch (error) { writeError(res, error) }
+  })
+
+  router.post('/:workspaceId/operations/events', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    const body = AssociationEventInputSchema.safeParse(req.body)
+    if (!body.success) { res.status(400).json({ error: 'invalid_input', issues: body.error.issues }); return }
+    try {
+      const output = await options.service.execute(ctx, { kind: 'save_event', ...body.data })
+      res.status(output.created ? 201 : 200).json(output)
     } catch (error) { writeError(res, error) }
   })
 

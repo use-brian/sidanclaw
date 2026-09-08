@@ -31,6 +31,8 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'association_audit_log',
   'workspace_audit_log',
   'workspace_modules',
+  'crm_integration_credentials',
+  'crm_integration_credential_grants',
   'crm_domain_event_outbox',
   'crm_import_jobs',
   'crm_import_chunks',
@@ -49,6 +51,10 @@ const EXPORT_PROJECTIONS: Record<PrivacyTable, string> = Object.fromEntries(
 EXPORT_PROJECTIONS.crm_intake_credentials = [
   'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',
   'revoked_at', 'last_used_at', 'created_at',
+].join(',')
+EXPORT_PROJECTIONS.crm_integration_credentials = [
+  'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',
+  'expires_at', 'revoked_at', 'last_used_at', 'created_at',
 ].join(',')
 
 export type CrmOperationsPrivacyExport = {

@@ -16,7 +16,7 @@ const RECORD_ID = '44444444-4444-4444-8444-444444444444'
 
 function auth(overrides: Partial<BrainAuth> = {}): BrainAuth {
   return {
-    keyId: 'brain-key-1',
+    keyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     workspaceId: WID,
     scope: 'read_write',
     maxClearance: 'internal',
@@ -49,6 +49,9 @@ function fakeStore(): AssociationStore {
     listTickets: vi.fn(),
     createOrder: vi.fn(),
     getOrder: vi.fn(),
+    listOrders: vi.fn(),
+    cancelOrder: vi.fn(),
+    confirmFreeOrder: vi.fn(),
     reconcileProviderEvent: vi.fn(),
     listEventRegistrations: vi.fn(),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'commerce' }),
@@ -112,7 +115,7 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
     expect(store.createEnquiry).toHaveBeenCalledWith(
       WID,
       expect.not.objectContaining({ workspaceId: OTHER_WID }),
-      { credentialKind: 'api_key', credentialId: 'brain-key-1' },
+      { credentialKind: 'api_key', credentialId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     )
   })
 
@@ -198,7 +201,7 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
       WID,
       RECORD_ID,
       { status: 'checked_in' },
-      { credentialKind: 'api_key', credentialId: 'brain-key-1' },
+      { credentialKind: 'brain_key', credentialId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     )
   })
 
@@ -233,7 +236,7 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
     expect(store.createMembership).not.toHaveBeenCalled()
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: WID,
-      actor: { kind: 'brain_key', credentialId: 'brain-key-1' },
+      actor: { kind: 'brain_key', credentialId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     }), expect.objectContaining({
       kind: 'grant_entitlement', contactId: CONTACT_ID,
       providerEntitlementId: 'provider-member-1',

@@ -8,6 +8,9 @@
 
 import {
   CrmOperationsError,
+  CrmIntegrationScopeError,
+  crmIntegrationResourceSelection, requireCrmIntegrationOperation, requireCrmIntegrationResources,
+  type CrmIntegrationAuthority, type CrmIntegrationOperation, type CrmIntegrationSelector,
   evaluateCrmSendability,
   type CrmDeliveryChannel,
   type CrmOperationsReadPort,
@@ -59,8 +62,30 @@ export type DbCrmOperationsReadStore = CrmIntakeReadStore & CrmOperationsReadPor
   }>
 }
 
-export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
+export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority & { workspaceId: string }): DbCrmOperationsReadStore {
+  const authorize = (workspaceId: string, operation: CrmIntegrationOperation) => {
+    if (!integration) return
+    if (workspaceId !== integration.workspaceId) throw new CrmIntegrationScopeError(operation)
+    requireCrmIntegrationOperation(integration, operation)
+  }
+  const select = (workspaceId: string, operation: CrmIntegrationOperation, dimension: CrmIntegrationSelector): readonly string[] | null => {
+    if (!integration) return null
+    authorize(workspaceId, operation)
+    const allowed = crmIntegrationResourceSelection(integration, operation, dimension)
+    return allowed === 'all' ? null : allowed
+  }
+
   const segmentStore = createDbCrmSegmentStore()
+  const authorizeSegments = (workspaceId: string) => {
+    if (!integration) return
+    authorize(workspaceId, 'crm.records.read')
+    // These legacy segment APIs return a workspace-wide derived catalog or
+    // audience. Never let them become an alternate unfiltered integration read.
+    requireCrmIntegrationResources(integration, 'crm.catalog.read', { definitionIds: null, purposeKeys: null, planIds: null, eventIds: null })
+    requireCrmIntegrationResources(integration, 'crm.consent.read', { purposeKeys: null })
+    requireCrmIntegrationResources(integration, 'crm.entitlements.read', { planIds: null })
+    requireCrmIntegrationResources(integration, 'crm.participation.read', { eventIds: null })
+  }
   const listDefinitions = async (workspaceId: string) => {
     const result = await query<Record<string, unknown>>(
       `SELECT d.id, d.definition_key AS "definitionKey", d.label, d.active,
@@ -78,15 +103,15 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
          JOIN crm_intake_definition_versions v
            ON v.workspace_id = d.workspace_id AND v.definition_id = d.id
           AND v.version = d.current_version
-        WHERE d.workspace_id = $1
+        WHERE d.workspace_id = $1 AND ($2::uuid[] IS NULL OR d.id=ANY($2::uuid[]))
         ORDER BY d.label, d.id
         LIMIT 200`,
-      [workspaceId],
+      [workspaceId, select(workspaceId, 'crm.catalog.read', 'definitionIds')],
     )
     return result.rows
   }
 
-  const listConsentPurposes = async (workspaceId: string, includeArchived = false) => {
+  const listConsentPurposes = async (workspaceId: string, includeArchived = false, operation: CrmIntegrationOperation = 'crm.catalog.read') => {
     const result = await query<Record<string, unknown>>(
       `SELECT id, purpose_key AS "purposeKey", label, description,
               requires_consent AS "requiresConsent",
@@ -97,16 +122,21 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
               updated_at AS "updatedAt"
          FROM crm_consent_purposes
         WHERE workspace_id=$1 AND ($2::boolean OR archived_at IS NULL)
+          AND ($3::text[] IS NULL OR purpose_key=ANY($3::text[]))
         ORDER BY label, id
         LIMIT 200`,
-      [workspaceId, includeArchived],
+      [workspaceId, includeArchived, select(workspaceId, operation, 'purposeKeys')],
     )
     return result.rows
   }
 
   return {
-    ...segmentStore,
+    listSegments: (workspaceId, filters) => { authorizeSegments(workspaceId); return segmentStore.listSegments(workspaceId, filters) },
+    getSegment: (workspaceId, segmentId) => { authorizeSegments(workspaceId); return segmentStore.getSegment(workspaceId, segmentId) },
+    previewSegment: (workspaceId, segmentId, options) => { authorizeSegments(workspaceId); return segmentStore.previewSegment(workspaceId, segmentId, options) },
+    listCrmEventFilterCatalog: (workspaceId) => { authorizeSegments(workspaceId); return segmentStore.listCrmEventFilterCatalog(workspaceId) },
     async authenticate(token, definitionKey) {
+      if (integration) throw new CrmOperationsError('not_authorized', 'A scoped integration read store cannot authenticate another credential family.')
       const parsed = parseCrmIntakeToken(token)
       if (!parsed) return null
       const found = await query<AuthRow>(
@@ -140,6 +170,7 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
     listIntakeDefinitions: listDefinitions,
 
     async resolveLegacyPipelineStage(workspaceId, stageKey) {
+      authorize(workspaceId, 'crm.records.read')
       const result = await query<{ pipelineId: string; stageId: string }>(
         `SELECT p.id AS "pipelineId",s.id AS "stageId"
            FROM crm_pipelines p
@@ -155,6 +186,7 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
     },
 
     async listCredentials(workspaceId) {
+      if (integration) throw new CrmOperationsError('not_authorized', 'Integration credentials cannot administer intake credentials.')
       const result = await query<Record<string, unknown>>(
         `SELECT c.id, c.label, c.secret_prefix AS prefix,
                 c.revoked_at AS "revokedAt", c.last_used_at AS "lastUsedAt",
@@ -190,10 +222,11 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
             AND ($2::text IS NULL OR e.status=$2)
             AND ($3::text IS NULL OR d.definition_key=$3)
             AND ($4::uuid IS NULL OR e.owner_user_id=$4)
+            AND ($6::uuid[] IS NULL OR e.definition_id=ANY($6::uuid[]))
           ORDER BY e.submitted_at DESC, e.id DESC
           LIMIT $5`,
         [workspaceId, filters.status ?? null, filters.definitionKey ?? null,
-          filters.ownerUserId ?? null, limit],
+          filters.ownerUserId ?? null, limit, select(workspaceId, 'crm.submissions.read', 'definitionIds')],
       )
       return result.rows
     },
@@ -219,8 +252,8 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
            JOIN entities c ON c.workspace_id=e.workspace_id AND c.id=e.contact_id
            LEFT JOIN crm_intake_definitions d
              ON d.workspace_id=e.workspace_id AND d.id=e.definition_id
-          WHERE e.workspace_id=$1 AND e.id=$2`,
-        [workspaceId, submissionId],
+          WHERE e.workspace_id=$1 AND e.id=$2 AND ($3::uuid[] IS NULL OR e.definition_id=ANY($3::uuid[]))`,
+        [workspaceId, submissionId, select(workspaceId, 'crm.submissions.read', 'definitionIds')],
       )
       return result.rows[0] ?? null
     },
@@ -228,10 +261,12 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
     listConsentPurposes,
 
     async getConsent(workspaceId, contactId) {
+      const purposesAllowed = select(workspaceId, 'crm.consent.read', 'purposeKeys')
+      if (purposesAllowed?.length === 0) throw new CrmIntegrationScopeError('crm.consent.read', 'purposeKeys')
       const contact = await query(`SELECT 1 FROM entities WHERE workspace_id=$1 AND id=$2 AND kind='person'`, [workspaceId, contactId])
       if (contact.rowCount !== 1) throw new CrmOperationsError('not_found', 'CRM contact was not found.')
       const [purposes, events, suppressions] = await Promise.all([
-        listConsentPurposes(workspaceId, true),
+        listConsentPurposes(workspaceId, true, 'crm.consent.read'),
         query<Record<string, unknown>>(
           `SELECT e.id, e.purpose_id AS "purposeId", e.purpose AS "purposeKey",
                   e.action, e.wording_version AS "wordingVersion",
@@ -240,10 +275,10 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
                   e.provider_event_id AS "providerEventId", e.actor_kind AS "actorKind",
                   e.acting_user_id AS "actingUserId", e.created_at AS "createdAt"
              FROM association_consent_events e
-            WHERE e.workspace_id=$1 AND e.contact_id=$2
+            WHERE e.workspace_id=$1 AND e.contact_id=$2 AND ($3::text[] IS NULL OR e.purpose=ANY($3::text[]))
             ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
             LIMIT 500`,
-          [workspaceId, contactId],
+          [workspaceId, contactId, purposesAllowed],
         ).then((rows) => rows.rows),
         query<Record<string, unknown>>(
           `SELECT id, channel, action, reason_code AS "reasonCode", source,
@@ -272,9 +307,9 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
                 p.created_at AS "createdAt", p.updated_at AS "updatedAt"
            FROM association_membership_plans p
           WHERE p.workspace_id=$1
-            AND ($2::boolean IS NULL OR p.published=$2)
+            AND ($2::boolean IS NULL OR p.published=$2) AND ($4::uuid[] IS NULL OR p.id=ANY($4::uuid[]))
           ORDER BY p.name, p.id LIMIT $3`,
-        [workspaceId, filters.published ?? null, limit],
+        [workspaceId, filters.published ?? null, limit, select(workspaceId, 'crm.catalog.read', 'planIds')],
       )
       return result.rows
     },
@@ -296,11 +331,11 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
           WHERE m.workspace_id=$1
             AND ($2::uuid IS NULL OR m.contact_id=$2)
             AND ($3::uuid IS NULL OR m.plan_id=$3)
-            AND ($4::text IS NULL OR m.status=$4)
+            AND ($4::text IS NULL OR m.status=$4) AND ($6::uuid[] IS NULL OR m.plan_id=ANY($6::uuid[]))
             AND c.valid_to IS NULL AND c.retracted_at IS NULL
           ORDER BY m.created_at DESC, m.id DESC LIMIT $5`,
         [workspaceId, filters.contactId ?? null, filters.planId ?? null,
-          filters.status ?? null, limit],
+          filters.status ?? null, limit, select(workspaceId, 'crm.entitlements.read', 'planIds')],
       )
       return result.rows
     },
@@ -318,9 +353,9 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
                   WHERE t.workspace_id=e.workspace_id AND t.event_id=e.id) AS "commerceManaged",
                 e.created_at AS "createdAt", e.updated_at AS "updatedAt"
            FROM association_events e
-          WHERE e.workspace_id=$1 AND ($2::text IS NULL OR e.status=$2)
+          WHERE e.workspace_id=$1 AND ($2::text IS NULL OR e.status=$2) AND ($4::uuid[] IS NULL OR e.id=ANY($4::uuid[]))
           ORDER BY e.starts_at DESC, e.id DESC LIMIT $3`,
-        [workspaceId, filters.status ?? null, limit],
+        [workspaceId, filters.status ?? null, limit, select(workspaceId, 'crm.catalog.read', 'eventIds')],
       )
       return result.rows
     },
@@ -352,17 +387,18 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
             WHERE r.workspace_id=$1
               AND ($2::uuid IS NULL OR r.attendee_contact_id=$2)
               AND ($3::uuid IS NULL OR r.event_id=$3)
-              AND ($4::text IS NULL OR r.source_kind=$4)
+              AND ($4::text IS NULL OR r.source_kind=$4) AND ($7::uuid[] IS NULL OR r.event_id=ANY($7::uuid[]))
          ) p
          WHERE ($5::text IS NULL OR p.status=$5)
          ORDER BY p."createdAt" DESC, p.id DESC LIMIT $6`,
         [workspaceId, filters.contactId ?? null, filters.eventId ?? null,
-          filters.sourceKind ?? null, filters.status ?? null, limit],
+          filters.sourceKind ?? null, filters.status ?? null, limit, select(workspaceId, 'crm.participation.read', 'eventIds')],
       )
       return result.rows
     },
 
     async listPipelines(workspaceId, filters = {}) {
+      authorize(workspaceId, 'crm.records.read')
       const includeArchived = filters.includeArchived ?? false
       const result = await query<Record<string, unknown>>(
         `SELECT p.id, p.id::text AS "pipelineKey", 'deal'::text AS "entityKind",
@@ -390,6 +426,8 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
     },
 
     async checkSendability(workspaceId, contactId, channel, purposeKey) {
+      authorize(workspaceId, 'crm.consent.read')
+      if (integration) requireCrmIntegrationResources(integration, 'crm.consent.read', { purposeKeys: purposeKey })
       const purpose = await query<{
         id: string
         archivedAt: Date | null
@@ -402,8 +440,8 @@ export function createDbCrmIntakeReadStore(): DbCrmOperationsReadStore {
       if (!purpose.rows[0]) {
         const valid = await query<{ purposeKey: string }>(
           `SELECT purpose_key AS "purposeKey" FROM crm_consent_purposes
-            WHERE workspace_id=$1 ORDER BY purpose_key LIMIT 100`,
-          [workspaceId],
+            WHERE workspace_id=$1 AND ($2::text[] IS NULL OR purpose_key=ANY($2::text[])) ORDER BY purpose_key LIMIT 100`,
+          [workspaceId, select(workspaceId, 'crm.consent.read', 'purposeKeys')],
         )
         throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', {
           purposeKey,

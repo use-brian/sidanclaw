@@ -81,7 +81,7 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
     expect(rows).toEqual([{ id: 'submission-1' }])
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('WHERE e.workspace_id=$1'),
-      [WORKSPACE_ID, 'new', 'contact_form', null, 25],
+      [WORKSPACE_ID, 'new', 'contact_form', null, 25, null],
     )
   })
 
@@ -118,7 +118,7 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
     })
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("WHEN 'confirmed' THEN 'registered'"),
-      [WORKSPACE_ID, null, DEFINITION_ID, 'commerce', 'registered', 25],
+      [WORKSPACE_ID, null, DEFINITION_ID, 'commerce', 'registered', 25, null],
     )
   })
 
