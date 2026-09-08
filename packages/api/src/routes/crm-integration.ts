@@ -21,7 +21,7 @@ import { listCrmOperationsAudit, listCrmEventDelivery } from '../crm-operations/
 import type { WorkspaceStore } from '../db/workspace-store.js'
 import { associationErrorResponse } from './association.js'
 import { associationMemberContext, crmAssociationRoutes } from './crm-association.js'
-import { SubmissionQuery, SendabilityQuery, EntitlementPlansQuery, EntitlementsQuery, EventsQuery, ParticipationQuery } from './crm-operations.js'
+import { SubmissionQuery, SendabilityQuery, EntitlementPlansQuery, EntitlementsQuery, EventsQuery, ParticipationQuery, SegmentListQuery } from './crm-operations.js'
 
 const UUID = z.string().uuid()
 export function crmIntegrationContext(principal: CrmIntegrationPrincipal): CrmOperationsContext {
@@ -148,6 +148,12 @@ export function crmIntegrationRoutes(options: {
   }))
   router.get('/operations/intake-definitions', endpoint(async (req, res) => {
     res.json(await reads(res).listDefinitions(principal(res).workspaceId, CrmPageQuerySchema.parse(req.query)))
+  }))
+  router.get('/operations/segments', endpoint(async (req, res) => {
+    const query = SegmentListQuery.parse(req.query)
+    res.json(await reads(res).listSegments(principal(res).workspaceId, {
+      ...query, includeArchived: query.includeArchived === 'true',
+    }))
   }))
   router.get('/operations/consent-purposes', endpoint(async (req, res) => {
     const query = CrmPageQuerySchema.extend({ includeArchived: z.enum(['true', 'false']).optional() }).strict().parse(req.query)

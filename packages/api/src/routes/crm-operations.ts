@@ -103,7 +103,7 @@ export const SendabilityQuery = z.object({
 }).strict()
 const SaveSegmentCreateBody = SaveCrmSegmentCommandSchema.omit({ kind: true, segmentId: true }).strict()
 const SaveSegmentUpdateBody = SaveCrmSegmentCommandSchema.omit({ kind: true, segmentId: true }).strict()
-const SegmentListQuery = CrmPageQuerySchema.extend({
+export const SegmentListQuery = CrmPageQuerySchema.extend({
   entityKind: z.enum(['person', 'company', 'deal']).default('person'),
   includeArchived: z.enum(['true', 'false']).optional(),
 }).strict()
