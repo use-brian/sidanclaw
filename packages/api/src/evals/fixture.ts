@@ -27,6 +27,7 @@ import { homeAppToolRequirements } from '@use-brian/shared'
 import {
   LAYER_1_SYSTEM_PROMPT,
   createCrmTools,
+  createEntityAliasTools,
   createDocTools,
   createGoogleCalendarTools,
   createMemoryTools,
@@ -147,8 +148,11 @@ function stubExecute(tool: Tool): Tool {
     // writes get a shape-matched ack carrying a deterministic fixture id so
     // multi-step flows can proceed (v1.1 debt (b)); then the empty-workspace
     // read ack; then a bare "Done." for id-less writes.
-    execute: async () => ({
+    execute: async (input: Record<string, unknown>) => ({
       data:
+        (tool.name === 'noteAlias' || tool.name === 'splitAlias'
+          ? { entityId: input.entity_id ?? fixtureId(tool.name), aliases: tool.name === 'noteAlias' && typeof input.alias === 'string' ? [input.alias.trim().toLowerCase()] : [] }
+          : undefined) ??
         SEMANTIC_ACKS[tool.name] ??
         WRITE_ACK_TEMPLATES[tool.name]?.(fixtureId(tool.name)) ??
         (tool.isReadOnly
@@ -212,6 +216,7 @@ export function buildFixtureWorkspace(): FixtureWorkspace {
   addAll(tools, createSchedulingTools(anyStub()))
   addAll(tools, createTaskTools(anyStub(), anyStub()))
   addAll(tools, createCrmTools(anyStub()))
+  addAll(tools, createEntityAliasTools(anyStub()))
   addAll(tools, createMemoryTools(anyStub()))
   addAll(tools, createRetrievalTools(anyStub()))
   addAll(tools, createWorkflowBrainTools(anyStub()))

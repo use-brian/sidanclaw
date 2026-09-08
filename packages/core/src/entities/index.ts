@@ -117,3 +117,5 @@ export {
 
 export * from './doc-built-ins.js'
 export * from './doc-tools.js'
+
+export { createEntityAliasTools } from './alias-tools.js'

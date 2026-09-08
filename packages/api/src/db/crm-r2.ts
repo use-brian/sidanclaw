@@ -887,6 +887,7 @@ async function listRelatedKind(
     kind: row.kind,
     name: row.name,
     attributes: row.attributes ?? {},
+    aliases: row.aliases ?? [],
     archivedAt: row.archivedAt?.toISOString() ?? null,
     updatedAt: row.updatedAt.toISOString(),
   }))
@@ -1116,7 +1117,7 @@ export async function listCrmRecordPage(
   if (options.search?.trim()) {
     const pattern = `%${options.search.trim()}%`
     add((index) => options.kind === 'person'
-      ? `(e.display_name ILIKE $${index} OR e.attributes->>'email' ILIKE $${index}
+      ? `(e.display_name ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${index}) OR e.attributes->>'email' ILIKE $${index}
           OR e.attributes->>'phone' ILIKE $${index}
           OR (e.attributes->'tags')::text ILIKE $${index}
           OR EXISTS (
@@ -1131,7 +1132,7 @@ export async function listCrmRecordPage(
                  ) item WHERE item ILIKE $${index}))
           ))`
       : options.kind === 'company'
-        ? `(e.display_name ILIKE $${index} OR e.attributes->>'domain' ILIKE $${index}
+        ? `(e.display_name ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${index}) OR e.attributes->>'domain' ILIKE $${index}
             OR (e.attributes->'tags')::text ILIKE $${index}
             OR EXISTS (
               SELECT 1 FROM crm_field_definitions f
@@ -1144,7 +1145,7 @@ export async function listCrmRecordPage(
                        THEN e.attributes->'custom_fields'->f.field_key ELSE '[]'::jsonb END
                    ) item WHERE item ILIKE $${index}))
             ))`
-        : `(e.display_name ILIKE $${index} OR e.attributes->>'source' ILIKE $${index}
+        : `(e.display_name ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${index}) OR e.attributes->>'source' ILIKE $${index}
             OR EXISTS (SELECT 1 FROM entities related
               WHERE related.workspace_id = e.workspace_id
                 AND related.valid_to IS NULL AND related.retracted_at IS NULL
@@ -1242,11 +1243,12 @@ export async function listCrmRecordPage(
     kind: CrmEntityKind
     name: string
     attributes: Record<string, unknown> | null
+    aliases: string[] | null
     archivedAt: Date | null
     updatedAt: Date
     sortValue: Date | string | number | null
   }>(ctx,
-    `SELECT e.id, e.kind, e.display_name AS name, e.attributes,
+    `SELECT e.id, e.kind, e.display_name AS name, e.attributes, e.aliases,
             NULLIF(e.attributes->>'crm_archived_at','')::timestamptz AS "archivedAt",
             e.updated_at AS "updatedAt", ${sort.sql} AS "sortValue"
        FROM entities e
@@ -1262,6 +1264,7 @@ export async function listCrmRecordPage(
     kind: row.kind,
     name: row.name,
     attributes: row.attributes ?? {},
+    aliases: row.aliases ?? [],
     archivedAt: row.archivedAt?.toISOString() ?? null,
     updatedAt: row.updatedAt.toISOString(),
   }))
@@ -1383,6 +1386,7 @@ export async function lookupCrmRecords(input: {
   if (input.query?.trim()) {
     values.push(`%${input.query.trim()}%`)
     search = `AND (e.display_name ILIKE $${values.length}
+      OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${values.length})
       OR COALESCE(e.canonical_id,'') ILIKE $${values.length})`
   }
   values.push(limit)

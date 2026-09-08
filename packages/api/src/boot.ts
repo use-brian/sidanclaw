@@ -73,6 +73,7 @@ import {
   createWorkflowBrainTools,
   createCorrectionTools,
   createBrainHealingTools,
+  createEntityAliasTools,
   createScheduleWorkflowTool,
   advanceWorkflowRun,
   stepSuccessors,
@@ -3480,6 +3481,11 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     })) {
       allTools.set(healingTool.name, healingTool)
     }
+  }
+
+  // Native aliases belong to every edition, independent of reclassification.
+  for (const aliasTool of createEntityAliasTools(entitiesStore)) {
+    allTools.set(aliasTool.name, aliasTool)
   }
 
   const scheduleWorkflow = createScheduleWorkflowTool({

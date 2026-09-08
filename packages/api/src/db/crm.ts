@@ -187,7 +187,7 @@ function companyFromEntity(e: EntityRecord): CompanyRecord {
   const a = e.attributes
   return {
     id: e.id, workspaceId: e.workspaceId, entityId: e.id,
-    name: e.displayName,
+    name: e.displayName, aliases: e.aliases,
     domain: attrStr(a, 'domain') ?? e.canonicalId ?? null,
     tags: attrTags(a), externalRef: attrRef(a),
     sensitivity: e.sensitivity, compartments: e.compartments, projectIds: e.projectIds,
@@ -198,7 +198,7 @@ function contactFromEntity(e: EntityRecord): ContactRecord {
   const a = e.attributes
   return {
     id: e.id, workspaceId: e.workspaceId, entityId: e.id,
-    name: e.displayName,
+    name: e.displayName, aliases: e.aliases,
     email: attrStr(a, 'email') ?? e.canonicalId ?? null,
     phone: attrStr(a, 'phone'),
     companyId: attrStr(a, 'company_id'),
@@ -213,7 +213,7 @@ function dealFromEntity(e: EntityRecord): DealRecord {
   const closeDate = a.close_date
   return {
     id: e.id, workspaceId: e.workspaceId, entityId: e.id,
-    name: e.displayName,
+    name: e.displayName, aliases: e.aliases,
     contactId: attrStr(a, 'contact_id'),
     companyId: attrStr(a, 'company_id'),
     stage: (attrStr(a, 'stage') as DealStage) ?? 'lead',
@@ -232,7 +232,7 @@ type CompanyRow = Omit<CompanyRecord, 'tags' | 'externalRef'> & {
 }
 const COMPANY_SELECT = `
   e.id, e.id AS "entityId", e.workspace_id AS "workspaceId",
-  e.display_name AS name,
+  e.display_name AS name, e.aliases,
   COALESCE(e.attributes->>'domain', e.canonical_id) AS domain,
   e.attributes->'tags' AS tags,
   e.attributes->'external_ref' AS "externalRef",
@@ -240,7 +240,7 @@ const COMPANY_SELECT = `
   e.created_at AS "createdAt", e.updated_at AS "updatedAt"`
 
 function toCompanyRow(row: CompanyRow): CompanyRecord {
-  return { ...row, tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
+  return { ...row, aliases: row.aliases ?? [], tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
 }
 
 function companyAttributes(p: {
@@ -369,7 +369,7 @@ export async function listCompanies(ctx: AccessContext, filters: CompanyListFilt
   let idx = ap.nextIdx
 
   if (filters.query) {
-    wheres.push(`(e.display_name ILIKE $${idx} OR e.attributes->>'domain' ILIKE $${idx})`)
+    wheres.push(`(e.display_name ILIKE $${idx} OR COALESCE(e.attributes->>'domain', e.canonical_id) ILIKE $${idx} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${idx}))`)
     values.push(`%${filters.query}%`); idx++
   }
   if (filters.tag) {
@@ -438,7 +438,7 @@ type ContactRow = Omit<ContactRecord, 'tags' | 'externalRef'> & {
 }
 const CONTACT_SELECT = `
   e.id, e.id AS "entityId", e.workspace_id AS "workspaceId",
-  e.display_name AS name,
+  e.display_name AS name, e.aliases,
   COALESCE(e.attributes->>'email', e.canonical_id) AS email,
   e.attributes->>'phone' AS phone,
   e.attributes->>'company_id' AS "companyId",
@@ -448,7 +448,7 @@ const CONTACT_SELECT = `
   e.created_at AS "createdAt", e.updated_at AS "updatedAt"`
 
 function toContactRow(row: ContactRow): ContactRecord {
-  return { ...row, tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
+  return { ...row, aliases: row.aliases ?? [], tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
 }
 
 function contactAttributes(p: {
@@ -655,7 +655,7 @@ export async function listContacts(ctx: AccessContext, filters: ContactListFilte
     const phoneArm = queryDigits.length >= 5
       ? ` OR regexp_replace(COALESCE(e.attributes->>'phone', ''), '[^0-9]', '', 'g') LIKE '%' || regexp_replace($${idx}, '[^0-9]', '', 'g') || '%'`
       : ''
-    wheres.push(`(e.display_name ILIKE $${idx} OR e.attributes->>'email' ILIKE $${idx}${phoneArm})`)
+    wheres.push(`(e.display_name ILIKE $${idx} OR COALESCE(e.attributes->>'email', e.canonical_id) ILIKE $${idx}${phoneArm} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${idx}))`)
     values.push(`%${filters.query}%`); idx++
   }
   if (filters.tag) {
@@ -732,7 +732,7 @@ type DealRow = Omit<DealRecord, 'amount' | 'externalRef'> & {
 }
 const DEAL_SELECT = `
   e.id, e.id AS "entityId", e.workspace_id AS "workspaceId",
-  e.display_name AS name,
+  e.display_name AS name, e.aliases,
   e.attributes->>'contact_id' AS "contactId",
   e.attributes->>'company_id' AS "companyId",
   COALESCE(e.attributes->>'stage', 'lead') AS stage,
@@ -745,6 +745,7 @@ const DEAL_SELECT = `
 function toDealRow(row: DealRow): DealRecord {
   return {
     ...row,
+    aliases: row.aliases ?? [],
     amount: row.amount === null ? null : Number(row.amount),
     externalRef: row.externalRef ?? {},
   }

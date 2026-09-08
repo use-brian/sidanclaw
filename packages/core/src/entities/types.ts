@@ -444,6 +444,7 @@ export interface EntityStore {
     actorUserId: string,
     entityId: string,
     alias: string,
+    access?: AccessContext,
   ): Promise<
     | { kind: 'ok'; entity: EntityRecord }
     | { kind: 'conflict'; conflictingEntityId: string }
@@ -459,6 +460,7 @@ export interface EntityStore {
     actorUserId: string,
     entityId: string,
     alias: string,
+    access?: AccessContext,
   ): Promise<EntityRecord | null>
 
   update(

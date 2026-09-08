@@ -50,7 +50,7 @@ function makeFakeStore(): CrmStore & { data: FakeData } {
       }
       if (filters.tag) rows = rows.filter((r) => r.tags.includes(filters.tag!))
       return rows.slice(0, filters.limit ?? 25).map((r) => ({
-        id: r.id, workspaceId: r.workspaceId, entityId: r.entityId, name: r.name, domain: r.domain,
+        id: r.id, workspaceId: r.workspaceId, entityId: r.entityId, name: r.name, aliases: r.aliases, domain: r.domain,
         tags: r.tags, updatedAt: r.updatedAt,
       }))
     },
@@ -104,7 +104,7 @@ function makeFakeStore(): CrmStore & { data: FakeData } {
       if (filters.tag) rows = rows.filter((r) => r.tags.includes(filters.tag!))
       if (filters.companyId) rows = rows.filter((r) => r.companyId === filters.companyId)
       return rows.slice(0, filters.limit ?? 25).map((r) => ({
-        id: r.id, workspaceId: r.workspaceId, entityId: r.entityId, name: r.name, email: r.email,
+        id: r.id, workspaceId: r.workspaceId, entityId: r.entityId, name: r.name, aliases: r.aliases, email: r.email,
         phone: r.phone, companyId: r.companyId, tags: r.tags, updatedAt: r.updatedAt,
       }))
     },
@@ -795,5 +795,51 @@ describe('[COMP:crm/cross-entity] cross-entity filters', () => {
       const offender = texts.find((t) => banned.test(t))
       expect(offender, `${tool.name} description names a third-party CRM product`).toBeUndefined()
     }
+  })
+})
+
+
+describe('[COMP:crm/tools] native alias guidance and readback', () => {
+  it('exposes native aliases and phone separately from the canonical contact name', async () => {
+    const store = makeFakeStore()
+    const tools = createCrmTools(store)
+    await tools.saveContact.execute({ name: 'Morgan Vale', phone: '+1 202 555 0142' }, ctx)
+    const record = store.data.contacts[0]!
+    record.aliases = ['momo']
+    const expected = { id: record.id, name: 'Morgan Vale', aliases: ['momo'], phone: '+1 202 555 0142' }
+    expect((await tools.getContact.execute({ id: record.id }, ctx)).data).toMatchObject(expected)
+    expect((await tools.listContacts.execute({}, ctx)).data).toEqual([expect.objectContaining(expected)])
+  })
+
+  it('reads company and deal aliases separately from their names', async () => {
+    const store = makeFakeStore()
+    const tools = createCrmTools(store)
+    await tools.saveCompany.execute({ name: 'Example Works' }, ctx)
+    const company = store.data.companies[0]!
+    company.aliases = ['ew']
+    expect((await tools.getCompany.execute({ id: company.id }, ctx)).data).toMatchObject({ name: 'Example Works', aliases: ['ew'] })
+    expect((await tools.listCompanies.execute({}, ctx)).data).toEqual([expect.objectContaining({ name: 'Example Works', aliases: ['ew'] })])
+    await tools.saveDeal.execute({ company_id: company.id }, ctx)
+    const deal = store.data.deals[0]!
+    deal.aliases = ['renewal']
+    expect((await tools.getDeal.execute({ id: deal.id }, ctx)).data).toMatchObject({ name: deal.name, aliases: ['renewal'] })
+  })
+
+  it('routes identity teaching to native alias curation instead of name edits or replacement saves', () => {
+    const tools = createCrmTools(makeFakeStore())
+    for (const tool of [tools.saveContact, tools.updateContact, tools.saveCompany, tools.updateCompany]) {
+      expect(tool.description).toContain('noteAlias')
+      expect(tool.description).toContain('never append')
+      expect(tool.description).toContain('Only rename when the user requests')
+      expect(tool.description).toContain('persisted aliases')
+    }
+  })
+
+  it('does not claim an ordinary update replaced a missing record id', async () => {
+    const result = await createCrmTools(makeFakeStore()).getContact.execute({ id: 'missing' }, ctx)
+    expect(result.isError).toBe(true)
+    expect(result.data).toContain('updates keep the same id')
+    expect(result.data).not.toContain('NEW id')
+    expect(result.data).not.toContain('supersedes')
   })
 })
