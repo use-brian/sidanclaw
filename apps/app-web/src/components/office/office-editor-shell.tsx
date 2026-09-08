@@ -329,7 +329,14 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
       {artifact.mode === "template" ? <div className="flex items-center justify-between gap-3 border-b bg-amber-50 px-4 py-2 text-xs font-medium text-amber-950"><span>{t.templateMode}</span>{templateId ? <button type="button" title={templateRoutingBlocked ? t.routingSaveBeforePublish : t.templateAdmit} disabled={templateCompileState === "queued" || !live || templateRoutingBlocked} className="rounded bg-amber-950 px-3 py-1.5 text-amber-50 disabled:opacity-50" onClick={() => void publishTemplate()}>{templateRoutingBlocked ? t.routingSaveBeforePublish : templateCompileState === "queued" ? t.templateCompiling : templateCompileState === "failed" ? t.templateCompileFailed : t.templateAdmit}</button> : null}</div> : null}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <main ref={editorRootRef} className="flex min-h-0 flex-1 overflow-hidden bg-muted/30">{editor}</main>
-        <aside className={cn("shrink-0 overflow-y-auto border-t bg-background transition-[width] lg:border-l lg:border-t-0", panelOpen ? showTemplateRouting && panel === "routing" ? "w-full lg:w-80" : "w-full lg:w-64" : "w-full lg:w-12")} data-office-panel={panelOpen ? "open" : "collapsed"}>
+        {/* Below `lg` the panel stacks LAST in this column, and below `sm` the
+            document toolbar is a `fixed inset-x-2 bottom-2` bar over it - so
+            without reserved space the collapsed 40px strip (the ONLY way to
+            reopen Brian / Comments / History / Sharing / File actions) sat
+            entirely under the toolbar (responsive contract M1 / M6). The
+            bottom padding reserves the toolbar's height plus the home
+            indicator; `sm+` uses the in-flow desktop toolbar and needs none. */}
+        <aside className={cn("shrink-0 overflow-y-auto border-t bg-background transition-[width] max-sm:pb-[calc(4rem+env(safe-area-inset-bottom))] lg:border-l lg:border-t-0", panelOpen ? showTemplateRouting && panel === "routing" ? "w-full lg:w-80" : "w-full lg:w-64" : "w-full lg:w-12")} data-office-panel={panelOpen ? "open" : "collapsed"}>
           {panelOpen ? <>
             <div className="flex items-center justify-between gap-2 border-b p-2">
               <div className="flex min-w-0 items-center gap-2"><span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600"><Sparkles className="size-3.5" aria-hidden /></span><div className="min-w-0"><p className="truncate text-xs font-semibold">{t.brian}</p><p className="truncate text-[11px] text-muted-foreground">{t.workspaceAssistant}</p></div></div>
