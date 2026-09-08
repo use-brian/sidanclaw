@@ -25,6 +25,7 @@ import type { PlanInput, EventInput } from '../association/domain.js'
 import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
 import type { CrmOperationsCommand } from '@use-brian/core'
 import { loadCrmSegmentCatalog } from './crm-segment-store.js'
+import { crmEvidenceRequestHash, resolveCrmEvidenceReplay, type CrmEvidenceRequest } from '../crm-operations/evidence-replay.js'
 
 export type CrmOperationsRecord = Record<string, unknown>
 
@@ -127,10 +128,12 @@ export type CrmOperationsTransaction = {
   getConsentPurpose(purposeKey: string): Promise<CrmOperationsRecord | null>
   appendConsent(params: {
     contactId: string
-    purpose: CrmOperationsRecord
+    purpose: CrmOperationsRecord | null
+    purposeKey: string
     action: 'granted' | 'withdrawn'
     source: string
     occurredAt: string
+    requestedOccurredAt?: string
     provider?: string
     providerEventId?: string
     metadata: Record<string, unknown>
@@ -143,6 +146,7 @@ export type CrmOperationsTransaction = {
     reasonCode: string
     source: string
     occurredAt: string
+    requestedOccurredAt?: string
     provider?: string
     providerEventId?: string
     metadata: Record<string, unknown>
@@ -536,96 +540,86 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async appendConsent(params) {
+      const request: CrmEvidenceRequest = { kind: 'consent', contactId: params.contactId,
+        purposeKey: params.purposeKey, action: params.action, source: params.source,
+        occurredAt: params.requestedOccurredAt, metadata: params.metadata }
+      const select = `id, contact_id AS "contactId", purpose, action,
+        wording_version AS "wordingVersion", wording_hash AS "wordingHash",
+        wording_snapshot AS wording, source, occurred_at AS "occurredAt",
+        provider, provider_event_id AS "providerEventId", metadata, created_at AS "createdAt"`
+      const replay = () => client.query<DbRecord>(
+        `SELECT ${select}, request_fingerprint AS "__requestHash",
+                to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__occurredAt"
+           FROM association_consent_events
+          WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+        [workspaceId, params.provider, params.providerEventId],
+      )
       if (params.provider && params.providerEventId) {
-        const existing = await client.query<DbRecord>(
-          `SELECT id, contact_id AS "contactId", purpose, action,
-                  wording_version AS "wordingVersion", wording_hash AS "wordingHash",
-                  wording_snapshot AS wording, source, occurred_at AS "occurredAt",
-                  provider, provider_event_id AS "providerEventId", metadata,
-                  created_at AS "createdAt"
-             FROM association_consent_events
-            WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-          [workspaceId, params.provider, params.providerEventId],
-        )
-        if (existing.rows[0]) return { record: existing.rows[0], created: false }
+        const existing = await replay()
+        if (existing.rows[0]) return { record: resolveCrmEvidenceReplay(existing.rows[0], request), created: false }
+      }
+      const purpose = params.purpose
+      if (!purpose || purpose.archivedAt || purpose.purposeKey !== params.purposeKey) {
+        throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', { purposeKey: params.purposeKey })
       }
       const result = await client.query<DbRecord>(
         `INSERT INTO association_consent_events (
            workspace_id, contact_id, purpose, purpose_id, action,
            wording_version, wording_hash, wording_snapshot, source, occurred_at,
            provider, provider_event_id, metadata, actor_kind,
-           actor_credential_id, acting_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16)
+           actor_credential_id, acting_user_id, request_fingerprint
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17)
          ON CONFLICT (workspace_id, provider, provider_event_id)
            WHERE provider IS NOT NULL DO NOTHING
-         RETURNING id, contact_id AS "contactId", purpose, action,
-                   wording_version AS "wordingVersion", wording_hash AS "wordingHash",
-                   wording_snapshot AS wording, source, occurred_at AS "occurredAt",
-                   provider, provider_event_id AS "providerEventId", metadata,
-                   created_at AS "createdAt"`,
-        [workspaceId, params.contactId, params.purpose.purposeKey, params.purpose.id,
-          params.action, params.purpose.wordingVersion, params.purpose.wordingHash,
-          params.purpose.wording, params.source, params.occurredAt,
+         RETURNING ${select}`,
+        [workspaceId, params.contactId, purpose.purposeKey, purpose.id,
+          params.action, purpose.wordingVersion, purpose.wordingHash,
+          purpose.wording, params.source, params.occurredAt,
           params.provider ?? null, params.providerEventId ?? null,
           JSON.stringify(params.metadata), params.actor.actorKind,
-          params.actor.actorCredentialId, params.actor.actingUserId],
+          params.actor.actorCredentialId, params.actor.actingUserId,
+          params.provider ? crmEvidenceRequestHash(request) : null],
       )
       if (result.rows[0]) return { record: result.rows[0], created: true }
-      const existing = await client.query<DbRecord>(
-        `SELECT id, contact_id AS "contactId", purpose, action,
-                wording_version AS "wordingVersion", wording_hash AS "wordingHash",
-                wording_snapshot AS wording, source, occurred_at AS "occurredAt",
-                provider, provider_event_id AS "providerEventId", metadata,
-                created_at AS "createdAt"
-           FROM association_consent_events
-          WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-        [workspaceId, params.provider, params.providerEventId],
-      )
-      return { record: first(existing), created: false }
+      return { record: resolveCrmEvidenceReplay(first(await replay()), request), created: false }
     },
 
     async appendSuppression(params) {
+      const request: CrmEvidenceRequest = { kind: 'suppression', contactId: params.contactId,
+        channel: params.channel, action: params.action, reasonCode: params.reasonCode,
+        source: params.source, occurredAt: params.requestedOccurredAt, metadata: params.metadata }
+      const select = `id, contact_id AS "contactId", channel, action,
+        reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
+        provider, provider_event_id AS "providerEventId", metadata, created_at AS "createdAt"`
+      const replay = () => client.query<DbRecord>(
+        `SELECT ${select}, request_fingerprint AS "__requestHash",
+                to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__occurredAt"
+           FROM crm_suppression_events
+          WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+        [workspaceId, params.provider, params.providerEventId],
+      )
       if (params.provider && params.providerEventId) {
-        const existing = await client.query<DbRecord>(
-          `SELECT id, contact_id AS "contactId", channel, action,
-                  reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
-                  provider, provider_event_id AS "providerEventId", metadata,
-                  created_at AS "createdAt"
-             FROM crm_suppression_events
-            WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-          [workspaceId, params.provider, params.providerEventId],
-        )
-        if (existing.rows[0]) return { record: existing.rows[0], created: false }
+        const existing = await replay()
+        if (existing.rows[0]) return { record: resolveCrmEvidenceReplay(existing.rows[0], request), created: false }
       }
       const result = await client.query<DbRecord>(
         `INSERT INTO crm_suppression_events (
            workspace_id, contact_id, channel, action, reason_code, source,
            actor_kind, actor_credential_id, acting_user_id, provider,
-           provider_event_id, occurred_at, metadata
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+           provider_event_id, occurred_at, metadata, request_fingerprint
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
          ON CONFLICT (workspace_id, provider, provider_event_id)
            WHERE provider IS NOT NULL DO NOTHING
-         RETURNING id, contact_id AS "contactId", channel, action,
-                   reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
-                   provider, provider_event_id AS "providerEventId", metadata,
-                   created_at AS "createdAt"`,
+         RETURNING ${select}`,
         [workspaceId, params.contactId, params.channel, params.action,
           params.reasonCode, params.source, params.actor.actorKind,
           params.actor.actorCredentialId, params.actor.actingUserId,
           params.provider ?? null, params.providerEventId ?? null,
-          params.occurredAt, JSON.stringify(params.metadata)],
+          params.occurredAt, JSON.stringify(params.metadata),
+          params.provider ? crmEvidenceRequestHash(request) : null],
       )
       if (result.rows[0]) return { record: result.rows[0], created: true }
-      const existing = await client.query<DbRecord>(
-        `SELECT id, contact_id AS "contactId", channel, action,
-                reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
-                provider, provider_event_id AS "providerEventId", metadata,
-                created_at AS "createdAt"
-           FROM crm_suppression_events
-          WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-        [workspaceId, params.provider, params.providerEventId],
-      )
-      return { record: first(existing), created: false }
+      return { record: resolveCrmEvidenceReplay(first(await replay()), request), created: false }
     },
 
     async updateSubmission(params) {

@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
+import type { Server } from 'node:http'
 import express from 'express'
 import request from 'supertest'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CrmOperationsError, createRateLimiter } from '@use-brian/core'
 import { crmIntakeRoutes } from '../crm-intake.js'
 
@@ -9,6 +10,12 @@ const CREDENTIAL_ID = '11111111-1111-4111-8111-111111111111'
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222'
 const DEFINITION_ID = '33333333-3333-4333-8333-333333333333'
 const TOKEN = `sk_intake_${CREDENTIAL_ID}_secret`
+const servers: Server[] = []
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+  })))
+})
 
 function build(options: { maxRequests?: number; trustProxy?: string } = {}) {
   const service = {
@@ -35,11 +42,15 @@ function build(options: { maxRequests?: number; trustProxy?: string } = {}) {
     readStore,
     rateLimiter: createRateLimiter({ maxRequests: options.maxRequests ?? 60, windowMs: 60_000 }),
   }))
-  return { app, service, readStore }
+  // One listening endpoint per fixture, including the full burst/recovery test.
+  // Avoid opening and recycling an ephemeral server for every individual request.
+  const server = app.listen(0)
+  servers.push(server)
+  return { app: server, service, readStore }
 }
 
 function submit(
-  app: express.Express,
+  app: Server,
   body: Record<string, unknown> = { fields: { name: 'Ari Example' } },
 ) {
   return request(app)

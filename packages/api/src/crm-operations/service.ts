@@ -345,6 +345,7 @@ async function executeSubmission(
     const consent = await tx.appendConsent({
       contactId: resolvedContactId,
       purpose,
+      purposeKey: mapping.purposeKey,
       action,
       source: 'intake',
       occurredAt: submittedAt,
@@ -520,10 +521,10 @@ export function createCrmOperationsService(
         }
         if (command.kind === 'record_consent') {
           const purpose = await tx.getConsentPurpose(command.purposeKey)
-          if (!purpose || purpose.archivedAt) throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', { purposeKey: command.purposeKey })
           const saved = await tx.appendConsent({
             ...command,
             purpose,
+            requestedOccurredAt: command.occurredAt,
             occurredAt: command.occurredAt ?? occurredAt,
             actor: identity,
           })
@@ -539,7 +540,7 @@ export function createCrmOperationsService(
           return result(command.kind, saved.record, { created: true, emittedEventIds: [eventId] })
         }
         if (command.kind === 'record_suppression') {
-          const saved = await tx.appendSuppression({ ...command, occurredAt: command.occurredAt ?? occurredAt, actor: identity })
+          const saved = await tx.appendSuppression({ ...command, requestedOccurredAt: command.occurredAt, occurredAt: command.occurredAt ?? occurredAt, actor: identity })
           const id = recordId(saved.record, 'suppression event')
           if (!saved.created) return result(command.kind, saved.record, { duplicate: true })
           await audit(tx, context.actor, { action: 'crm.suppression.changed', subjectKind: 'contact', subjectId: command.contactId, details: { eventId: id, channel: command.channel, action: command.action } })

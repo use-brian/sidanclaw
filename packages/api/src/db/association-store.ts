@@ -13,6 +13,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import { CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { getPool } from './client.js'
+import { crmEvidenceRequestHash, resolveCrmEvidenceReplay, type CrmEvidenceRequest } from '../crm-operations/evidence-replay.js'
 import { lockAssociationModule, requireAssociationAdmission } from './workspace-modules-store.js'
 import {
   AssociationError,
@@ -514,55 +515,42 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async appendConsent(workspaceId, input, actor) {
       return transaction(pool, async (client) => {
+        const request: CrmEvidenceRequest = { kind: 'consent', contactId: input.contactId,
+          purposeKey: input.purpose, action: input.action, wordingVersion: input.wordingVersion,
+          source: input.source, occurredAt: input.occurredAt, metadata: input.metadata }
+        const replay = () => client.query<DbRow>(
+          `SELECT ${CONSENT_SELECT}, request_fingerprint AS "__requestHash",
+                  to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__occurredAt"
+             FROM association_consent_events
+            WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+          [workspaceId, input.provider, input.providerEventId],
+        )
         if (input.provider && input.providerEventId) {
-          const existing = await client.query<DbRow>(
-            `SELECT ${CONSENT_SELECT} FROM association_consent_events
-              WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-            [workspaceId, input.provider, input.providerEventId],
-          )
-          if (existing.rows[0]) {
-            const event = existing.rows[0]
-            if (event.contactId !== input.contactId || event.purpose !== input.purpose
-              || event.action !== input.action || event.wordingVersion !== input.wordingVersion
-              || event.source !== input.source) {
-              throw new AssociationError('conflict', 'provider event id was already used for different consent evidence')
-            }
-            return { record: event, created: false }
-          }
+          const existing = await replay()
+          if (existing.rows[0]) return { record: resolveCrmEvidenceReplay(existing.rows[0], request), created: false }
         }
         await requirePerson(client, workspaceId, input.contactId)
         const result = await client.query<DbRow>(
           `INSERT INTO association_consent_events
              (workspace_id, contact_id, purpose, action, wording_version, source,
-              occurred_at, provider, provider_event_id, metadata)
-           VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::timestamptz, now()),$8,$9,$10)
+              occurred_at, provider, provider_event_id, metadata, request_fingerprint)
+           VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::timestamptz, now()),$8,$9,$10,$11)
            ON CONFLICT (workspace_id, provider, provider_event_id)
              WHERE provider IS NOT NULL DO NOTHING
            RETURNING ${CONSENT_SELECT}`,
           [workspaceId, input.contactId, input.purpose, input.action,
             input.wordingVersion, input.source, input.occurredAt ?? null,
-            input.provider ?? null, input.providerEventId ?? null, input.metadata],
+            input.provider ?? null, input.providerEventId ?? null, input.metadata,
+            input.provider ? crmEvidenceRequestHash(request) : null],
         )
         if (!result.rows[0] && input.provider && input.providerEventId) {
-          const raced = await client.query<DbRow>(
-            `SELECT ${CONSENT_SELECT} FROM association_consent_events
-              WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-            [workspaceId, input.provider, input.providerEventId],
-          )
-          const event = raced.rows[0]
-          if (!event) throw new AssociationError('conflict', 'consent event could not be resolved after a concurrent submission')
-          if (event.contactId !== input.contactId || event.purpose !== input.purpose
-            || event.action !== input.action || event.wordingVersion !== input.wordingVersion
-            || event.source !== input.source) {
-            throw new AssociationError('conflict', 'provider event id was already used for different consent evidence')
-          }
-          return { record: event, created: false }
+          const raced = await replay()
+          if (!raced.rows[0]) throw new AssociationError('conflict', 'consent event could not be resolved after a concurrent submission')
+          return { record: resolveCrmEvidenceReplay(raced.rows[0], request), created: false }
         }
         const consent = result.rows[0]
         await audit(client, workspaceId, `consent.${input.action}`, 'consent_event', String(consent.id), actor, {
-          contactId: input.contactId,
-          purpose: input.purpose,
-          wordingVersion: input.wordingVersion,
+          contactId: input.contactId, purpose: input.purpose, wordingVersion: input.wordingVersion,
         })
         return { record: consent, created: true }
       })
