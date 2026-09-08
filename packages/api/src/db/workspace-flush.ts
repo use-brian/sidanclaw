@@ -107,13 +107,14 @@ export const WORKSPACE_FLUSH_TABLES = [
   // hard-bound to their episodes and must go with them)
   'entity_links',
   'entity_merges',
+  // Retired-receipt parent FKs refuse deletion unless receipts leave first.
+  'crm_intake_idempotency',
   'entities',
   'memories',
   'consolidation_logs',
   'connector_actions',
   // CRM operations rows that directly or indirectly reference contacts.
   'crm_domain_event_outbox',
-  'crm_intake_idempotency',
   'crm_suppression_events',
   'crm_intake_credential_definitions',
   'crm_intake_credentials',
@@ -185,6 +186,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'oauth_authorizations',
   // Settings + config + authored structure
   'workspace_tool_policy',
+  'crm_privacy_policies',
   'crm_integration_credentials',
   'crm_integration_credential_grants',
   'workspace_knowledge_sources',

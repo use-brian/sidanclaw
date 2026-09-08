@@ -3,7 +3,7 @@
  *
  * Append-only evidence is immutable during normal product use. The explicit
  * erasure primitive below is the legal override: it removes personal linkage
- * and payload while retaining only non-identifying execution tombstones.
+ * and payload while retaining minimized execution receipts required by policy.
  *
  * [COMP:crm/operations-privacy]
  */
@@ -12,6 +12,7 @@ import type pg from 'pg'
 import type { CrmPageQuery } from '@use-brian/core'
 import { queryCrmPage } from './pagination.js'
 import { getPool, query } from '../db/client.js'
+import { retireCrmIntakeReceipts } from './privacy-policy.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_definitions',
@@ -19,6 +20,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_credentials',
   'crm_intake_credential_definitions',
   'crm_intake_idempotency',
+  'crm_privacy_policies',
   'association_external_identities',
   'association_enquiries',
   'association_enquiry_notes',
@@ -101,10 +103,15 @@ export async function redactCrmOperationsForContact(
   contactId: string,
 ): Promise<void> {
   const person = await client.query<{ isPerson: boolean }>(
-    `SELECT kind='person' AS "isPerson" FROM entities WHERE workspace_id=$1 AND id=$2`,
+    `SELECT kind='person' AS "isPerson" FROM entities WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
     [workspaceId, contactId],
   )
   if (!person.rows[0]?.isPerson) return
+  // Match retention's enquiry -> receipt ordering. Holding a receipt before
+  // its enquiry would deadlock against a concurrent retention transaction.
+  await client.query(`SELECT id FROM association_enquiries WHERE workspace_id=$1 AND contact_id=$2 ORDER BY id FOR UPDATE`,
+    [workspaceId, contactId])
+  await retireCrmIntakeReceipts(client, workspaceId, { contactId })
 
   // Commerce participation can be retention-bound and therefore uses a
   // pseudonymous shell. Non-commerce rows use the same shell because their
@@ -174,10 +181,6 @@ export async function redactCrmOperationsForContact(
   ]) {
     await client.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND contact_id=$2`, [workspaceId, contactId])
   }
-  await client.query(
-    `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND contact_id=$2`,
-    [workspaceId, contactId],
-  )
 }
 
 export type CrmOperationsRetentionResult = {
@@ -199,6 +202,11 @@ export async function pruneCrmOperationsRetention(
   const deleted: Record<string, number> = {}
   try {
     await client.query('BEGIN')
+    const enquiries = await client.query<{ id: string }>(
+      `SELECT id FROM association_enquiries WHERE workspace_id=$1
+        AND status IN ('resolved','spam') AND updated_at<$2 ORDER BY id FOR UPDATE`, [workspaceId, before])
+    const submissionIds = enquiries.rows.map((row) => row.id)
+    const retiredReceiptsDeleted = await retireCrmIntakeReceipts(client, workspaceId, { submissionIds })
     const remove = async (name: string, sql: string, values: unknown[]) => {
       const result = await client.query(sql, values)
       deleted[name] = result.rowCount ?? 0
@@ -209,16 +217,15 @@ export async function pruneCrmOperationsRetention(
       [workspaceId, before])
     await remove('crm_domain_event_outbox',
       `DELETE FROM crm_domain_event_outbox WHERE workspace_id=$1
-        AND status IN ('delivered','failed') AND created_at < $2`,
+        AND status='delivered' AND created_at < $2`,
       [workspaceId, before])
     await remove('crm_intake_idempotency',
-      `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND created_at < $2
-        AND (status='committed' OR created_at < $2 - interval '24 hours')`,
-      [workspaceId, before])
+      `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND status='retired'
+        AND replay_expires_at<=clock_timestamp()`, [workspaceId])
+    deleted.crm_intake_idempotency! += retiredReceiptsDeleted
     await remove('association_enquiries',
       `DELETE FROM association_enquiries WHERE workspace_id=$1
-        AND status IN ('resolved','spam') AND updated_at < $2`,
-      [workspaceId, before])
+        AND id=ANY($2::uuid[])`, [workspaceId, submissionIds])
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})

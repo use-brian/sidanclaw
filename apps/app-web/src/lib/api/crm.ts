@@ -1033,6 +1033,23 @@ export async function downloadCrmOperationsPrivacyExport(workspaceId: string): P
   return res.blob();
 }
 
+export type CrmPrivacyPolicy = {
+  version: number;
+  policy: { intakeReplay: { retentionSeconds: number } | null };
+  approvedByUserId: string | null;
+  createdAt: string | null;
+};
+export function getCrmPrivacyPolicy(workspaceId: string): Promise<CrmPrivacyPolicy> {
+  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/privacy-policy`);
+}
+export function saveCrmPrivacyPolicy(workspaceId: string, input: {
+  expectedVersion: number; confirmed: true; intakeReplay: { retentionSeconds: number } | null;
+}): Promise<{ record: CrmPrivacyPolicy; created: boolean }> {
+  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/privacy-policy`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+}
+
 export async function downloadCrmCsv(
   workspaceId: string,
   kind: "contacts" | "companies" | "deals",

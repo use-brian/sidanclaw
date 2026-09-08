@@ -21,6 +21,7 @@ import {
   type CrmSegmentPredicate,
 } from '@use-brian/core'
 import { getPool } from './client.js'
+import { readCrmPrivacyPolicy, saveCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
 import { saveCrmEntitlementPlanRecord, saveCrmEventRecord } from './association-store.js'
 import type { PlanInput, EventInput } from '../association/domain.js'
 import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
@@ -69,6 +70,7 @@ export type AuditIdentity = {
 
 export type IdempotencyClaim =
   | { kind: 'claimed'; claimId: string }
+  | { kind: 'retired'; claimId: string }
   | {
     kind: 'duplicate'
     claimId: string
@@ -79,6 +81,7 @@ export type IdempotencyClaim =
   | { kind: 'conflict'; claimId: string; storedHash: string }
 
 export type CrmOperationsTransaction = {
+  savePrivacyPolicy(command: Extract<CrmOperationsCommand, { kind: 'save_privacy_policy' }>): ReturnType<typeof saveCrmPrivacyPolicy>
   authorizeIntegration(command: CrmOperationsCommand): Promise<void>
   saveEntitlementPlan(input: PlanInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
   saveEvent(input: EventInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
@@ -268,6 +271,7 @@ function actorAssistantId(actor: CrmOperationsActor): string | null {
 function createTransaction(client: PoolClient, context: CrmOperationsContext): CrmOperationsTransaction {
   const workspaceId = context.workspaceId
   return {
+    savePrivacyPolicy: (command) => saveCrmPrivacyPolicy(client, context, command),
     authorizeIntegration: (command) => authorizeCrmIntegrationCommand(client, context, command),
     saveEntitlementPlan: (input) => saveCrmEntitlementPlanRecord(client, workspaceId, input),
     saveEvent: (input) => saveCrmEventRecord(client, workspaceId, input),
@@ -311,44 +315,49 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async claimIdempotency(params) {
-      const inserted = await client.query<DbRecord>(
-        `INSERT INTO crm_intake_idempotency (
-           workspace_id, credential_id, actor_scope, definition_id,
-           idempotency_key, request_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (workspace_id, actor_scope, definition_id, idempotency_key)
-         DO NOTHING
-         RETURNING id`,
-        [workspaceId, params.credentialId, params.actorScope, params.definitionId,
-          params.idempotencyKey, params.requestHash],
-      )
-      if (inserted.rows[0]) return { kind: 'claimed', claimId: inserted.rows[0].id as string }
-
-      const existing = await client.query<DbRecord>(
-        `SELECT id, request_hash AS "requestHash", status,
-                submission_id AS "submissionId", contact_id AS "contactId",
-                follow_up_task_id AS "followUpTaskId"
-           FROM crm_intake_idempotency
-          WHERE workspace_id = $1 AND actor_scope = $2 AND definition_id = $3
-            AND idempotency_key = $4
-          FOR UPDATE`,
-        [workspaceId, params.actorScope, params.definitionId, params.idempotencyKey],
-      )
-      const row = existing.rows[0]
-      if (!row || row.requestHash !== params.requestHash || row.status !== 'committed') {
-        return {
-          kind: 'conflict',
-          claimId: String(row?.id ?? ''),
-          storedHash: String(row?.requestHash ?? ''),
+      // Serialize reuse of a retired namespace slot. Lock an existing receipt
+      // before inspecting expiry so retention cannot delete it between reads.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        JSON.stringify(['crm-intake-replay', workspaceId, params.actorScope, params.definitionId, params.idempotencyKey]),
+      ])
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const existing = await client.query<DbRecord>(
+          `SELECT id, request_hash AS "requestHash", status,
+                  submission_id AS "submissionId", contact_id AS "contactId",
+                  follow_up_task_id AS "followUpTaskId",
+                  replay_expires_at<=clock_timestamp() AS expired
+             FROM crm_intake_idempotency
+            WHERE workspace_id=$1 AND actor_scope=$2 AND definition_id=$3 AND idempotency_key=$4
+            FOR UPDATE`,
+          [workspaceId, params.actorScope, params.definitionId, params.idempotencyKey],
+        )
+        const row = existing.rows[0]
+        if (row?.status === 'retired' && row.expired === true) {
+          await client.query('DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND id=$2', [workspaceId, row.id])
+        } else if (row) {
+          if (row.requestHash !== params.requestHash || !['committed', 'retired'].includes(String(row.status))) {
+            return { kind: 'conflict', claimId: String(row.id), storedHash: String(row.requestHash) }
+          }
+          if (row.status === 'retired') return { kind: 'retired', claimId: row.id as string }
+          return { kind: 'duplicate', claimId: row.id as string, submissionId: row.submissionId as string,
+            contactId: row.contactId as string, followUpTaskId: (row.followUpTaskId as string | null) ?? null }
         }
+        const policy = await readCrmPrivacyPolicy(workspaceId, client)
+        const seconds = policy.policy.intakeReplay?.retentionSeconds ?? null
+        const inserted = await client.query<DbRecord>(
+          `INSERT INTO crm_intake_idempotency (
+             workspace_id,credential_id,actor_scope,definition_id,idempotency_key,request_hash,
+             replay_policy_version,replay_expires_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,now()+$8::integer*interval '1 second')
+           ON CONFLICT (workspace_id,actor_scope,definition_id,idempotency_key) DO NOTHING RETURNING id`,
+          [workspaceId, params.credentialId, params.actorScope, params.definitionId,
+            params.idempotencyKey, params.requestHash, seconds === null ? null : policy.version, seconds],
+        )
+        if (inserted.rows[0]) return { kind: 'claimed', claimId: inserted.rows[0].id as string }
+        // A pre-migration process may still claim without the advisory lock.
+        // Re-read its committed receipt once; never create a second result.
       }
-      return {
-        kind: 'duplicate',
-        claimId: row.id as string,
-        submissionId: row.submissionId as string,
-        contactId: row.contactId as string,
-        followUpTaskId: (row.followUpTaskId as string | null) ?? null,
-      }
+      throw new CrmOperationsError('conflict', 'Intake receipt changed concurrently. Retry the same request.')
     },
 
     async commitIdempotency(params) {

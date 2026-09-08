@@ -285,6 +285,10 @@ async function executeSubmission(
     }, { duplicate: true })
   }
 
+  if (claim.kind === 'retired') {
+    return result(command.kind, { outcome: 'submission_retired' }, { duplicate: true })
+  }
+
   const payloadBytes = Buffer.byteLength(canonicalCrmRequest(command.fields), 'utf8')
   if (payloadBytes > definition.maxPayloadBytes) {
     throw new CrmOperationsError('payload_too_large', 'Submission exceeds the definition payload limit.', {
@@ -448,6 +452,15 @@ export function createCrmOperationsService(
 
       return store.transaction(context, async (tx) => {
         if (context.authority.integration) await tx.authorizeIntegration(command)
+        if (command.kind === 'save_privacy_policy') {
+          const saved = await tx.savePrivacyPolicy(command)
+          if (saved.created) await audit(tx, context.actor, {
+            action: 'crm.privacy_policy.approved', subjectKind: 'privacy_policy',
+            subjectId: recordId(saved.record, 'privacy policy'),
+            details: { version: saved.record.version, intakeReplayConfigured: saved.record.policy.intakeReplay !== null },
+          })
+          return result(command.kind, saved.record, { created: saved.created })
+        }
         if (command.kind === 'save_entitlement_plan' || command.kind === 'save_event') {
           const saved = command.kind === 'save_entitlement_plan'
             ? await tx.saveEntitlementPlan(command) : await tx.saveEvent(command)

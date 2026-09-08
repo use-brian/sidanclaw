@@ -125,6 +125,10 @@ export function crmIntakeRoutes(options: CrmIntakeRouteOptions): Router {
           idempotencyKey,
           ...body.data,
         })
+        if (output.record.outcome === 'submission_retired') {
+          res.status(200).json({ duplicate: true, outcome: 'submission_retired' })
+          return
+        }
         res.status(output.duplicate ? 200 : 201).json({
           submissionId: output.record.submissionId,
           contactId: output.record.contactId,

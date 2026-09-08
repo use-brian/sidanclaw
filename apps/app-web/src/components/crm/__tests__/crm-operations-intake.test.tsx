@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   revokeCrmIntakeCredential: vi.fn(),
   saveCrmIntakeDefinition: vi.fn(),
   saveCrmConsentPurpose: vi.fn(),
+  getCrmPrivacyPolicy: vi.fn(),
 }));
 
 vi.mock("@/lib/api/crm", async (importOriginal) => ({
@@ -74,6 +75,7 @@ function setInput(input: HTMLInputElement, value: string) {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  api.getCrmPrivacyPolicy.mockResolvedValue({ version: 0, policy: { intakeReplay: null } });
   api.listCrmIntakeDefinitions.mockResolvedValue([definition]);
   api.listCrmIntakeCredentials.mockResolvedValue([credential]);
   api.listCrmConsentPurposes.mockResolvedValue([{

@@ -24,6 +24,7 @@ import {
   SaveCrmIntakeDefinitionCommandSchema,
   SaveCrmConsentPurposeCommandSchema,
   SaveCrmSegmentCommandSchema,
+  SaveCrmPrivacyPolicyCommandSchema,
   UpdateCrmSubmissionCommandSchema,
   UpdateCrmEntitlementCommandSchema,
   UpdateCrmParticipationCommandSchema,
@@ -44,6 +45,7 @@ import {
   listCrmOperationsAudit,
   pruneCrmOperationsRetention,
 } from '../crm-operations/privacy.js'
+import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
 
 const SaveDefinitionBody = SaveCrmIntakeDefinitionCommandSchema.omit({ kind: true }).strict()
 const CreateCredentialBody = CreateCrmIntakeCredentialCommandSchema.omit({ kind: true }).strict()
@@ -841,6 +843,23 @@ export function crmOperationsRoutes(options: Options): Router {
     }
     try {
       res.json(await listCrmEventDelivery(ctx.workspaceId, filters.data))
+    } catch (error) { writeError(res, error) }
+  })
+
+  router.get('/:workspaceId/operations/privacy-policy', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
+    try { res.json(await readCrmPrivacyPolicy(ctx.workspaceId)) } catch (error) { writeError(res, error) }
+  })
+
+  router.post('/:workspaceId/operations/privacy-policy', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    try {
+      const body = SaveCrmPrivacyPolicyCommandSchema.omit({ kind: true }).parse(req.body)
+      const output = await options.service.execute(ctx, { kind: 'save_privacy_policy', ...body })
+      res.status(output.created ? 201 : 200).json(output)
     } catch (error) { writeError(res, error) }
   })
 

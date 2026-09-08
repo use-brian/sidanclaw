@@ -24,6 +24,7 @@ import {
 import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/client";
 import { CrmOperationsAuditView } from "./audit-view";
+import { CrmPrivacyPolicySettings } from "./privacy-policy-settings";
 
 const stableKey = (label: string) => label.trim().toLowerCase()
   .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 63);
@@ -322,6 +323,7 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
         </div>
       </div>
       <CrmOperationsAuditView workspaceId={workspaceId} />
+      <CrmPrivacyPolicySettings key={workspaceId} workspaceId={workspaceId} />
     </section>
   );
 }
