@@ -331,6 +331,9 @@ export type CrmIntakeDefinition = {
   currentVersion: number;
   fields: CrmIntakeFieldDefinition[];
   identityPolicy: "external_subject" | "trusted_verified_email" | "new_or_review";
+  identityVerification?: { keyId: string; publicKey: string; maxAgeSeconds: number; acknowledged: true } | null;
+  verificationAcknowledgedByUserId?: string | null;
+  verificationAcknowledgedAt?: string | null;
   allowedIdentityProvider?: string | null;
   consentMappings: Array<{ fieldKey: string; grantedValue: string | boolean | number; purposeKey: string; locale?: AppLocale; localeFieldKey?: string }>;
   queueKey: string;
@@ -538,6 +541,7 @@ export type CrmIntakeDefinitionInput = {
   definition: {
     fields: CrmIntakeFieldDefinition[];
     identityPolicy: CrmIntakeDefinition["identityPolicy"];
+    identityVerification?: NonNullable<CrmIntakeDefinition["identityVerification"]>;
     allowedIdentityProvider?: string | null;
     consentMappings?: CrmIntakeDefinition["consentMappings"];
     queueKey?: string;

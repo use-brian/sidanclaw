@@ -61,6 +61,16 @@ function submit(
 }
 
 describe('[COMP:api/crm-intake-route] public atomic CRM intake', () => {
+  it('forwards bounded proof and refuses nested authority flags before invoking the service', async () => {
+    const { app, service } = build()
+    const identityProof = { keyId: 'fixture_backend', definitionVersion: 1, verifiedAt: '2026-09-08T12:00:00Z', signature: 'A'.repeat(86) }
+    expect((await submit(app, { fields: { name: 'Fixture' }, identityProof })).status).toBe(201)
+    expect(service.execute).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ identityProof }))
+    service.execute.mockClear()
+    expect((await submit(app, { fields: {}, externalIdentity: { provider: 'fixture', subject: 'subject', verified: true } })).status).toBe(400)
+    expect((await submit(app, { fields: {}, identityProof: { ...identityProof, privateKey: 'never_accept' } })).status).toBe(400)
+    expect(service.execute).not.toHaveBeenCalled()
+  })
   it('derives workspace, actor, and definition from authentication and returns bounded ids', async () => {
     const { app, service } = build()
     const response = await submit(app)

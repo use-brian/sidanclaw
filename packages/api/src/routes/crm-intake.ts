@@ -12,6 +12,7 @@ import express, { Router, type NextFunction, type Request, type Response } from 
 import { z } from 'zod'
 import {
   CrmOperationsError,
+  CrmIntakeIdentityProofSchema,
   boundedCrmObject,
   createRateLimiter,
   type CrmOperationsServicePort,
@@ -23,6 +24,7 @@ import {
 
 const BodySchema = z.object({
   fields: boundedCrmObject(1_048_576),
+  identityProof: CrmIntakeIdentityProofSchema.optional(),
   externalIdentity: z.object({
     provider: z.string().trim().min(1).max(63),
     subject: z.string().trim().min(1).max(500),

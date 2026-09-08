@@ -37,6 +37,7 @@ import type {
   StoredIntakeDefinition,
 } from '../db/crm-operations-store.js'
 import { hashSecret } from '../db/api-key-store.js'
+import { assertIntakeVerificationConfiguration, verifyIntakeIdentity } from './identity-verification.js'
 
 type ServiceClock = () => Date
 
@@ -291,6 +292,7 @@ async function executeSubmission(
     })
   }
   const mapped = validateAndMapFields(definition, command.fields)
+  const identityVerificationEvidence = verifyIntakeIdentity(context, definition, command, requestHash, now)
 
   let resolvedContactId: string | null = null
   if (definition.identityPolicy === 'external_subject') {
@@ -333,6 +335,7 @@ async function executeSubmission(
     requestHash,
     fields: command.fields,
     submittedAt,
+    identityVerificationEvidence,
   })
   const submissionId = recordId(submission, 'submission')
 
@@ -459,6 +462,7 @@ export function createCrmOperationsService(
           return executeSubmission(tx, context, command, now)
         }
         if (command.kind === 'save_intake_definition') {
+          assertIntakeVerificationConfiguration(context, command.definition)
           const snapshot = command.definition
           const saved = await tx.saveIntakeDefinition({
             ...command,

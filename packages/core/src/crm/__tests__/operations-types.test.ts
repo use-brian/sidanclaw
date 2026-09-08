@@ -19,6 +19,16 @@ const ASSISTANT_ID = '33333333-3333-4333-8333-333333333333'
 const SESSION_ID = '44444444-4444-4444-8444-444444444444'
 
 describe('[COMP:crm/operations-contract] CRM operations contracts', () => {
+  it('bounds verification configuration and refuses authority fields nested in identity claims', () => {
+    const definition = { identityPolicy: 'trusted_verified_email', fields: [
+      { key: 'email', label: 'Email', type: 'email', required: true, mapping: { kind: 'base_field', field: 'email' } },
+    ], identityVerification: { keyId: 'backend', publicKey: 'A'.repeat(43), maxAgeSeconds: 600, acknowledged: true } }
+    expect(CrmIntakeDefinitionVersionInputSchema.safeParse(definition).success).toBe(true)
+    for (const change of [{ maxAgeSeconds: 0 }, { maxAgeSeconds: 86401 }, { maxAgeSeconds: undefined }, { acknowledged: false }, { privateKey: 'never_accept' }]) {
+      expect(CrmIntakeDefinitionVersionInputSchema.safeParse({ ...definition, identityVerification: { ...definition.identityVerification, ...change } }).success).toBe(false)
+    }
+    expect(CrmOperationsCommandSchema.safeParse({ kind: 'record_submission', definitionKey: 'fixture', idempotencyKey: 'fixture', fields: {}, externalIdentity: { provider: 'fixture', subject: 'subject', verified: true } }).success).toBe(false)
+  })
   it('bounds locale maps and rejects client-owned wording evidence', () => {
     const save = { kind: 'save_consent_purpose', purposeKey: 'updates', label: 'Updates', wordingVersion: '1', wording: 'Default' }
     expect(CrmOperationsCommandSchema.safeParse({ ...save, localeWordings: { ja: '同意します' } }).success).toBe(true)

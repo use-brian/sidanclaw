@@ -49,6 +49,7 @@ export type StoredIntakeDefinition = {
   maxPayloadBytes: number
   schemaHash: string
   schemaSnapshot: Record<string, unknown>
+  verificationAcknowledgedByUserId?: string | null
   createdByUserId: string | null
 }
 
@@ -112,6 +113,7 @@ export type CrmOperationsTransaction = {
     requestHash: string
     fields: Record<string, unknown>
     submittedAt: string
+    identityVerificationEvidence?: Record<string, unknown> | null
   }): Promise<CrmOperationsRecord>
   createFollowUpTask(params: {
     contactId: string
@@ -282,12 +284,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                 v.follow_up_due_minutes AS "followUpDueMinutes",
                 v.max_payload_bytes AS "maxPayloadBytes", v.schema_hash AS "schemaHash",
                 v.schema_snapshot AS "schemaSnapshot",
+                v.created_by_user_id AS "verificationAcknowledgedByUserId",
                 d.created_by_user_id AS "createdByUserId"
            FROM crm_intake_definitions d
            JOIN crm_intake_definition_versions v
              ON v.workspace_id = d.workspace_id AND v.definition_id = d.id
             AND v.version = d.current_version
-          WHERE d.workspace_id = $1 AND d.definition_key = $2`,
+          WHERE d.workspace_id = $1 AND d.definition_key = $2 FOR SHARE OF d`,
         [workspaceId, definitionKey],
       )
       return (result.rows[0] as StoredIntakeDefinition | undefined) ?? null
@@ -484,8 +487,8 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
            request_fingerprint, subject, message, submitted_data, status,
            queue_key, owner_user_id, submitted_at, definition_id,
            definition_version_id, definition_schema_hash,
-           definition_schema_snapshot
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'new',$9,$10,$11,$12,$13,$14,$15::jsonb)
+           definition_schema_snapshot, identity_verification_evidence
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'new',$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb)
          RETURNING id, workspace_id AS "workspaceId", contact_id AS "contactId",
                    definition_id AS "definitionId", definition_version_id AS "definitionVersionId",
                    status, queue_key AS "queueKey", owner_user_id AS "ownerUserId",
@@ -498,7 +501,8 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
           JSON.stringify(params.fields), params.definition.queueKey,
           params.definition.ownerUserId, params.submittedAt, params.definition.id,
           params.definition.versionId, params.definition.schemaHash,
-          JSON.stringify(params.definition.schemaSnapshot)],
+          JSON.stringify(params.definition.schemaSnapshot),
+          params.identityVerificationEvidence ? JSON.stringify(params.identityVerificationEvidence) : null],
       )
       return first(result)
     },
@@ -674,6 +678,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async saveIntakeDefinition(params) {
+      if (params.definition.identityPolicy !== 'new_or_review') {
+        const member = context.actor.kind === 'user' ? await client.query(
+          `SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE`,
+          [workspaceId, context.actor.userId],
+        ) : null
+        if (!member?.rowCount) throw new CrmOperationsError('not_authorized', 'A current workspace owner or admin must acknowledge backend verification.')
+      }
       if (params.definitionId) {
         const updated = await client.query<DbRecord>(
           `UPDATE crm_intake_definitions

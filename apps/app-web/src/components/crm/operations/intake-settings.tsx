@@ -35,7 +35,13 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
   const [purposes, setPurposes] = useState<CrmConsentPurpose[]>([]);
   const [definitionLabel, setDefinitionLabel] = useState("");
   const [definitionKey, setDefinitionKey] = useState("");
-  const [identityPolicy, setIdentityPolicy] = useState<CrmIntakeDefinition["identityPolicy"]>("trusted_verified_email");
+  const [identityPolicy, setIdentityPolicy] = useState<CrmIntakeDefinition["identityPolicy"]>("new_or_review");
+  const [editingDefinition, setEditingDefinition] = useState<CrmIntakeDefinition | null>(null);
+  const [identityProvider, setIdentityProvider] = useState("");
+  const [verificationKeyId, setVerificationKeyId] = useState("");
+  const [verificationPublicKey, setVerificationPublicKey] = useState("");
+  const [verificationMaxAge, setVerificationMaxAge] = useState("");
+  const [verificationAcknowledged, setVerificationAcknowledged] = useState(false);
   const [schemaText, setSchemaText] = useState("");
   const [consentMappingsText, setConsentMappingsText] = useState("[]");
   const [credentialLabel, setCredentialLabel] = useState("");
@@ -80,32 +86,52 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
   }, [workspaceId]);
 
   async function createDefinition() {
-    if (!definitionLabel.trim() || !definitionKey.trim() || busy) return;
+    if (!definitionLabel.trim() || !definitionKey.trim() || busy || (identityPolicy !== "new_or_review" && !verificationAcknowledged)) return;
     setBusy(true);
     setError(null);
     try {
       const fields = JSON.parse(schemaText) as CrmIntakeDefinitionInput["definition"]["fields"];
       await saveCrmIntakeDefinition(workspaceId, {
+        ...(editingDefinition ? { definitionId: editingDefinition.id, expectedVersion: editingDefinition.currentVersion, active: editingDefinition.active } : {}),
         definitionKey: definitionKey.trim(),
         label: definitionLabel.trim(),
         definition: {
           fields,
           identityPolicy,
+          ...(identityPolicy !== "new_or_review" ? { identityVerification: {
+            keyId: verificationKeyId.trim(), publicKey: verificationPublicKey.trim(),
+            maxAgeSeconds: Number(verificationMaxAge), acknowledged: true as const,
+          } } : {}),
+          allowedIdentityProvider: identityPolicy === "external_subject" ? identityProvider.trim() : null,
           consentMappings: JSON.parse(consentMappingsText) as CrmIntakeDefinition["consentMappings"],
-          queueKey: "general",
-          followUpTaskTemplate: null,
-          followUpDueMinutes: null,
-          maxPayloadBytes: 65_536,
+          queueKey: editingDefinition?.queueKey ?? "general",
+          ownerUserId: editingDefinition?.ownerUserId ?? null,
+          followUpTaskTemplate: editingDefinition?.followUpTaskTemplate ?? null,
+          followUpDueMinutes: editingDefinition?.followUpDueMinutes ?? null,
+          maxPayloadBytes: editingDefinition?.maxPayloadBytes ?? 65_536,
+          workflowHint: editingDefinition?.workflowHint ?? null,
         },
       });
-      setDefinitionLabel("");
-      setDefinitionKey("");
+      selectDefinition(null);
       await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t.saveFailed);
     } finally {
       setBusy(false);
     }
+  }
+
+  function selectDefinition(definition: CrmIntakeDefinition | null) {
+    setEditingDefinition(definition);
+    setDefinitionLabel(definition?.label ?? ""); setDefinitionKey(definition?.definitionKey ?? "");
+    setIdentityPolicy(definition?.identityPolicy ?? "new_or_review");
+    setSchemaText(JSON.stringify(definition?.fields ?? starterFields, null, 2));
+    setConsentMappingsText(JSON.stringify(definition?.consentMappings ?? [], null, 2));
+    setIdentityProvider(definition?.allowedIdentityProvider ?? "");
+    setVerificationKeyId(definition?.identityVerification?.keyId ?? "");
+    setVerificationPublicKey(definition?.identityVerification?.publicKey ?? "");
+    setVerificationMaxAge(definition?.identityVerification ? String(definition.identityVerification.maxAgeSeconds) : "");
+    setVerificationAcknowledged(false);
   }
 
   async function createCredential() {
@@ -216,23 +242,33 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
           <p className="mt-1 text-[11px] text-muted-foreground">{t.definitionsHelp}</p>
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
             <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.definitionLabel}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3" value={definitionLabel} onChange={(event) => { setDefinitionLabel(event.target.value); if (!definitionKey) setDefinitionKey(stableKey(event.target.value)); }} /></label>
-            <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.definitionKey}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono" value={definitionKey} onChange={(event) => setDefinitionKey(stableKey(event.target.value))} /></label>
+            <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.definitionKey}</span><input disabled={!!editingDefinition} className="h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono" value={definitionKey} onChange={(event) => setDefinitionKey(stableKey(event.target.value))} /></label>
             <label className="text-xs sm:col-span-2"><span className="mb-1 block text-muted-foreground">{t.identityPolicy}</span>
               <Select value={identityPolicy} onValueChange={(value) => setIdentityPolicy(value as typeof identityPolicy)}>
                 <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="trusted_verified_email">{t.identityTrustedEmail}</SelectItem>
                   <SelectItem value="new_or_review">{t.identityNewReview}</SelectItem>
+                  <SelectItem value="external_subject">{t.identityExternalSubject}</SelectItem>
                 </SelectContent>
               </Select>
             </label>
+            {identityPolicy === "external_subject" && <label className="text-xs sm:col-span-2"><span className="mb-1 block text-muted-foreground">{t.identityProvider}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3" value={identityProvider} onChange={(event) => setIdentityProvider(event.target.value)} /></label>}
+            {identityPolicy !== "new_or_review" && <div className="space-y-2 rounded-md border border-border p-2 sm:col-span-2">
+              <p className="text-xs text-muted-foreground">{t.verificationHelp}</p>
+              <label className="block text-xs"><span>{t.verificationKeyId}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3" value={verificationKeyId} onChange={(event) => setVerificationKeyId(event.target.value)} /></label>
+              <label className="block text-xs"><span>{t.verificationPublicKey}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono" value={verificationPublicKey} onChange={(event) => setVerificationPublicKey(event.target.value)} /></label>
+              <label className="block text-xs"><span>{t.verificationMaxAge}</span><input type="number" min={1} max={86400} className="h-9 w-full rounded-md border border-input bg-transparent px-3" value={verificationMaxAge} onChange={(event) => setVerificationMaxAge(event.target.value)} /></label>
+              <label className="flex items-start gap-2 text-xs"><input type="checkbox" checked={verificationAcknowledged} onChange={(event) => setVerificationAcknowledged(event.target.checked)} /><span>{t.verificationAcknowledgement}</span></label>
+            </div>}
             <label className="text-xs sm:col-span-2"><span className="mb-1 block text-muted-foreground">{t.fieldSchema}</span><textarea rows={9} spellCheck={false} className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[11px]" value={schemaText} onChange={(event) => setSchemaText(event.target.value)} /></label>
           </div>
           <label className="mt-2 block text-xs"><span className="mb-1 block text-muted-foreground">{t.consentMappings}</span><textarea aria-label={t.consentMappings} rows={4} spellCheck={false} className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[11px]" value={consentMappingsText} onChange={(event) => setConsentMappingsText(event.target.value)} /></label>
           <p className="text-[11px] text-muted-foreground">{t.consentMappingsHelp}</p>
-          <Button className="mt-2" size="sm" disabled={busy || !definitionLabel.trim() || !definitionKey.trim()} onClick={() => void createDefinition()}><Plus aria-hidden />{t.createDefinition}</Button>
+          <Button className="mt-2" size="sm" disabled={busy || !definitionLabel.trim() || !definitionKey.trim() || (identityPolicy !== "new_or_review" && (!verificationAcknowledged || !verificationKeyId.trim() || !verificationPublicKey.trim() || !verificationMaxAge))} onClick={() => void createDefinition()}><Plus aria-hidden />{editingDefinition ? t.saveDefinitionVersion : t.createDefinition}</Button>
+          {editingDefinition && <Button className="ml-2 mt-2" size="sm" variant="ghost" disabled={busy} onClick={() => selectDefinition(null)}>{t.cancel}</Button>}
           <div className="mt-3 space-y-2">
-            {definitions.map((definition) => <div key={definition.id} className="rounded-lg bg-muted/30 px-3 py-2 text-xs"><div className="font-medium">{definition.label}</div><div className="font-mono text-[10px] text-muted-foreground">{definition.definitionKey} · v{definition.currentVersion}</div></div>)}
+            {definitions.map((definition) => <div key={definition.id} className="rounded-lg bg-muted/30 px-3 py-2 text-xs"><div className="font-medium">{definition.label}</div><div className="font-mono text-[10px] text-muted-foreground">{definition.definitionKey} · v{definition.currentVersion}</div>{definition.identityPolicy !== "new_or_review" && (!definition.identityVerification || !definition.verificationAcknowledgedByUserId) && <p className="mt-1 text-amber-600">{t.verificationUnconfigured}</p>}<Button size="xs" variant="outline" disabled={busy} onClick={() => selectDefinition(definition)}>{t.editDefinition}</Button></div>)}
             {definitions.length === 0 && <div className="text-xs text-muted-foreground">{t.noDefinitions}</div>}
           </div>
         </div>

@@ -114,6 +114,21 @@ export const CrmIdentityPolicySchema = z.enum([
 ])
 export type CrmIdentityPolicy = z.infer<typeof CrmIdentityPolicySchema>
 
+export const CrmIntakeVerificationConfigSchema = z.object({
+  keyId: CrmOperationsStableKeySchema,
+  publicKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  maxAgeSeconds: z.number().int().min(1).max(86_400),
+  acknowledged: z.literal(true),
+}).strict()
+
+export const CrmIntakeIdentityProofSchema = z.object({
+  keyId: CrmOperationsStableKeySchema,
+  definitionVersion: z.number().int().positive(),
+  verifiedAt: CrmOperationsInstantSchema,
+  signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+}).strict()
+export type CrmIntakeIdentityProof = z.infer<typeof CrmIntakeIdentityProofSchema>
+
 export const CrmIntakeFieldTypeSchema = z.enum([
   'text',
   'email',
@@ -174,6 +189,7 @@ export const CrmFollowUpTaskTemplateSchema = z.object({
 export const CrmIntakeDefinitionVersionInputSchema = z.object({
   fields: z.array(CrmIntakeFieldDefinitionSchema).min(1).max(100),
   identityPolicy: CrmIdentityPolicySchema,
+  identityVerification: CrmIntakeVerificationConfigSchema.optional(),
   allowedIdentityProvider: CrmOperationsStableKeySchema.nullable().optional(),
   consentMappings: z.array(CrmConsentAnswerMappingSchema).max(50).default([]),
   queueKey: CrmOperationsStableKeySchema.default('general'),
@@ -234,7 +250,7 @@ export const RevokeCrmIntakeCredentialCommandSchema = z.object({
 export const CrmExternalIdentityClaimSchema = z.object({
   provider: CrmOperationsStableKeySchema,
   subject: z.string().trim().min(1).max(500),
-})
+}).strict()
 
 export const RecordCrmSubmissionCommandSchema = z.object({
   kind: z.literal('record_submission'),
@@ -242,6 +258,7 @@ export const RecordCrmSubmissionCommandSchema = z.object({
   idempotencyKey: z.string().trim().min(1).max(200),
   fields: boundedCrmObject(1_048_576),
   externalIdentity: CrmExternalIdentityClaimSchema.optional(),
+  identityProof: CrmIntakeIdentityProofSchema.optional(),
   submittedAt: CrmOperationsInstantSchema.optional(),
 }).strict()
 export type RecordCrmSubmissionCommand = z.infer<typeof RecordCrmSubmissionCommandSchema>

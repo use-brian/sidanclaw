@@ -132,7 +132,7 @@ describe("[COMP:app-web/crm-operations] CRM intake settings", () => {
         definitionKey: "partner_form",
         label: "Partner form",
         definition: expect.objectContaining({
-          identityPolicy: "trusted_verified_email",
+          identityPolicy: "new_or_review",
           maxPayloadBytes: 65_536,
         }),
       }),
@@ -170,6 +170,41 @@ describe("[COMP:app-web/crm-operations] CRM intake settings", () => {
     });
     expect(api.revokeCrmIntakeCredential).not.toHaveBeenCalled();
     expect(host.textContent).toContain("sk_intake_replacement_fixture");
+  });
+
+  it("requires an explicit acknowledgement to configure an existing trusted definition", async () => {
+    const copy = en.crmPage.operations;
+    const button = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((item) => item.textContent?.trim() === label)!;
+    expect(host.textContent).toContain(copy.verificationUnconfigured);
+    await act(async () => button(copy.editDefinition).click());
+    const input = (label: string) => Array.from(host.querySelectorAll("label")).find((item) => item.querySelector("span")?.textContent === label)?.querySelector("input")!;
+    expect(input(copy.definitionKey).disabled).toBe(true);
+    expect(button(copy.saveDefinitionVersion).disabled).toBe(true);
+    await act(async () => {
+      setInput(input(copy.verificationKeyId), "fixture_key");
+      setInput(input(copy.verificationPublicKey), "A".repeat(43));
+      setInput(input(copy.verificationMaxAge), "600");
+    });
+    expect(button(copy.saveDefinitionVersion).disabled).toBe(true);
+    await act(async () => input(copy.verificationAcknowledgement).click());
+    expect(button(copy.saveDefinitionVersion).disabled).toBe(false);
+    await act(async () => button(copy.saveDefinitionVersion).click());
+    await settle();
+    expect(api.saveCrmIntakeDefinition).toHaveBeenCalledWith("workspace-1", expect.objectContaining({
+      definitionId: definition.id, definitionKey: definition.definitionKey, expectedVersion: 2,
+      definition: expect.objectContaining({ identityPolicy: "trusted_verified_email", queueKey: definition.queueKey,
+        consentMappings: definition.consentMappings, identityVerification: { keyId: "fixture_key", publicKey: "A".repeat(43), maxAgeSeconds: 600, acknowledged: true } }),
+    }));
+  });
+
+  it("shows the configuration blocker when the acknowledging member is unavailable", async () => {
+    api.listCrmIntakeDefinitions.mockResolvedValue([{ ...definition,
+      identityVerification: { keyId: "fixture_key", publicKey: "A".repeat(43), maxAgeSeconds: 600, acknowledged: true },
+      verificationAcknowledgedByUserId: null,
+    }]);
+    await act(async () => root.render(<I18nProvider locale="en" dict={en}><CrmIntakeSettings workspaceId="workspace-2" /></I18nProvider>));
+    await settle();
+    expect(host.textContent).toContain(en.crmPage.operations.verificationUnconfigured);
   });
 
 });

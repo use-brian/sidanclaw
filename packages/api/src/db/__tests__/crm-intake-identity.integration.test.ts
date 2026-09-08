@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { CrmOperationsCommandSchema, type CrmOperationsContext } from '@use-brian/core'
 import { createDbCrmOperationsStore } from '../crm-operations-store.js'
 import { createCrmOperationsService } from '../../crm-operations/service.js'
+import { intakeProofFixture } from '../../crm-operations/__tests__/intake-proof-fixture.js'
 
 const { assertLocalFixture } = await import(new URL('../../../../../scripts/crm/local-fixture.mjs', import.meta.url).href)
 await assertLocalFixture()
@@ -38,18 +39,19 @@ async function observedIdentityWait() {
 describe('[COMP:crm/operations-store] Actual intake identity resolution', () => {
   afterAll(async () => { await Promise.all([pool.end(), contender.end()]) })
   it('requires review for ambiguous live email matches without a third contact or committed intake receipt', async () => {
-    const f = await fixture()
+    const f = await fixture(), signer = intakeProofFixture()
     await pool.query(`INSERT INTO entities (workspace_id,kind,display_name,attributes,created_by_user_id,source)
       SELECT $1,'person','Fixture person',jsonb_build_object('email',email),$2,'manual'
       FROM unnest(ARRAY['Shared+alias@Example.com',' shared+alias@example.com ']) email`, [f.workspaceId, f.userId])
     await service.execute(f.context, CrmOperationsCommandSchema.parse({ kind: 'save_intake_definition', definitionKey: 'fixture', label: 'Fixture', definition: {
-      identityPolicy: 'trusted_verified_email', fields: [
+      identityPolicy: 'trusted_verified_email', identityVerification: signer.config, fields: [
         { key: 'name', label: 'Name', type: 'text', mapping: { kind: 'base_field', field: 'name' } },
-        { key: 'email', label: 'Email', type: 'email', mapping: { kind: 'base_field', field: 'email' } },
+        { key: 'email', label: 'Email', type: 'email', required: true, mapping: { kind: 'base_field', field: 'email' } },
       ],
     } }))
     const before = await pool.query('SELECT count(*)::int AS count FROM association_audit_log WHERE workspace_id=$1', [f.workspaceId])
-    await expect(service.execute(f.context, CrmOperationsCommandSchema.parse({ kind: 'record_submission', definitionKey: 'fixture', idempotencyKey: 'ambiguous', fields: { name: 'Fixture person', email: 'shared+alias@example.com' } })))
+    const command = { kind: 'record_submission' as const, definitionKey: 'fixture', idempotencyKey: 'ambiguous', fields: { name: 'Fixture person', email: 'shared+alias@example.com' } }
+    await expect(service.execute(f.context, { ...command, identityProof: signer.proof(f.workspaceId, command) }))
       .rejects.toMatchObject({ code: 'conflict', details: { reason: 'identity_review_required' } })
     expect((await pool.query('SELECT count(*)::int AS count FROM entities WHERE workspace_id=$1', [f.workspaceId])).rows[0].count).toBe(2)
     expect((await pool.query('SELECT count(*)::int AS count FROM crm_intake_idempotency WHERE workspace_id=$1', [f.workspaceId])).rows[0].count).toBe(0)

@@ -38,7 +38,7 @@ const definition: StoredIntakeDefinition = {
     { key: 'newsletter', label: 'Newsletter', type: 'boolean', required: true, mapping: { kind: 'submission_only' } },
     { key: 'private_note', label: 'Private note', type: 'text', required: false, mapping: { kind: 'custom_field', fieldKey: 'intake_note' } },
   ],
-  identityPolicy: 'trusted_verified_email',
+  identityPolicy: 'new_or_review',
   allowedIdentityProvider: null,
   consentMappings: [{ fieldKey: 'newsletter', grantedValue: true, purposeKey: 'newsletter' }],
   queueKey: 'general',

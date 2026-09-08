@@ -536,7 +536,7 @@ export function createCrmOperationsTools(options: {
   })
   const recordCrmSubmission = buildTool({
     name: 'recordCrmSubmission', requiresCapability: 'crm',
-    description: 'Atomically record a CRM submission through an existing intake definition. The definition controls identity matching, field mappings, consent, routing, and follow-up. Pass an idempotency_key and a stable definition_key from listCrmIntakeDefinitions.',
+    description: 'Atomically record a CRM submission through an existing intake definition. Pass a stable definitionKey and idempotencyKey. Trusted email or external-subject matching requires owner-configured backend identityProof; never fabricate proof. Use new_or_review definitions for unverified claims and omit submittedAt. The definition controls mappings, consent, routing and follow-up.',
     inputSchema: RecordCrmSubmissionCommandSchema.omit({ kind: true }),
     execute: write((input) => ({ kind: 'record_submission', ...input } as TRecordSubmission)),
   })
