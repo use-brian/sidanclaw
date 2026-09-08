@@ -1,6 +1,7 @@
 /** CRM-only bearer router. Mount before bare JWT /api guards.
  * [COMP:api/crm-integration-auth]
  */
+import { sendCrmPrivacyExport } from '../crm-operations/privacy-export.js'
 import { Router, raw, type Request, type Response } from 'express'
 import { z } from 'zod'
 import {
@@ -123,6 +124,14 @@ export function crmIntegrationRoutes(options: {
     res.json(await reads(res).listPipelines(principal(res).workspaceId, {
       ...filters, includeArchived: filters.includeArchived === 'true',
     }))
+  }))
+  router.get('/operations/privacy-export',endpoint(async(req,res)=>{
+    z.object({format:z.literal('crm-privacy-v2').default('crm-privacy-v2')}).strict().parse(req.query)
+    await sendCrmPrivacyExport(res,crmIntegrationContext(principal(res)))
+  }))
+  router.get('/operations/contacts/:contactId/privacy-export',endpoint(async(req,res)=>{
+    z.object({format:z.literal('crm-privacy-v2').optional()}).strict().parse(req.query)
+    await sendCrmPrivacyExport(res,crmIntegrationContext(principal(res)),{contactId:UUID.parse(req.params.contactId)})
   }))
   router.get('/operations/deliveries/:id', endpoint(async (req,res) => {
     const context=crmIntegrationContext(principal(res))

@@ -51,6 +51,7 @@ import {
   listCrmOperationsAudit,
   pruneCrmOperationsRetention,
 } from '../crm-operations/privacy.js'
+import { sendCrmPrivacyExport } from '../crm-operations/privacy-export.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
 import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 import { readCrmManagedMailboxPolicy, readCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
@@ -970,9 +971,20 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.setHeader('Content-Disposition', `attachment; filename="crm-operations-${ctx.workspaceId}.json"`)
+      const query=z.object({format:z.enum(['crm-operations-privacy-v1','crm-privacy-v2']).default('crm-operations-privacy-v1')}).strict().parse(req.query)
+      if(query.format==='crm-privacy-v2') {await sendCrmPrivacyExport(res,ctx);return}
+      res.setHeader('Content-Disposition','attachment; filename="crm-operations-'+ctx.workspaceId+'.json"')
       res.json(await exportCrmOperationsPrivacy(ctx.workspaceId))
     } catch (error) { writeError(res, error) }
+  })
+  router.get('/:workspaceId/operations/contacts/:contactId/privacy-export',async(req,res)=>{
+    const ctx=await context(req,res)
+    if(!ctx)return
+    try {
+      z.object({format:z.literal('crm-privacy-v2').optional()}).strict().parse(req.query)
+      const contactId=CrmOperationsUuidSchema.parse(req.params.contactId)
+      await sendCrmPrivacyExport(res,ctx,{contactId})
+    } catch(error) {writeError(res,error)}
   })
 
   router.post('/:workspaceId/operations/retention', async (req, res) => {

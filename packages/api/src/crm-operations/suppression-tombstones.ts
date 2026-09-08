@@ -183,3 +183,33 @@ export async function releaseCrmAddressSuppression(client: PoolClient, context: 
   }
   return { record: (await client.query(`SELECT ${publicProjection} FROM crm_address_suppression_tombstones WHERE workspace_id=$1 AND id=$2`,[context.workspaceId,row.id])).rows[0], changed: !row.released_at }
 }
+
+/** Build a transaction-local address match set without exporting HMAC material
+ * or retaining an unbounded collection in application memory. */
+export async function prepareCrmSuppressionPrivacy(client:PoolClient,workspaceId:string,contactId:string):Promise<void> {
+  await client.query('CREATE TEMP TABLE crm_privacy_suppression_matches(channel text,key_version text,address_hmac text,PRIMARY KEY(channel,key_version,address_hmac)) ON COMMIT DROP')
+  const methodsSql = "SELECT 'email'::text AS channel,COALESCE(NULLIF(attributes->>'email',''),canonical_id) AS address FROM entities WHERE workspace_id=$1 AND id=$2 AND kind='person'"
+    +" UNION SELECT ch.channel,NULLIF(e.attributes->>'phone','') FROM entities e CROSS JOIN (VALUES('phone'),('sms'),('whatsapp')) ch(channel) WHERE e.workspace_id=$1 AND e.id=$2 AND e.kind='person'"
+    +" UNION SELECT provider,provider_subject FROM association_external_identities WHERE workspace_id=$1 AND contact_id=$2 AND provider IN('telegram','slack')"
+    +" UNION SELECT 'email',normalized_value FROM entity_external_identities WHERE workspace_id=$1 AND entity_id=$2 AND identity_kind='email'"
+  await client.query('DECLARE privacy_suppression_keys NO SCROLL CURSOR FOR SELECT DISTINCT key_version AS version,key_check AS check FROM crm_address_suppression_tombstones WHERE workspace_id=$1 AND channel IN(SELECT channel FROM ('+methodsSql+') methods WHERE address IS NOT NULL)',[workspaceId,contactId])
+  let ring:ReturnType<typeof keyring>|undefined
+  try {
+    for(;;) {
+      const row=(await client.query<{version:string;check:string}>('FETCH FORWARD 1 FROM privacy_suppression_keys')).rows[0]
+      if(!row) break
+      ring ??=keyring()
+      verifyKey(ring,workspaceId,row.version,row.check)
+    }
+  } finally {await client.query('CLOSE privacy_suppression_keys')}
+  if(!ring)return
+  await client.query('DECLARE privacy_suppression_methods NO SCROLL CURSOR FOR SELECT channel,address FROM ('+methodsSql+') methods WHERE address IS NOT NULL',[workspaceId,contactId])
+  try {
+    for(;;) {
+      const method=(await client.query<{channel:CrmDeliveryChannel;address:string}>('FETCH FORWARD 1 FROM privacy_suppression_methods')).rows[0]
+      if(!method)break
+      const matches=[...ring.keys].map(([name,key])=>({channel:method.channel,key_version:name,address_hmac:digest(key,workspaceId,method.channel,method.address)}))
+      await client.query('INSERT INTO pg_temp.crm_privacy_suppression_matches SELECT channel,key_version,address_hmac FROM jsonb_to_recordset($1::jsonb) AS h(channel text,key_version text,address_hmac text) ON CONFLICT DO NOTHING',[JSON.stringify(matches)])
+    }
+  } finally {await client.query('CLOSE privacy_suppression_methods')}
+}
