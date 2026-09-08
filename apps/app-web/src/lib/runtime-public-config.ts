@@ -41,7 +41,9 @@ function publicUrl(
 
 export function resolveRuntimePublicConfig(
   env: PublicConfigEnv,
+  buildEnv: PublicConfigEnv = {},
 ): RuntimePublicConfig {
+  env = { ...buildEnv, ...env };
   const apiUrl =
     publicUrl(env.PUBLIC_API_URL, env.API_DOMAIN, "https") ??
     env.NEXT_PUBLIC_API_URL ??
@@ -78,6 +80,7 @@ export function resolveRuntimePublicConfig(
       "",
     googleApiKey:
       env.PUBLIC_GOOGLE_API_KEY ??
+      env.GOOGLE_API_KEY ??
       env.NEXT_PUBLIC_GOOGLE_API_KEY ??
       "",
     googleProjectNumber:
@@ -121,6 +124,23 @@ export function publicRuntimeConfig(): RuntimePublicConfig {
 
   return resolveRuntimePublicConfig(
     typeof process !== "undefined" ? process.env : {},
+    // Next only inlines literal NEXT_PUBLIC references. Keep hosted build-time
+    // configuration as a fallback; server runtime values still take precedence.
+    {
+      NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
+      NEXT_PUBLIC_DISPLAY_API_URL: process.env.NEXT_PUBLIC_DISPLAY_API_URL,
+      NEXT_PUBLIC_DOC_SYNC_URL: process.env.NEXT_PUBLIC_DOC_SYNC_URL,
+      NEXT_PUBLIC_USEBRIAN_EDITION: process.env.NEXT_PUBLIC_USEBRIAN_EDITION,
+      NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+      NEXT_PUBLIC_PRIMARY_AUTH_URL: process.env.NEXT_PUBLIC_PRIMARY_AUTH_URL,
+      NEXT_PUBLIC_BROWSER_EXTENSION_ID: process.env.NEXT_PUBLIC_BROWSER_EXTENSION_ID,
+      NEXT_PUBLIC_GOOGLE_CLIENT_ID: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
+      NEXT_PUBLIC_GOOGLE_API_KEY: process.env.NEXT_PUBLIC_GOOGLE_API_KEY,
+      NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER: process.env.NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER,
+      NEXT_PUBLIC_NOTION_CLIENT_ID: process.env.NEXT_PUBLIC_NOTION_CLIENT_ID,
+      NEXT_PUBLIC_FATHOM_CLIENT_ID: process.env.NEXT_PUBLIC_FATHOM_CLIENT_ID,
+      NEXT_PUBLIC_FATHOM_AUTHORIZE_URL: process.env.NEXT_PUBLIC_FATHOM_AUTHORIZE_URL,
+    },
   );
 }
 

@@ -48,9 +48,9 @@ function resolveOssGitCommitSha(): string {
 // Load .env from monorepo root
 dotenv.config({ path: resolve(import.meta.dirname, "..", "..", ".env") });
 
-const API_URL = process.env.API_URL ?? "http://localhost:4000";
+const API_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const APP_DEV_HOST = (() => {
-  const configured = process.env.AUTHED_APP_URL;
+  const configured = process.env.AUTHED_APP_URL ?? process.env.NEXT_PUBLIC_AUTHED_APP_URL;
   if (!configured) return null;
   try {
     return new URL(configured).hostname;
@@ -80,6 +80,14 @@ const nextConfig: NextConfig = {
     // Public build provenance for Settings. Prefer OSS_GIT_COMMIT_SHA when a
     // source archive omits .git; ordinary checkout builds resolve HEAD.
     NEXT_PUBLIC_OSS_GIT_COMMIT_SHA: OSS_GIT_COMMIT_SHA,
+    // Preserve hosted build-only public provider metadata. Runtime config can
+    // override these fallbacks; never inline server URLs or client secrets.
+    NEXT_PUBLIC_GOOGLE_CLIENT_ID:
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "",
+    NEXT_PUBLIC_GOOGLE_API_KEY:
+      process.env.NEXT_PUBLIC_GOOGLE_API_KEY ?? process.env.GOOGLE_API_KEY ?? "",
+    NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER:
+      process.env.NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER ?? process.env.GOOGLE_PROJECT_NUMBER ?? "",
     // NOTE: no NEXT_PUBLIC_MSGRAPH_* here. The Entra app for Microsoft Teams is
     // resolved per WORKSPACE in the API (its own registration first, then
     // MSGRAPH_CLIENT_ID / MSGRAPH_CLIENT_SECRET from this deployment), and a

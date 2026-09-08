@@ -22,7 +22,7 @@
  * anything else = customer site" so local testing needs no setup.
  */
 const APP_HOSTS = [
-  process.env.APP_HOSTS,
+  process.env.APP_HOSTS ?? process.env.NEXT_PUBLIC_APP_HOSTS,
   process.env.APP_DOMAIN,
 ]
   .filter((value): value is string => Boolean(value))

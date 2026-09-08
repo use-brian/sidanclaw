@@ -43,7 +43,7 @@ export function primaryAuthUrl(): string | null {
  */
 export function publicAppUrl(
   requestUrl: string | URL,
-  configured = process.env.AUTHED_APP_URL,
+  configured = process.env.AUTHED_APP_URL ?? process.env.NEXT_PUBLIC_AUTHED_APP_URL,
 ): URL {
   const request = new URL(requestUrl);
   if (!configured?.trim()) return request;

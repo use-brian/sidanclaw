@@ -7,7 +7,10 @@
       "env": [
         "NODE_ENV",
         "OSS_GIT_COMMIT_SHA",
-        "NEXT_PUBLIC_OSS_GIT_COMMIT_SHA"
+        "NEXT_PUBLIC_*",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_API_KEY",
+        "GOOGLE_PROJECT_NUMBER"
       ]
     },
     "dev": {
