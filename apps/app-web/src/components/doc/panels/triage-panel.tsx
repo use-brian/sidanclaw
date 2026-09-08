@@ -35,12 +35,17 @@ import {
 } from "@/lib/api/goals";
 import { cn } from "@/lib/utils";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { BackButton } from "@/components/ui/back-button";
 
 export function TriagePanel() {
   const t = useT();
   const { activeId } = useWorkspaces();
   const [rows, setRows] = useState<GoalRow[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Phone single-pane (responsive contract M1 / M5) - the Autopilot shape:
+  // the first row is auto-selected, but below `md` the detail only takes the
+  // pane once a row is tapped, and Back returns to the list.
+  const [detailOpen, setDetailOpen] = useState(false);
   // Bumped after a pane action (confirm / dismiss) so the list re-pulls and a
   // still-open pane re-fetches its detail.
   const [refetchTick, setRefetchTick] = useState(0);
@@ -75,9 +80,15 @@ export function TriagePanel() {
   }, [rows]);
 
   return (
-    <div className="h-full w-full flex">
-      {/* Left: the assignable-task list */}
-      <div className="w-[340px] shrink-0 border-r border-border flex flex-col min-h-0">
+    <div className="h-full w-full flex flex-col md:flex-row">
+      {/* Left: the assignable-task list. Full-width on a phone; yields the
+          pane to the review once a row is tapped (`detailOpen`). */}
+      <div
+        className={cn(
+          "w-full md:w-[340px] shrink-0 md:border-r border-border flex flex-col min-h-0",
+          detailOpen && "max-md:hidden",
+        )}
+      >
         <header className="flex flex-col gap-2 px-5 pt-5 pb-3 border-b border-border">
           <h1 className="text-lg font-semibold flex items-center gap-2">
             {t.triagePage.title}
@@ -104,7 +115,10 @@ export function TriagePanel() {
                   key={g.id}
                   goal={g}
                   selected={g.id === selectedId}
-                  onSelect={() => setSelectedId(g.id)}
+                  onSelect={() => {
+                    setSelectedId(g.id);
+                    setDetailOpen(true);
+                  }}
                 />
               ))}
             </ul>
@@ -112,18 +126,33 @@ export function TriagePanel() {
         )}
       </div>
 
-      {/* Right: the brief review pane */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
+      {/* Right: the brief review pane - the second screen on a phone, with a
+          Back row above the Confirm & arm / Dismiss bar. */}
+      <div
+        className={cn(
+          "flex-1 min-w-0 overflow-y-auto flex flex-col",
+          !detailOpen && "max-md:hidden",
+        )}
+      >
         {selectedId ? (
-          <TriageDetailPane
-            key={selectedId}
-            goalId={selectedId}
-            refreshKey={refetchTick}
-            onActed={refetch}
-          />
+          <>
+            <div className="shrink-0 border-b border-border px-4 py-1 md:hidden">
+              <BackButton
+                label={t.triagePage.backToList}
+                onClick={() => setDetailOpen(false)}
+                className="min-h-11"
+              />
+            </div>
+            <TriageDetailPane
+              key={selectedId}
+              goalId={selectedId}
+              refreshKey={refetchTick}
+              onActed={refetch}
+            />
+          </>
         ) : (
           rows !== null && (
-            <div className="h-full flex items-center justify-center px-8 text-center text-sm text-muted-foreground">
+            <div className="h-full flex items-center justify-center px-4 md:px-8 text-center text-sm text-muted-foreground">
               {t.triagePage.selectPrompt}
             </div>
           )
@@ -249,12 +278,12 @@ function TriageDetailPane({
 
   if (goal === undefined) {
     return (
-      <div className="w-full px-8 py-10 text-sm text-muted-foreground">{labels.loading}</div>
+      <div className="w-full px-4 md:px-8 py-10 text-sm text-muted-foreground">{labels.loading}</div>
     );
   }
   if (goal === null) {
     return (
-      <div className="w-full px-8 py-20 text-center flex flex-col gap-2">
+      <div className="w-full px-4 md:px-8 py-20 text-center flex flex-col gap-2">
         <div className="font-medium">{labels.notFoundTitle}</div>
         <p className="text-sm text-muted-foreground">{labels.notFoundBody}</p>
       </div>
@@ -315,12 +344,12 @@ function TriageDetailPane({
   return (
     <div className="w-full h-full flex flex-col">
       {/* Action bar - pinned to the TOP of the pane (the Autopilot pattern). */}
-      <div className="shrink-0 border-b border-border px-8 py-4 flex items-center justify-end gap-2">
+      <div className="shrink-0 border-b border-border px-4 md:px-8 py-4 flex items-center justify-end gap-2">
         <button
           type="button"
           disabled={busy !== null}
           onClick={handleDismiss}
-          className="text-xs px-3 py-1.5 rounded-md border border-border text-foreground hover:bg-accent/40 disabled:opacity-50"
+          className="text-xs px-3 py-1.5 min-h-11 md:min-h-0 rounded-md border border-border text-foreground hover:bg-accent/40 disabled:opacity-50"
         >
           {busy === "dismiss" ? labels.dismissing : labels.dismiss}
         </button>
@@ -328,13 +357,13 @@ function TriageDetailPane({
           type="button"
           disabled={busy !== null}
           onClick={handleConfirm}
-          className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+          className="text-xs px-3 py-1.5 min-h-11 md:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
         >
           {busy === "confirm" ? labels.confirming : labels.confirmArm}
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-8 pt-6 pb-6 flex flex-col gap-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 pt-6 pb-6 flex flex-col gap-6">
         <header className="flex flex-col gap-1">
           {goal.hostTitle && (
             <p className="text-xs uppercase tracking-wide text-muted-foreground">

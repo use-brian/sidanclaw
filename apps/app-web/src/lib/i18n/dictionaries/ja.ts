@@ -2923,6 +2923,7 @@ export const ja: Dictionary = {
       "完了するまで取り組み続けるようアシスタントに頼むと、そのゴールがここに表示されます。",
     loading: "読み込み中…",
     countBadge: "{count}",
+    backToList: "ゴール一覧へ",
     filterStatusLabel: "ステータス",
     statusAll: "進行中すべて",
     draftBadge: "下書き",
@@ -3018,6 +3019,7 @@ export const ja: Dictionary = {
     description:
       "アシスタントが本当に手伝えると判断したタスクです。計画を確認して、有効化するか却下してください。",
     countBadge: "{count}",
+    backToList: "タスク一覧へ",
     loading: "読み込み中…",
     emptyTitle: "確認待ちはありません",
     emptyBody:

@@ -55,6 +55,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { BackButton } from "@/components/ui/back-button";
 import { STATUS_BADGE } from "./goal-status-badge";
 import { summariseDoneWhen } from "./goal-done-when";
 
@@ -82,6 +83,12 @@ export function AutopilotPanel() {
   const [rows, setRows] = useState<GoalRow[] | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Phone single-pane (responsive contract M1 / M5): below `md` the list and
+  // the detail are two screens, not two columns. The first row is still
+  // auto-SELECTED (so `md+` opens on a goal), but the detail only takes the
+  // pane once a row is TAPPED, and Back returns to the list. On `md+` both
+  // render side by side and this flag is inert.
+  const [detailOpen, setDetailOpen] = useState(false);
   // Bumped after a pane action (confirm / work / discard) so both the list
   // re-pulls and the open pane re-fetches its detail to reflect the new state.
   const [refetchTick, setRefetchTick] = useState(0);
@@ -125,9 +132,15 @@ export function AutopilotPanel() {
     host ? t.goalsPage.host[host.type] : t.goalsPage.host.standalone;
 
   return (
-    <div className="h-full w-full flex">
-      {/* Left: the list */}
-      <div className="w-[340px] shrink-0 border-r border-border flex flex-col min-h-0">
+    <div className="h-full w-full flex flex-col md:flex-row">
+      {/* Left: the list. Full-width on a phone, where it yields the pane to
+          the detail once a row is tapped (see `detailOpen`). */}
+      <div
+        className={cn(
+          "w-full md:w-[340px] shrink-0 md:border-r border-border flex flex-col min-h-0",
+          detailOpen && "max-md:hidden",
+        )}
+      >
         <header className="flex flex-col gap-2 px-5 pt-5 pb-3 border-b border-border">
           <h1 className="text-lg font-semibold flex items-center gap-2">
             {t.goalsPage.title}
@@ -175,7 +188,10 @@ export function AutopilotPanel() {
                   goal={g}
                   hostLabel={hostLabel(g.host)}
                   selected={g.id === selectedId}
-                  onSelect={() => setSelectedId(g.id)}
+                  onSelect={() => {
+                    setSelectedId(g.id);
+                    setDetailOpen(true);
+                  }}
                 />
               ))}
             </ul>
@@ -183,19 +199,34 @@ export function AutopilotPanel() {
         )}
       </div>
 
-      {/* Right: the detail pane */}
-      <div className="flex-1 min-w-0 overflow-y-auto">
+      {/* Right: the detail pane. On a phone it is the second screen, with a
+          Back row above the action bar (M1: every control reachable). */}
+      <div
+        className={cn(
+          "flex-1 min-w-0 overflow-y-auto flex flex-col",
+          !detailOpen && "max-md:hidden",
+        )}
+      >
         {selectedId ? (
-          <GoalDetailPane
-            key={selectedId}
-            goalId={selectedId}
-            refreshKey={refetchTick}
-            hostLabel={hostLabel}
-            onActed={refetch}
-          />
+          <>
+            <div className="shrink-0 border-b border-border px-4 py-1 md:hidden">
+              <BackButton
+                label={t.goalsPage.backToList}
+                onClick={() => setDetailOpen(false)}
+                className="min-h-11"
+              />
+            </div>
+            <GoalDetailPane
+              key={selectedId}
+              goalId={selectedId}
+              refreshKey={refetchTick}
+              hostLabel={hostLabel}
+              onActed={refetch}
+            />
+          </>
         ) : (
           rows !== null && (
-            <div className="h-full flex items-center justify-center px-8 text-center text-sm text-muted-foreground">
+            <div className="h-full flex items-center justify-center px-4 md:px-8 text-center text-sm text-muted-foreground">
               {t.goalsPage.selectPrompt}
             </div>
           )
@@ -348,12 +379,12 @@ function GoalDetailPane({
 
   if (goal === undefined) {
     return (
-      <div className="w-full px-8 py-10 text-sm text-muted-foreground">{t.goalsPage.loading}</div>
+      <div className="w-full px-4 md:px-8 py-10 text-sm text-muted-foreground">{t.goalsPage.loading}</div>
     );
   }
   if (goal === null) {
     return (
-      <div className="w-full px-8 py-20 text-center flex flex-col gap-2">
+      <div className="w-full px-4 md:px-8 py-20 text-center flex flex-col gap-2">
         <div className="font-medium">{labels.notFoundTitle}</div>
         <p className="text-sm text-muted-foreground">{labels.notFoundBody}</p>
       </div>
@@ -441,7 +472,7 @@ function GoalDetailPane({
       {/* Action bar — pinned to the TOP of the pane (previously a bottom footer)
           so the Discard / Confirm & arm / Work-this controls never collide with
           the bottom-right floating chat dock. */}
-      <div className="shrink-0 border-b border-border px-8 py-4 flex items-center justify-between gap-3">
+      <div className="shrink-0 border-b border-border px-4 md:px-8 py-4 flex items-center justify-between gap-3">
         <div className="text-xs text-muted-foreground">
           {goal.status === "done"
             ? actions.completed
@@ -457,7 +488,7 @@ function GoalDetailPane({
               type="button"
               disabled={busy !== null}
               onClick={handleDiscard}
-              className="text-xs px-3 py-1.5 rounded-md border border-border text-foreground hover:bg-accent/40 disabled:opacity-50"
+              className="text-xs px-3 py-1.5 min-h-11 md:min-h-0 rounded-md border border-border text-foreground hover:bg-accent/40 disabled:opacity-50"
             >
               {busy === "discard" ? actions.discarding : actions.discard}
             </button>
@@ -467,7 +498,7 @@ function GoalDetailPane({
               type="button"
               disabled={busy !== null}
               onClick={handleConfirm}
-              className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+              className="text-xs px-3 py-1.5 min-h-11 md:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
             >
               {busy === "confirm" ? actions.confirming : actions.confirmArm}
             </button>
@@ -479,7 +510,7 @@ function GoalDetailPane({
                 type="button"
                 disabled={busy !== null}
                 onClick={handleWork}
-                className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+                className="text-xs px-3 py-1.5 min-h-11 md:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {busy === "work" ? actions.starting : actions.work}
               </button>
@@ -488,7 +519,7 @@ function GoalDetailPane({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-8 pt-6 pb-6 flex flex-col gap-6">
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 md:px-8 pt-6 pb-6 flex flex-col gap-6">
         <header className="flex items-start justify-between gap-3">
           {draft ? (
             <div className="flex-1 min-w-0 flex flex-col gap-1.5">

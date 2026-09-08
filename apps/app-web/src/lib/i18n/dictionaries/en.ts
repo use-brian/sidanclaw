@@ -3135,6 +3135,7 @@ export const en = {
       "Ask the assistant to keep working on something until it is done, and the goal shows up here.",
     loading: "Loading…",
     countBadge: "{count}",
+    backToList: "All goals",
     filterStatusLabel: "Status",
     statusAll: "All active",
     // Draft (unconfirmed) vs the confirmed working set: the list split + row badge.
@@ -3238,6 +3239,7 @@ export const en = {
     description:
       "Tasks your assistant judged it can honestly help with. Review the plan, then arm it or dismiss it.",
     countBadge: "{count}",
+    backToList: "All tasks",
     loading: "Loading…",
     emptyTitle: "Nothing to triage",
     emptyBody:
