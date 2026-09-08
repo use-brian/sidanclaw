@@ -250,3 +250,55 @@ describe("[COMP:app-web/doc-table] TableView interaction frame", () => {
     }
   });
 });
+
+/**
+ * Touch (responsive contract M2 / M9). A tap fires `pointerup` then
+ * `pointerleave`; before this the leave unmounted the slots before the grip
+ * could be tapped, so insert / delete / duplicate row or column could not be
+ * reached on a phone. On a coarse pointer a tap on a cell mounts its grips
+ * and keeps them until a tap lands outside the frame. jsdom has no
+ * `matchMedia`, so the test installs a coarse one.
+ */
+describe("[COMP:app-web/doc-table] touch reveal", () => {
+  const originalMatchMedia = (window as { matchMedia?: unknown }).matchMedia;
+  afterEach(() => {
+    (window as { matchMedia?: unknown }).matchMedia = originalMatchMedia;
+  });
+
+  it("keeps the tapped cell's grips mounted through pointerleave, dismisses on an outside tap", async () => {
+    (window as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+      matches: query.includes("hover: none"),
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    });
+    const host = await mountTable();
+    const frame = host.querySelector<HTMLElement>(".doc-table-frame")!;
+    const cell = frame.querySelector("td")!;
+
+    await act(async () => {
+      cell.dispatchEvent(pointerEvent("pointerup"));
+    });
+    await settle();
+    const rowSelector = `[aria-label="${en.docPage.table.rowOptions}"]`;
+    const columnSelector = `[aria-label="${en.docPage.table.columnOptions}"]`;
+    expect(frame.querySelector(rowSelector)).not.toBeNull();
+    expect(frame.querySelector(columnSelector)).not.toBeNull();
+
+    // The leave that follows a tap must NOT unmount them.
+    await act(async () => {
+      frame.dispatchEvent(new window.Event("pointerleave", { bubbles: false }));
+    });
+    await settle();
+    expect(frame.querySelector(rowSelector)).not.toBeNull();
+    expect(frame.querySelector(columnSelector)).not.toBeNull();
+
+    // A tap outside the frame folds them away.
+    await act(async () => {
+      document.body.dispatchEvent(pointerEvent("pointerdown"));
+    });
+    await settle();
+    expect(frame.querySelector(rowSelector)).toBeNull();
+    expect(frame.querySelector(columnSelector)).toBeNull();
+  });
+});

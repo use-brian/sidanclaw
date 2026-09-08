@@ -1368,6 +1368,19 @@
   .doc-collab-editor .ProseMirror .doc-table-axis-handle[data-drop-target="true"] {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 35%, transparent);
   }
+  /* Touch (responsive contract M2): a finger never hovers, so a MOUNTED slot
+     (the tapped cell's row + column, see `revealHandlesOnTap`) paints the
+     grip itself instead of the boundary cue that waits for a hover. */
+  @media (hover: none) {
+    .doc-collab-editor .ProseMirror .doc-table-axis-handle {
+      opacity: 1;
+      pointer-events: auto;
+      transform: scale(1);
+    }
+    .doc-collab-editor .ProseMirror .doc-table-axis-cue {
+      opacity: 0;
+    }
+  }
   .doc-collab-editor .ProseMirror .doc-table-axis-handle svg {
     width: 15px;
     height: 15px;

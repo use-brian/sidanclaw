@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   NodeViewWrapper,
   NodeViewContent,
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { useT } from "@/lib/i18n/client";
+import { isCoarsePointer } from "@/lib/viewport";
 import {
   moveTableAxis,
   runTableCommand,
@@ -312,12 +313,60 @@ export function TableView(props: NodeViewProps) {
     setHotAxis(null);
   };
 
-  const closeHover = () => {
+  const dismissHandles = () => {
     if (openMenu || dragRef.current) return;
     setRowHandle(null);
     setColumnHandle(null);
     setHotAxis(null);
   };
+
+  const closeHover = () => {
+    // Touch (responsive contract M2 / M9): a tap fires `pointerup` then
+    // `pointerleave`, so the leave would unmount the slots before the grip
+    // could be tapped — which is exactly how insert / delete / duplicate row
+    // or column became unreachable on a phone. On a coarse pointer the
+    // slots stay mounted until a tap lands OUTSIDE the frame (below).
+    if (isCoarsePointer()) return;
+    dismissHandles();
+  };
+
+  /**
+   * Touch reveal: a tap on a cell mounts that cell's row + column grips and
+   * keeps them (the CSS `(hover: none)` state paints the grip itself, not the
+   * hover cue). Reached from the frame's `pointerup`, after the drag path
+   * has had its turn.
+   */
+  const revealHandlesOnTap = (event: React.PointerEvent) => {
+    if (!isCoarsePointer()) return;
+    if (openMenu || dragRef.current || pointerDragRef.current) return;
+    const cell = cellFromEvent(event);
+    if (!cell) return;
+    const handles = targetFromCell(cell);
+    if (!handles) return;
+    setRowHandle(handles.row);
+    setColumnHandle(handles.column);
+    setHotAxis(null);
+  };
+
+  // Touch dismissal: with `pointerleave` ignored on a coarse pointer, a tap
+  // anywhere outside the frame is what folds the grips away. Bound only while
+  // a slot is mounted, so the listener costs nothing on an idle page.
+  const handlesMounted = rowHandle !== null || columnHandle !== null;
+  useEffect(() => {
+    if (!handlesMounted || !isCoarsePointer()) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && frameRef.current?.contains(target)) return;
+      // A tap inside a portalled axis menu is not "outside" either.
+      if (target instanceof Element && target.closest(".doc-table-action-menu")) return;
+      dismissHandles();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+    // `dismissHandles` reads the latest `openMenu` / drag refs by closure each
+    // render; re-binding on those is what keeps a pinned menu safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handlesMounted, openMenu]);
 
   const run = (command: TableCommand, target: TableTarget) => {
     runTableCommand(props.editor, props.getPos, props.node, command, target);
@@ -466,7 +515,10 @@ export function TableView(props: NodeViewProps) {
         data-selected-axis={selectedAxis ?? undefined}
         data-area-select-ignore
         onPointerMove={onPointerMove}
-        onPointerUp={(event) => finishPointerDrag(event)}
+        onPointerUp={(event) => {
+          finishPointerDrag(event);
+          revealHandlesOnTap(event);
+        }}
         onPointerCancel={(event) => finishPointerDrag(event, true)}
         onPointerLeave={closeHover}
       >
