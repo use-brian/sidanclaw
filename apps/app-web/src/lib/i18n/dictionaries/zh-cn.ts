@@ -6473,6 +6473,8 @@ export const zhCN: Dictionary = {
       reviewMonthPrompt: "请对照方针回顾 {month} 的计划，告诉我缺了什么、哪些重复、你会怎么调整。\n\n本月目标:\n{brief}\n\n频率: 每周 {cadence} 条\n\n已安排:\n{scheduled}\n\n请以可接受的档期形式提出修改。调整已有档期时请原样带上 slotId。",
       contextBriefUnset: "设置月度简报",
       contextEditBriefAria: "编辑月度简报",
+      mobileSheetClose: "关闭",
+      mobileBriefLauncher: "月度简报",
       contextCadence: "每周 {count} 条",
       contextCadenceUnset: "未设置频率",
       contextVoiceTuned: "品牌声音已调校",

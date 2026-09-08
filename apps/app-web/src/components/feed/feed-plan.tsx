@@ -38,6 +38,8 @@ import {
   usePeekResize,
 } from "@/components/operator/resizable-peek";
 import { PlanCaptureStrip } from "@/components/feed/plan-capture-strip";
+import { PlanMobileSheet } from "@/components/feed/plan-mobile-sheet";
+import { ChevronRight } from "lucide-react";
 import {
   createFeedIdea,
   createPlanSlot,
@@ -799,6 +801,47 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
     { key: "review-month", label: tp.quickReviewMonth, run: reviewMonth },
   ];
 
+  // The two rail overlays, built once so the desktop aside (`lg+`) and the
+  // phone bottom sheet (below `lg`) render the SAME element for the same
+  // `rail` state and cannot drift.
+  const slotEditor =
+    rail.kind === "slot" ? (
+      <PlanSlotPeek
+        draft={rail.draft}
+        slot={selectedSlot}
+        canEdit={canEdit}
+        busy={busy}
+        onChange={(draft) => setRail({ kind: "slot", draft })}
+        onSave={() => void saveSlot()}
+        onDelete={() => selectedSlot && void removeSlot(selectedSlot)}
+        onDraftThis={() => selectedSlot && void startDrafting(selectedSlot)}
+        onOpenDraft={() => selectedSlot && openExistingDraft(selectedSlot)}
+        onToggleSkip={() => selectedSlot && void toggleSkip(selectedSlot)}
+        onDiscuss={() =>
+          selectedSlot &&
+          requestFeedChatSeed({
+            prefill: format(tp.discussSlotPrompt, {
+              title: selectedSlot.title,
+              date: selectedSlot.scheduledFor,
+              platform: t.platformLabels[selectedSlot.platform],
+              brief: selectedSlot.brief?.trim() || tp.noBriefYet,
+            }),
+          })
+        }
+        onBack={() => setRail({ kind: "chat" })}
+      />
+    ) : null;
+  const briefEditor =
+    rail.kind === "brief" ? (
+      <PlanBriefEditor
+        brief={brief}
+        canEdit={canEdit}
+        busy={busy}
+        onSave={(next) => void saveBrief(next)}
+        onBack={() => setRail({ kind: "chat" })}
+      />
+    ) : null;
+
   return (
     <div className="flex h-full min-h-0">
       <div className="min-w-0 flex-1 overflow-y-auto px-4 py-5 md:px-6">
@@ -806,9 +849,25 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
           {/* One primary action per surface: the header carries none — the
               assistant-led verbs live as quick-action chips in the chat rail
               (P3), and capture owns the primary affordance (P5, phase 2). */}
-          <header className="space-y-1">
-            <h1 className="text-[15px] font-semibold">{t.sections.plan}</h1>
-            <p className="text-xs text-muted-foreground">{tp.subtitle}</p>
+          <header className="flex items-start justify-between gap-3">
+            <div className="min-w-0 space-y-1">
+              <h1 className="text-[15px] font-semibold">{t.sections.plan}</h1>
+              <p className="text-xs text-muted-foreground">{tp.subtitle}</p>
+            </div>
+            {/* Phone launcher for the month brief (responsive contract M1):
+                on `lg+` the chat rail's context header opens it, and that
+                rail does not exist below `lg`. Opens the same `rail` state,
+                hosted by the bottom sheet below. */}
+            <button
+              type="button"
+              data-plan-brief-launcher-mobile
+              onClick={() => setRail({ kind: "brief" })}
+              aria-label={tp.contextEditBriefAria}
+              className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-lg border border-border/60 bg-card px-3 text-xs font-medium transition-colors hover:bg-accent lg:hidden"
+            >
+              <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
+              {tp.mobileBriefLauncher}
+            </button>
           </header>
 
           {/* Capture first (P5): the two entry jobs — log a thought, start
@@ -968,47 +1027,32 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
                 onActivate={() => setRail({ kind: "chat" })}
               />
             </div>
-            {rail.kind === "slot" ? (
-              <div className="absolute inset-0 bg-background">
-                <PlanSlotPeek
-                  draft={rail.draft}
-                  slot={selectedSlot}
-                  canEdit={canEdit}
-                  busy={busy}
-                  onChange={(draft) => setRail({ kind: "slot", draft })}
-                  onSave={() => void saveSlot()}
-                  onDelete={() => selectedSlot && void removeSlot(selectedSlot)}
-                  onDraftThis={() => selectedSlot && void startDrafting(selectedSlot)}
-                  onOpenDraft={() => selectedSlot && openExistingDraft(selectedSlot)}
-                  onToggleSkip={() => selectedSlot && void toggleSkip(selectedSlot)}
-                  onDiscuss={() =>
-                    selectedSlot &&
-                    requestFeedChatSeed({
-                      prefill: format(tp.discussSlotPrompt, {
-                        title: selectedSlot.title,
-                        date: selectedSlot.scheduledFor,
-                        platform: t.platformLabels[selectedSlot.platform],
-                        brief: selectedSlot.brief?.trim() || tp.noBriefYet,
-                      }),
-                    })
-                  }
-                  onBack={() => setRail({ kind: "chat" })}
-                />
-              </div>
-            ) : rail.kind === "brief" ? (
-              <div className="absolute inset-0 bg-background">
-                <PlanBriefEditor
-                  brief={brief}
-                  canEdit={canEdit}
-                  busy={busy}
-                  onSave={(next) => void saveBrief(next)}
-                  onBack={() => setRail({ kind: "chat" })}
-                />
-              </div>
+            {slotEditor ? (
+              <div className="absolute inset-0 bg-background">{slotEditor}</div>
+            ) : briefEditor ? (
+              <div className="absolute inset-0 bg-background">{briefEditor}</div>
             ) : null}
           </>
         ) : null}
       </aside>
+
+      {/* Phone host for the same overlays (responsive contract M1 / M5): below
+          `lg` the aside above is hidden, so a tapped chip / "Plan it" / the
+          brief launcher would otherwise set `rail` and render nothing. The
+          sheet reads the identical state; Back / close fold it to the chat
+          state exactly as the desktop overlay does. Mount-gated on `!isLg` so
+          a resize across the breakpoint never shows both hosts. */}
+      {!isLg && rail.kind !== "chat" ? (
+        <PlanMobileSheet
+          open
+          title={rail.kind === "brief" ? tp.briefHeading : rail.draft.id ? rail.draft.title || tp.newSlotTitle : tp.newSlotTitle}
+          onClose={() => setRail({ kind: "chat" })}
+        >
+          <div className="absolute inset-0 overflow-y-auto bg-background">
+            {slotEditor ?? briefEditor}
+          </div>
+        </PlanMobileSheet>
+      ) : null}
     </div>
   );
 }

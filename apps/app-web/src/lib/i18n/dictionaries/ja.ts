@@ -6407,6 +6407,8 @@ export const ja: Dictionary = {
       reviewMonthPrompt: "{month} の計画をブリーフと照らしてレビューし、足りないもの、重複しているもの、変えるべきところを教えてください。\n\n今月の目標:\n{brief}\n\n頻度: 週 {cadence} 件\n\n予定済み:\n{scheduled}\n\n承認できるスロットとして変更を提案してください。既存スロットを変える場合は slotId をそのまま付けてください。",
       contextBriefUnset: "月次ブリーフを設定する",
       contextEditBriefAria: "月次ブリーフを編集",
+      mobileSheetClose: "閉じる",
+      mobileBriefLauncher: "今月のブリーフ",
       contextCadence: "週 {count} 件",
       contextCadenceUnset: "頻度は未設定",
       contextVoiceTuned: "ボイス調整済み",

@@ -6646,6 +6646,8 @@ export const en = {
       reviewMonthPrompt: "Review the plan for {month} against the brief and tell me what is missing, what overlaps, and what you would change.\n\nThis month's goal:\n{brief}\n\nCadence: {cadence} per week\n\nScheduled:\n{scheduled}\n\nPropose changes as slots I can accept, and carry the slotId when you are changing an existing slot.",
       contextBriefUnset: "Set up the monthly brief",
       contextEditBriefAria: "Edit the monthly brief",
+      mobileSheetClose: "Close",
+      mobileBriefLauncher: "Month brief",
       contextCadence: "{count}/week",
       contextCadenceUnset: "No cadence set",
       contextVoiceTuned: "Voice tuned",
