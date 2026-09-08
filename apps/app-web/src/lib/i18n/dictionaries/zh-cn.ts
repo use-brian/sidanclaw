@@ -5992,6 +5992,8 @@ export const zhCN: Dictionary = {
       editWording: "编辑文案",
       wordingLocale: "记录的同意文案语言",
       wordingStoredDefault: "使用已保存的默认文案",
+      rotateCredential: "创建替代密钥",
+      rotateCredentialHelp: "替代密钥会保留提交重试记录。更新后端后，请撤销仍有效的旧密钥。",
       channelLabels: { email: "邮件", sms: "短信", phone: "电话", whatsapp: "WhatsApp", telegram: "Telegram", slack: "Slack" },
       compliance: "同意及可发送性", complianceLoadFailed: "无法加载合规证据。", complianceSaveFailed: "无法更新合规证据。", loading: "加载中...", noPurposesForContact: "请先在CRM设置创建同意目的，再评估此联系人。", pickPurpose: "选择目的", checking: "正在检查可发送性...", verdictLabels: { allowed: "允许", blocked: "已阻止", unknown: "未知 - 不可发送" }, reasonLabels: { contact_method_missing: "缺少联系方式", global_suppression: "已全面停止", channel_suppression: "此渠道已停止", consent_withdrawn: "同意已撤回", consent_not_recorded: "未记录同意", purpose_archived: "目的已归档", purpose_channel_inapplicable: "此目的不适用于此渠道" }, grant: "记录同意", withdraw: "撤回", suppress: "停止发送", release: "解除停止", withdrawTitle: "撤回同意？", withdrawDescription: "这会新增撤回事件，并阻止需要此目的同意的发送。", releaseTitle: "解除停止发送？", releaseDescription: "这会新增解除事件。其他证据仍可能阻止发送。", consentActionLabels: { granted: "已授予同意", withdrawn: "已撤回同意" }, suppressionActionLabels: { suppressed: "已停止", released: "已解除" },
       submissions: "提交收件箱", submissionsLoadFailed: "无法加载CRM提交。", submissionSaveFailed: "无法更新提交。", allStatuses: "所有状态", submissionStatusLabels: { new: "新提交", in_progress: "处理中", resolved: "已解决", spam: "垃圾" }, noSubmissions: "没有符合此视图的提交。", legacySubmission: "旧版提交", pickSubmission: "选择要审阅的提交。", queue: "队列", followUpTask: "跟进任务", none: "无", submittedFields: "提交字段", addNote: "添加内部备注", saveNote: "保存备注",

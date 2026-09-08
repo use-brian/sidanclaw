@@ -250,19 +250,15 @@ async function executeSubmission(
   if (!definition || !definition.active) {
     throw new CrmOperationsError('not_found', 'The intake definition is unavailable.')
   }
+  let scope = actorScope(context.actor)
   if (context.actor.kind === 'intake_key') {
-    if (context.actor.definitionId !== definition.id
-      || !await tx.intakeCredentialMayUse(context.actor.credentialId, definition.id)) {
+    const replayScopeId = context.actor.definitionId === definition.id
+      ? await tx.intakeCredentialReplayScope(context.actor.credentialId, definition.id) : null
+    if (!replayScopeId) {
       throw new CrmOperationsError('credential_revoked', 'The intake credential cannot use this definition.')
     }
+    scope = `intake_key:${replayScopeId}`
   }
-  const payloadBytes = Buffer.byteLength(canonicalCrmRequest(command.fields), 'utf8')
-  if (payloadBytes > definition.maxPayloadBytes) {
-    throw new CrmOperationsError('payload_too_large', 'Submission exceeds the definition payload limit.', {
-      maxPayloadBytes: definition.maxPayloadBytes,
-    })
-  }
-  const mapped = validateAndMapFields(definition, command.fields)
   const submittedAt = command.submittedAt ?? now.toISOString()
   const requestHash = crmOperationsSha256({
     definitionKey: command.definitionKey,
@@ -271,7 +267,7 @@ async function executeSubmission(
     submittedAt: command.submittedAt ?? null,
   })
   const claim = await tx.claimIdempotency({
-    actorScope: actorScope(context.actor),
+    actorScope: scope,
     credentialId: context.actor.kind === 'intake_key' ? context.actor.credentialId : null,
     definitionId: definition.id,
     idempotencyKey: command.idempotencyKey,
@@ -287,6 +283,14 @@ async function executeSubmission(
       followUpTaskId: claim.followUpTaskId,
     }, { duplicate: true })
   }
+
+  const payloadBytes = Buffer.byteLength(canonicalCrmRequest(command.fields), 'utf8')
+  if (payloadBytes > definition.maxPayloadBytes) {
+    throw new CrmOperationsError('payload_too_large', 'Submission exceeds the definition payload limit.', {
+      maxPayloadBytes: definition.maxPayloadBytes,
+    })
+  }
+  const mapped = validateAndMapFields(definition, command.fields)
 
   let resolvedContactId: string | null = null
   if (definition.identityPolicy === 'external_subject') {
@@ -325,7 +329,7 @@ async function executeSubmission(
   const submission = await tx.createSubmission({
     definition,
     contactId: resolvedContactId,
-    sourceSubmissionId: command.idempotencyKey,
+    sourceSubmissionId: `crm:${claim.claimId}`,
     requestHash,
     fields: command.fields,
     submittedAt,
@@ -473,9 +477,10 @@ export function createCrmOperationsService(
           const credentialId = makeCredentialId()
           const secret = makeSecret()
           const oneTimeSecret = `sk_intake_${credentialId}_${secret}`
-          const prefix = oneTimeSecret.slice(0, 14)
+          const prefix = `sk_intake_${credentialId}`
           const record = await tx.createIntakeCredential({
             credentialId,
+            rotateFromCredentialId: command.rotateFromCredentialId,
             label: command.label,
             definitionIds: command.definitionIds,
             secretPrefix: prefix,
@@ -484,7 +489,7 @@ export function createCrmOperationsService(
           })
           await audit(tx, context.actor, {
             action: 'crm.intake_credential.created', subjectKind: 'intake_credential', subjectId: credentialId,
-            details: { definitionIds: command.definitionIds },
+            details: { definitionIds: command.definitionIds, ...(command.rotateFromCredentialId ? { rotatedFromCredentialId: command.rotateFromCredentialId } : {}) },
           })
           return result(command.kind, record, { created: true, oneTimeSecret })
         }

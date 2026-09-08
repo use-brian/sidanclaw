@@ -345,6 +345,7 @@ export type CrmIntakeDefinition = {
 };
 
 export type CrmIntakeCredential = {
+  rotatedFromCredentialId?: string | null;
   id: string;
   label: string;
   prefix: string;
@@ -603,7 +604,7 @@ export async function listCrmIntakeCredentials(workspaceId: string): Promise<Crm
 
 export function createCrmIntakeCredential(
   workspaceId: string,
-  input: { label: string; definitionIds: string[] },
+  input: { label: string; definitionIds: string[]; rotateFromCredentialId?: string },
 ): Promise<{ record: CrmIntakeCredential; key: string }> {
   return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/intake-credentials`, {
     method: "POST",

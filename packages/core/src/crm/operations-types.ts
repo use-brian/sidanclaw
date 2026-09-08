@@ -221,6 +221,7 @@ export const SaveCrmIntakeDefinitionCommandSchema = z.object({
 
 export const CreateCrmIntakeCredentialCommandSchema = z.object({
   kind: z.literal('create_intake_credential'),
+  rotateFromCredentialId: CrmOperationsUuidSchema.optional(),
   label: z.string().trim().min(1).max(200),
   definitionIds: z.array(CrmOperationsUuidSchema).min(1).max(50),
 })

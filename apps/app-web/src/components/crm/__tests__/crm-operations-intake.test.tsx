@@ -24,6 +24,8 @@ vi.mock("@/lib/api/crm", async (importOriginal) => ({
   ...api,
 }));
 
+vi.mock("@/components/ui/confirm-dialog", () => ({ confirmDialog: vi.fn(async () => true) }));
+
 import { CrmIntakeSettings } from "../operations/intake-settings";
 import { I18nProvider } from "@/lib/i18n/client";
 import { en } from "@/lib/i18n/dictionaries/en";
@@ -156,6 +158,18 @@ describe("[COMP:app-web/crm-operations] CRM intake settings", () => {
       defaultLocale: "en", localeWordings: { ja: "新しい文言" }, archived: false,
     });
     expect(host.textContent).toContain(en.crmPage.operations.wordingImmutableHelp);
+  });
+
+  it("creates a replacement with the existing bindings and keeps revocation explicit", async () => {
+    api.createCrmIntakeCredential.mockResolvedValue({ record: credential,key: "sk_intake_replacement_fixture" });
+    const replace = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent === en.crmPage.operations.rotateCredential)!;
+    await act(async () => replace.click());
+    await settle();
+    expect(api.createCrmIntakeCredential).toHaveBeenCalledWith("workspace-1", {
+      label: credential.label,definitionIds: credential.definitionIds,rotateFromCredentialId: credential.id,
+    });
+    expect(api.revokeCrmIntakeCredential).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("sk_intake_replacement_fixture");
   });
 
 });

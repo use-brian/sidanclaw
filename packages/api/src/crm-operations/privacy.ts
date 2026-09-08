@@ -54,7 +54,7 @@ const EXPORT_PROJECTIONS: Record<PrivacyTable, string> = Object.fromEntries(
 // workspace content. Its non-secret lifecycle metadata remains visible.
 EXPORT_PROJECTIONS.crm_intake_credentials = [
   'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',
-  'revoked_at', 'last_used_at', 'created_at',
+  'revoked_at', 'last_used_at', 'created_at', 'replay_scope_id', 'rotated_from_credential_id',
 ].join(',')
 EXPORT_PROJECTIONS.crm_integration_credentials = [
   'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',

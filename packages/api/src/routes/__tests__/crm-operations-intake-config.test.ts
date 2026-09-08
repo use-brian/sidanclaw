@@ -83,14 +83,14 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     const owner = build()
     const response = await request(owner.app)
       .post(`/api/crm/${WORKSPACE_ID}/operations/intake-credentials`)
-      .send({ label: 'Website', definitionIds: [DEFINITION_ID] })
+      .send({ label: 'Website', definitionIds: [DEFINITION_ID], rotateFromCredentialId: CONTACT_ID })
     expect(response.status).toBe(201)
     expect(response.body.key).toBe('sk_intake_once')
     expect(owner.service.execute).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: WORKSPACE_ID,
       actor: { kind: 'user', userId: USER_ID },
       authority: expect.objectContaining({ canConfigure: true }),
-    }), { kind: 'create_intake_credential', label: 'Website', definitionIds: [DEFINITION_ID] })
+    }), { kind: 'create_intake_credential', label: 'Website', definitionIds: [DEFINITION_ID], rotateFromCredentialId: CONTACT_ID })
   })
 
   it('does not accept request-owned authority fields', async () => {

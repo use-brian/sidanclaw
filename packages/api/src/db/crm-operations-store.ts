@@ -82,7 +82,7 @@ export type CrmOperationsTransaction = {
   saveEntitlementPlan(input: PlanInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
   saveEvent(input: EventInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
   getIntakeDefinition(definitionKey: string): Promise<StoredIntakeDefinition | null>
-  intakeCredentialMayUse(credentialId: string, definitionId: string): Promise<boolean>
+  intakeCredentialReplayScope(credentialId: string, definitionId: string): Promise<string | null>
   claimIdempotency(params: {
     actorScope: string
     credentialId: string | null
@@ -174,6 +174,7 @@ export type CrmOperationsTransaction = {
     createdByUserId: string | null
   }): Promise<{ record: CrmOperationsRecord; created: boolean }>
   createIntakeCredential(params: {
+    rotateFromCredentialId?: string
     credentialId: string
     label: string
     definitionIds: string[]
@@ -292,17 +293,18 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       return (result.rows[0] as StoredIntakeDefinition | undefined) ?? null
     },
 
-    async intakeCredentialMayUse(credentialId, definitionId) {
-      const result = await client.query(
-        `SELECT 1
+    async intakeCredentialReplayScope(credentialId, definitionId) {
+      const result = await client.query<{ replayScopeId: string }>(
+        `SELECT c.replay_scope_id AS "replayScopeId"
            FROM crm_intake_credentials c
            JOIN crm_intake_credential_definitions b
              ON b.workspace_id = c.workspace_id AND b.credential_id = c.id
           WHERE c.workspace_id = $1 AND c.id = $2 AND b.definition_id = $3
-            AND c.revoked_at IS NULL`,
+            AND c.revoked_at IS NULL
+          FOR SHARE OF c,b`,
         [workspaceId, credentialId, definitionId],
       )
-      return result.rowCount === 1
+      return result.rows[0]?.replayScopeId ?? null
     },
 
     async claimIdempotency(params) {
@@ -749,12 +751,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       }
       const created = await client.query<DbRecord>(
         `INSERT INTO crm_intake_credentials (
-           id, workspace_id, label, secret_prefix, secret_hash, created_by_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6)
+           id, workspace_id, label, secret_prefix, secret_hash, created_by_user_id,rotated_from_credential_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
          RETURNING id, label, secret_prefix AS "secretPrefix", revoked_at AS "revokedAt",
+                   rotated_from_credential_id AS "rotatedFromCredentialId",
                    last_used_at AS "lastUsedAt", created_at AS "createdAt"`,
         [params.credentialId, workspaceId, params.label, params.secretPrefix,
-          params.secretHash, params.createdByUserId],
+          params.secretHash, params.createdByUserId,params.rotateFromCredentialId ?? null],
       )
       const row = created.rows[0]!
       for (const definitionId of [...new Set(params.definitionIds)]) {
@@ -773,6 +776,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         `UPDATE crm_intake_credentials SET revoked_at = COALESCE(revoked_at, now())
           WHERE workspace_id = $1 AND id = $2
          RETURNING id, label, secret_prefix AS "secretPrefix", revoked_at AS "revokedAt",
+                   rotated_from_credential_id AS "rotatedFromCredentialId",
                    last_used_at AS "lastUsedAt", created_at AS "createdAt"`,
         [workspaceId, credentialId],
       )
@@ -1315,6 +1319,9 @@ export function createDbCrmOperationsStore(pool: Pool = getPool()): CrmOperation
         return result
       } catch (error) {
         await client.query('ROLLBACK')
+        if ((error as { constraint?: string }).constraint === 'crm_intake_credential_rotation_fk') {
+          throw new CrmOperationsError('not_found', 'Intake rotation source is unavailable.')
+        }
         if ((error as { constraint?: string }).constraint === 'crm_consent_wording_immutable') {
           throw new CrmOperationsError('conflict', 'Wording versions are immutable. Save changed wording under a new version.',
             { reason: 'wording_version_immutable' })

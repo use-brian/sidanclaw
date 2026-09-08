@@ -118,6 +118,7 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
         definitionIds: [credentialDefinitionId],
       });
       setOneTimeKey(created.key);
+      setCopied(false);
       setCredentialLabel("");
       await reload();
     } catch (cause) {
@@ -163,6 +164,22 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
     setDefaultLocale(purpose?.defaultLocale ?? "default");
     setLocaleWordings(purpose?.localeWordings ?? {});
     setPurposeChannels(purpose?.applicableChannels ?? ["email"]);
+  }
+
+  async function rotate(credential: CrmIntakeCredential) {
+    if (busy || !await confirmDialog({
+      title: t.rotateCredential, description: t.rotateCredentialHelp,
+      confirmLabel: t.rotateCredential, cancelLabel: t.cancel,
+    })) return;
+    setBusy(true); setError(null);
+    try {
+      const created = await createCrmIntakeCredential(workspaceId, {
+        label: credential.label, definitionIds: credential.definitionIds, rotateFromCredentialId: credential.id,
+      });
+      setOneTimeKey(created.key); setCopied(false);
+      await reload();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : t.saveFailed); }
+    finally { setBusy(false); }
   }
 
   async function revoke(credential: CrmIntakeCredential) {
@@ -235,7 +252,7 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
           </div>
           <Button className="mt-2" size="sm" disabled={busy || !credentialLabel.trim() || !credentialDefinitionId} onClick={() => void createCredential()}><Plus aria-hidden />{t.createCredential}</Button>
           <div className="mt-3 space-y-2">
-            {credentials.map((credential) => <div key={credential.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 px-3 py-2 text-xs"><div><div className="font-medium">{credential.label}</div><div className="font-mono text-[10px] text-muted-foreground">{credential.prefix} · {credential.revokedAt ? t.revoked : t.active}</div></div>{!credential.revokedAt && <Button size="icon-xs" variant="ghost" aria-label={t.revoke} disabled={busy} onClick={() => void revoke(credential)}><RotateCcw aria-hidden /></Button>}</div>)}
+            {credentials.map((credential) => <div key={credential.id} className="flex items-center justify-between gap-3 rounded-lg bg-muted/30 px-3 py-2 text-xs"><div><div className="font-medium">{credential.label}</div><div className="break-all font-mono text-[10px] text-muted-foreground">{credential.prefix} · {credential.revokedAt ? t.revoked : t.active}</div></div><Button size="xs" variant="outline" disabled={busy} onClick={() => void rotate(credential)}>{t.rotateCredential}</Button>{!credential.revokedAt && <Button size="icon-xs" variant="ghost" aria-label={t.revoke} disabled={busy} onClick={() => void revoke(credential)}><RotateCcw aria-hidden /></Button>}</div>)}
             {credentials.length === 0 && <div className="text-xs text-muted-foreground">{t.noCredentials}</div>}
           </div>
         </div>

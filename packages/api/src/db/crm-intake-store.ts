@@ -192,6 +192,7 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
       if (integration) throw new CrmOperationsError('not_authorized', 'Integration credentials cannot administer intake credentials.')
       return page('credentials', workspaceId, filters,
         `SELECT c.id, c.label, c.secret_prefix AS prefix,
+                c.rotated_from_credential_id AS "rotatedFromCredentialId",
                 c.revoked_at AS "revokedAt", c.last_used_at AS "lastUsedAt",
                 c.created_at AS "createdAt",
                 COALESCE(array_agg(b.definition_id ORDER BY b.definition_id)

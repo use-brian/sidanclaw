@@ -5854,6 +5854,8 @@ export const zh: Dictionary = {
       editWording: "編輯文案",
       wordingLocale: "記錄的同意文案語言",
       wordingStoredDefault: "使用已儲存的預設文案",
+      rotateCredential: "建立替代金鑰",
+      rotateCredentialHelp: "替代金鑰會保留提交重試記錄。更新後端後，請撤銷仍有效的舊金鑰。",
       channelLabels: { email: "電郵", sms: "短訊", phone: "電話", whatsapp: "WhatsApp", telegram: "Telegram", slack: "Slack" },
       compliance: "同意及可傳送性", complianceLoadFailed: "無法載入合規證據。", complianceSaveFailed: "無法更新合規證據。", loading: "載入中...", noPurposesForContact: "請先在CRM設定建立同意目的，再評估此聯絡人。", pickPurpose: "選擇目的", checking: "正在檢查可傳送性...", verdictLabels: { allowed: "允許", blocked: "已封鎖", unknown: "未知 - 不可傳送" }, reasonLabels: { contact_method_missing: "缺少聯絡方式", global_suppression: "已全面停止", channel_suppression: "此頻道已停止", consent_withdrawn: "同意已撤回", consent_not_recorded: "未記錄同意", purpose_archived: "目的已封存", purpose_channel_inapplicable: "此目的不適用於此頻道" }, grant: "記錄同意", withdraw: "撤回", suppress: "停止傳送", release: "解除停止", withdrawTitle: "撤回同意？", withdrawDescription: "這會新增撤回事件，並封鎖需要此目的同意的傳送。", releaseTitle: "解除停止傳送？", releaseDescription: "這會新增解除事件。其他證據仍可能封鎖傳送。", consentActionLabels: { granted: "已授予同意", withdrawn: "已撤回同意" }, suppressionActionLabels: { suppressed: "已停止", released: "已解除" },
       submissions: "提交收件匣", submissionsLoadFailed: "無法載入CRM提交。", submissionSaveFailed: "無法更新提交。", allStatuses: "所有狀態", submissionStatusLabels: { new: "新提交", in_progress: "處理中", resolved: "已解決", spam: "垃圾" }, noSubmissions: "沒有符合此檢視的提交。", legacySubmission: "舊版提交", pickSubmission: "選擇要審閱的提交。", queue: "佇列", followUpTask: "跟進工作", none: "沒有", submittedFields: "提交欄位", addNote: "新增內部備註", saveNote: "儲存備註",
