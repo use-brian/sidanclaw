@@ -159,6 +159,14 @@ export const ASSISTANT_SCOPED_FLUSH_TABLES = [
   'episodic_memories',
 ] as const
 
+// These tables belong to the hosted overlay, which is absent on standalone
+// OSS. Every other listed content table is required: SQL errors must abort
+// and roll back the flush rather than silently omit data.
+const HOSTED_ONLY_FLUSH_TABLES = [
+  'pending_classifications', 'brain_candidates', 'connector_actions',
+  'external_entities', 'distribution_events',
+] as const
+
 /**
  * Tables with a `workspace_id` column the flush deliberately PRESERVES.
  * Structure, configuration, capabilities, billing, and audit — the shell the
@@ -256,6 +264,13 @@ export async function flushWorkspaceData(
       throw new WorkspaceFlushNotOwnerError()
     }
 
+    const optional = await client.query<{ name: string; installed: boolean }>(
+      `SELECT name, to_regclass(format('public.%I', name)) IS NOT NULL AS installed
+         FROM unnest($1::text[]) AS name`,
+      [HOSTED_ONLY_FLUSH_TABLES],
+    )
+    const absent = new Set(optional.rows.filter((row) => !row.installed).map((row) => row.name))
+
     const assistants = await client.query<{ id: string }>(
       `SELECT id FROM assistants WHERE workspace_id = $1`,
       [workspaceId],
@@ -263,6 +278,10 @@ export async function flushWorkspaceData(
     const assistantIds = assistants.rows.map((r) => r.id)
 
     for (const table of WORKSPACE_FLUSH_TABLES) {
+      if (absent.has(table)) {
+        deleted[table] = 0
+        continue
+      }
       const result =
         table === 'sessions'
           ? // Sessions ride the assistant, not the workspace (workspace_id is
@@ -276,7 +295,7 @@ export async function flushWorkspaceData(
     }
 
     for (const table of ASSISTANT_SCOPED_FLUSH_TABLES) {
-      if (assistantIds.length === 0) {
+      if (assistantIds.length === 0 || absent.has(table)) {
         deleted[table] = 0
         continue
       }
