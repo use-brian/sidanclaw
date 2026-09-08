@@ -45,6 +45,7 @@ import { primaryAuthUrl, webAppUrl } from "@/lib/primary-auth";
 import { getUserInfo } from "@/lib/user";
 import { signOutActiveAccount } from "@/lib/account-logout";
 import { requestSidebarClose } from "@/lib/sidebar-close";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 import { deploymentCapabilities } from "@/lib/edition";
 import { updateWorkspacePickerPreferences } from "@/lib/api/workspaces";
 import {
@@ -274,6 +275,10 @@ export function WorkspaceSwitcher() {
     if (typeof window === "undefined") return;
     setAccountError(null);
     setSwitching(accountId);
+    // Drop the previous account's in-memory rows before the identity changes
+    // (instant-navigation contract N2; the shell reloads in place, so this is
+    // not redundant with a page load).
+    resetSurfaceCache();
     // In the Electron shell the switch happens in the shell's OWN cookie jar (the
     // primary's shared `.usebrian.ai` cookies are unreachable from it), so route
     // through the bridge instead of bouncing to the primary. It resolves with the

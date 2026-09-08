@@ -34,17 +34,36 @@ import { useRouter } from "next/navigation";
 import type { WorkspaceSurface } from "@/lib/doc-page-url";
 import { surfaceFromPathname } from "@/lib/doc-page-url";
 import { invalidateSurfaceCache, warmSurfaceCache } from "@/lib/surface-cache";
-import { fetchWorkspaceCrm } from "@/lib/api/crm";
+import { fetchCrmConfig } from "@/lib/api/crm";
 import { fetchWorkspaceTasks } from "@/lib/api/tasks";
+import { getUserInfo } from "@/lib/user";
 import { getView } from "@/lib/api/views";
 import { listWorkflows } from "@/lib/api/workflow";
 
 /** Surfaces whose landing data is a single workspace-scoped list. */
-type WarmableSurface = "tasks" | "crm" | "workflow";
+export type WarmableSurface = "tasks" | "crm" | "workflow";
+
+/**
+ * The signed-in viewer's id, appended to every workspace-scoped LIST key.
+ * Rows depend on the caller's RLS visibility, so two accounts in one browser
+ * tab (the multi-account switcher) must never share a slot - the same rule
+ * the Brain's IndexedDB tier already keys on (`brain-content-cache.ts`).
+ * Empty when no user cookie is readable (SSR; the cache is browser-only
+ * anyway), in which case the key is workspace-only.
+ */
+function viewerSuffix(): string {
+  const id = getUserInfo()?.id;
+  return id ? `:${id}` : "";
+}
 
 /**
  * The cache key for a surface's landing data. Both the prefetch and the
  * surface's own `useCachedResource` call go through here.
+ *
+ * Shape: `<resource>:<workspaceId>[:<viewerId>]` - workspace FIRST, so the
+ * spine's prefix marks (`tasks:<wid>`, `crm:<wid>:`) and a mutation's
+ * `invalidateSurfaceCache('tasks:' + wid)` keep matching every viewer-keyed
+ * variant.
  *
  * `null` for surfaces with no single landing list (Brain's graph, Studio's
  * per-section fetches, the doc surface's per-page metadata). Those are not
@@ -58,14 +77,27 @@ export function surfaceDataKey(
   if (!workspaceId) return null;
   switch (surface) {
     case "tasks":
-      return `tasks:${workspaceId}`;
+      return `tasks:${workspaceId}${viewerSuffix()}`;
     case "crm":
-      return `crm:${workspaceId}`;
+      return `crm:${workspaceId}${viewerSuffix()}`;
     case "workflow":
-      return `workflow:${workspaceId}`;
+      return `workflow:${workspaceId}${viewerSuffix()}`;
     default:
       return null;
   }
+}
+
+/**
+ * The CRM surface reads several independently cached regions under its
+ * `surfaceDataKey('crm')` root (`:config`, `:collection:...`, `:lookups`,
+ * `:summary:...`). The CONFIG region is the first thing it needs to paint a
+ * table header, so it is the one the rail hover warms. Built here, not in the
+ * surface, because a warm and the mount that consumes it must be the same
+ * string: the previous warm filled the bare `crm:<wid>` slot, which nothing
+ * read, and every CRM entry cold-loaded while the hover looked optimised.
+ */
+export function crmConfigCacheKey(workspaceId: string): string {
+  return `${surfaceDataKey("crm", workspaceId)}:config`;
 }
 
 /**
@@ -113,12 +145,43 @@ export function brainGraphCacheKey(
   return `brain-graph:${workspaceId}:${viewpointAssistantId ?? ""}`;
 }
 
-const WARMERS: Record<WarmableSurface, (workspaceId: string) => Promise<unknown>> =
-  {
-    tasks: (workspaceId) => fetchWorkspaceTasks(workspaceId),
-    crm: (workspaceId) => fetchWorkspaceCrm(workspaceId),
-    workflow: (workspaceId) => listWorkflows(workspaceId, { includeArchived: true }),
-  };
+export type WarmTarget = {
+  /** The exact key the destination surface reads on mount. */
+  key: string;
+  fetch: () => Promise<unknown>;
+};
+
+/**
+ * The warm target per surface: the KEY its landing hook reads and the fetcher
+ * that fills it. Keeping key + fetcher in one record is what the
+ * `[COMP:app-web/surface-prefetch]` test checks against each surface's source:
+ * a warm that fills a key nobody reads is the failure mode this module
+ * exists to prevent.
+ */
+export function warmTargetFor(
+  surface: WarmableSurface,
+  workspaceId: string,
+): WarmTarget {
+  switch (surface) {
+    case "tasks":
+      return {
+        key: surfaceDataKey("tasks", workspaceId) as string,
+        fetch: () => fetchWorkspaceTasks(workspaceId),
+      };
+    case "crm":
+      return {
+        key: crmConfigCacheKey(workspaceId),
+        fetch: () => fetchCrmConfig(workspaceId),
+      };
+    case "workflow":
+      return {
+        key: surfaceDataKey("workflow", workspaceId) as string,
+        fetch: () => listWorkflows(workspaceId, { includeArchived: true }),
+      };
+  }
+}
+
+const WARMABLE: ReadonlySet<string> = new Set<WarmableSurface>(["tasks", "crm", "workflow"]);
 
 /**
  * Kick off the destination surface's landing fetch. No-op when the surface has
@@ -129,11 +192,9 @@ function warmSurfaceData(
   surface: WorkspaceSurface | null,
   workspaceId: string | null | undefined,
 ): void {
-  const key = surfaceDataKey(surface, workspaceId);
-  if (!key || !workspaceId) return;
-  const warmer = WARMERS[surface as WarmableSurface];
-  if (!warmer) return;
-  warmSurfaceCache(key, () => warmer(workspaceId));
+  if (!surface || !workspaceId || !WARMABLE.has(surface)) return;
+  const target = warmTargetFor(surface as WarmableSurface, workspaceId);
+  warmSurfaceCache(target.key, target.fetch);
 }
 
 /** The workspace id in a `/w/<id>/...` path, or null. */

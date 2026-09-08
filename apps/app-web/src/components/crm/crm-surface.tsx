@@ -29,7 +29,7 @@ import { BarChart3, CalendarDays, ChevronDown, ChevronUp, Inbox, Kanban, Mail, R
 import { OperatorTopbar } from "@/components/operator/operator-topbar";
 import { cn } from "@/lib/utils";
 import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
-import { surfaceDataKey } from "@/lib/surface-prefetch";
+import { crmConfigCacheKey, surfaceDataKey } from "@/lib/surface-prefetch";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -263,7 +263,9 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
 
   // ── Independently cached data regions ─────────────────────────────────
   const crmKey = surfaceDataKey("crm", workspaceId);
-  const configKey = `${crmKey}:config`;
+  // Built in `surface-prefetch.ts` so the rail hover warms THIS key: the old
+  // warm filled the bare `crm:<wid>` slot, which nothing read.
+  const configKey = crmConfigCacheKey(workspaceId);
   const configResource = useCachedResource(configKey, () => fetchCrmConfig(workspaceId));
   const config = configResource.data ?? null;
   const selectedPipeline = useMemo<CrmPipeline | null>(() => {

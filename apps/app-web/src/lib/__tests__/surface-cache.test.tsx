@@ -22,6 +22,7 @@ import {
   invalidateSurfaceCache,
   isSurfaceCacheStale,
   loadSurfaceCache,
+  markSurfaceCacheStale,
   mutateSurfaceCache,
   readSurfaceCache,
   resetSurfaceCache,
@@ -151,6 +152,27 @@ describe("[COMP:app-web/surface-cache] Surface cache", () => {
     expect(readSurfaceCache("crm:w1").data).toBe(3);
   });
 
+  it("marks stale by exact key and by prefix WITHOUT dropping the data", async () => {
+    // The spine's signal (instant-navigation contract N3): "something changed
+    // somewhere" must keep the open list painting and revalidate behind it,
+    // which is the opposite of `invalidateSurfaceCache`.
+    await loadSurfaceCache("tasks:w1:u1", async () => ["a"]);
+    await loadSurfaceCache("crm:w1:u1:config", async () => "cfg");
+    await loadSurfaceCache("crm:w1:u1:lookups", async () => "lk");
+    await loadSurfaceCache("crm:w2:u1:config", async () => "other");
+
+    markSurfaceCacheStale("tasks:w1");
+    expect(isSurfaceCacheStale("tasks:w1:u1")).toBe(true);
+    expect(readSurfaceCache<string[]>("tasks:w1:u1").data).toEqual(["a"]);
+
+    markSurfaceCacheStale("crm:w1:");
+    expect(isSurfaceCacheStale("crm:w1:u1:config")).toBe(true);
+    expect(isSurfaceCacheStale("crm:w1:u1:lookups")).toBe(true);
+    expect(readSurfaceCache("crm:w1:u1:config").data).toBe("cfg");
+    // A sibling workspace is untouched.
+    expect(isSurfaceCacheStale("crm:w2:u1:config")).toBe(false);
+  });
+
   it("notifies subscribers on load, patch and invalidation", async () => {
     const seen: number[] = [];
     // The hook subscribes through this same path; if it stops firing, mounted
@@ -234,6 +256,32 @@ describe("[COMP:app-web/surface-cache] useCachedResource", () => {
     });
     // Without the repair path the surface would strand on an empty state.
     expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(container!.textContent).toBe("v2");
+  });
+
+  it("revalidates behind the paint when the key is marked stale, keeping the old value up", async () => {
+    // The spine path: a mounted surface must refetch after `markSurfaceCacheStale`
+    // (the hook's load effect re-runs on the emitted snapshot and sees "data
+    // present + stale") WITHOUT ever showing its cold branch.
+    const fetcher = vi.fn(async () => "v1");
+    await render(fetcher);
+    expect(container!.textContent).toBe("v1");
+
+    let release: (value: string) => void = () => {};
+    fetcher.mockImplementation(() => new Promise<string>((resolve) => {
+      release = resolve;
+    }));
+    await act(async () => {
+      markSurfaceCacheStale("k");
+      await settle();
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    // Still painting the last good value while the revalidation is in flight.
+    expect(container!.textContent).toBe("v1");
+    await act(async () => {
+      release("v2");
+      await settle();
+    });
     expect(container!.textContent).toBe("v2");
   });
 

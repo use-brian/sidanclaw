@@ -69,6 +69,7 @@ import { homeLandingPath } from "@/lib/suggested-landing";
 import { useDocChatOthersRun } from "@/lib/doc-chat-relay";
 import { useOfflineSync } from "@/lib/offline/use-offline-sync";
 import { useWorkspaceEvents } from "@/lib/workspace-events";
+import { useSurfaceCacheInvalidation } from "@/lib/surface-cache-invalidation";
 import { SIDEBAR_CLOSE_EVENT } from "@/lib/sidebar-close";
 import { cn } from "@/lib/utils";
 import { CHAT_SEED_EVENT, type ChatSeed } from "@/lib/chat-seed";
@@ -156,6 +157,12 @@ export function WorkspaceChrome({
   // their existing listeners. Mounted on the chrome so every surface —
   // workflow, approvals, brain, skills — stays live without its own stream.
   useWorkspaceEvents(workspaceId);
+  // The ONE spine-to-cache map (instant-navigation contract N3): each domain
+  // event marks the surface-cache prefixes it feeds stale, so a cached
+  // surface (Tasks, CRM, Workflow, the Brain graph) repaints behind its paint
+  // without carrying a listener of its own - and a task or deal an assistant
+  // writes from chat reaches the OPEN list, not just the sidebar counts.
+  useSurfaceCacheInvalidation(workspaceId);
 
   // Keep macOS native traffic lights and the zoomable web chrome in the same
   // coordinate system. The three OS buttons stay fixed when Electron's View
@@ -568,9 +575,10 @@ export function WorkspaceChrome({
   // switch (never both at once).
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Final routes (N6): `/studio` is a redirect to its first section.
     const SURFACE_BY_KEY: Record<string, string> = {
       "2": "brain",
-      "3": "studio",
+      "3": "studio/connectors",
       "4": "workflow",
     };
     const onKey = (e: KeyboardEvent) => {
