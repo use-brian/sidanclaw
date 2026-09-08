@@ -10,6 +10,7 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { APP_LOCALES } from '@use-brian/shared'
 import { CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, type CrmIntegrationOperation } from './integration-authority.js'
 import { AssociationPlanInputSchema, AssociationEventInputSchema } from '../association/domain.js'
 
@@ -17,6 +18,8 @@ export const CrmOperationsUuidSchema = z.string().uuid()
 export const CrmOperationsStableKeySchema = z.string().trim().toLowerCase()
   .regex(/^[a-z][a-z0-9_-]{0,62}$/)
 export const CrmOperationsInstantSchema = z.string().datetime({ offset: true })
+export const CrmWordingLocaleSchema = z.enum(APP_LOCALES)
+export const CrmLocaleWordingsSchema = z.record(CrmWordingLocaleSchema, z.string().trim().min(1).max(20_000))
 export const CrmEffectiveEntitlementQuerySchema = z.object({
   activeOnly: z.boolean().optional(),
   effectiveAt: CrmOperationsInstantSchema.optional(),
@@ -156,7 +159,10 @@ export const CrmConsentAnswerMappingSchema = z.object({
   fieldKey: CrmOperationsStableKeySchema,
   grantedValue: z.union([z.string().max(200), z.boolean(), z.number()]),
   purposeKey: CrmOperationsStableKeySchema,
-})
+  locale: CrmWordingLocaleSchema.optional(),
+  localeFieldKey: CrmOperationsStableKeySchema.optional(),
+}).refine((value) => value.locale === undefined || value.localeFieldKey === undefined,
+  'choose a fixed locale or a locale field, not both')
 
 export const CrmFollowUpTaskTemplateSchema = z.object({
   title: z.string().trim().min(1).max(500),
@@ -185,6 +191,13 @@ export const CrmIntakeDefinitionVersionInputSchema = z.object({
   for (const [index, mapping] of value.consentMappings.entries()) {
     if (!known.has(mapping.fieldKey)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['consentMappings', index, 'fieldKey'], message: 'consent field must exist in the field catalog' })
+    }
+    if (mapping.localeFieldKey) {
+      const field = value.fields.find((item) => item.key === mapping.localeFieldKey)
+      if (!field || field.type !== 'text' || !field.required || !field.options?.length
+        || field.options.some((option) => !CrmWordingLocaleSchema.safeParse(option).success)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['consentMappings', index, 'localeFieldKey'], message: 'locale field must be required text with supported locale options' })
+      }
     }
   }
   if (value.identityPolicy === 'external_subject' && !value.allowedIdentityProvider) {
@@ -257,20 +270,23 @@ export const SaveCrmConsentPurposeCommandSchema = z.object({
   ])).max(6).default([]),
   wordingVersion: z.string().trim().min(1).max(100),
   wording: z.string().trim().min(1).max(20_000),
+  defaultLocale: CrmWordingLocaleSchema.nullable().optional(),
+  localeWordings: CrmLocaleWordingsSchema.optional(),
   archived: z.boolean().default(false),
-})
+}).strict()
 
 export const RecordCrmConsentCommandSchema = z.object({
   kind: z.literal('record_consent'),
   contactId: CrmOperationsUuidSchema,
   purposeKey: CrmOperationsStableKeySchema,
+  locale: CrmWordingLocaleSchema.optional(),
   action: z.enum(['granted', 'withdrawn']),
   source: CrmOperationsStableKeySchema,
   occurredAt: CrmOperationsInstantSchema.optional(),
   provider: CrmOperationsStableKeySchema.optional(),
   providerEventId: z.string().trim().min(1).max(500).optional(),
   metadata: boundedCrmObject(8_000).default({}),
-}).refine(
+}).strict().refine(
   (value) => (value.provider === undefined) === (value.providerEventId === undefined),
   'provider and providerEventId must be supplied together',
 )

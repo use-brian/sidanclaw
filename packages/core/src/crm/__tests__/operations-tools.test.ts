@@ -128,6 +128,7 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
       purpose_key: 'marketing',
       action: 'granted',
       source: 'brain_mcp',
+      locale: 'ja',
       metadata: {},
     }, context({
       channelType: 'programmatic',
@@ -136,6 +137,7 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
         kind: 'oauth_token', credentialId: CREDENTIAL_ID, userId: USER_ID,
       },
     }))
+    expect(execute.mock.calls[0]?.[1]).toMatchObject({ kind: 'record_consent', locale: 'ja' })
     expect(execute.mock.calls[0]?.[0].actor).toEqual({
       kind: 'oauth_token', credentialId: CREDENTIAL_ID, userId: USER_ID,
     })

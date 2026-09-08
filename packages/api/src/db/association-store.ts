@@ -140,6 +140,8 @@ const ENQUIRY_NOTE_SELECT = `
 const CONSENT_SELECT = `
   id, workspace_id AS "workspaceId", contact_id AS "contactId", purpose, action,
   wording_version AS "wordingVersion", source, occurred_at AS "occurredAt",
+  wording_snapshot AS wording, wording_hash AS "wordingHash",
+  wording_version_id AS "wordingVersionId", wording_locale AS "wordingLocale",
   provider, provider_event_id AS "providerEventId", metadata,
   created_at AS "createdAt"`
 const PLAN_SELECT = `
@@ -517,6 +519,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
       return transaction(pool, async (client) => {
         const request: CrmEvidenceRequest = { kind: 'consent', contactId: input.contactId,
           purposeKey: input.purpose, action: input.action, wordingVersion: input.wordingVersion,
+          locale: input.locale,
           source: input.source, occurredAt: input.occurredAt, metadata: input.metadata }
         const replay = () => client.query<DbRow>(
           `SELECT ${CONSENT_SELECT}, request_fingerprint AS "__requestHash",
@@ -530,18 +533,35 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           if (existing.rows[0]) return { record: resolveCrmEvidenceReplay(existing.rows[0], request), created: false }
         }
         await requirePerson(client, workspaceId, input.contactId)
+        const catalog = await client.query<DbRow>(
+          `SELECT p.id AS "purposeId", p.archived_at AS "archivedAt", v.id AS "versionId",
+            v.wording_snapshot AS wording, v.wording_hash AS "wordingHash", v.default_locale AS "defaultLocale",
+            v.locale_wordings AS "localeWordings", v.locale_wording_hashes AS "localeWordingHashes"
+           FROM crm_consent_purposes p LEFT JOIN crm_consent_purpose_versions v
+             ON v.workspace_id=p.workspace_id AND v.purpose_id=p.id AND v.version=$3
+           WHERE p.workspace_id=$1 AND p.purpose_key=$2`, [workspaceId,input.purpose,input.wordingVersion])
+        const purpose = catalog.rows[0]
+        if (purpose && (purpose.archivedAt || !purpose.versionId)) {
+          throw new AssociationError('conflict', 'Consent purpose or wording version is unavailable.')
+        }
+        if (!purpose && input.locale) throw new AssociationError('conflict', 'Localized consent requires a catalogued wording version.')
+        const localized = input.locale ? (purpose?.localeWordings as Record<string, string> | undefined)?.[input.locale] : undefined
         const result = await client.query<DbRow>(
           `INSERT INTO association_consent_events
              (workspace_id, contact_id, purpose, action, wording_version, source,
-              occurred_at, provider, provider_event_id, metadata, request_fingerprint)
-           VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::timestamptz, now()),$8,$9,$10,$11)
+              occurred_at, provider, provider_event_id, metadata, request_fingerprint,
+              purpose_id,wording_version_id,wording_snapshot,wording_hash,wording_locale)
+           VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::timestamptz, now()),$8,$9,$10,$11,$12,$13,$14,$15,$16)
            ON CONFLICT (workspace_id, provider, provider_event_id)
              WHERE provider IS NOT NULL DO NOTHING
            RETURNING ${CONSENT_SELECT}`,
           [workspaceId, input.contactId, input.purpose, input.action,
             input.wordingVersion, input.source, input.occurredAt ?? null,
             input.provider ?? null, input.providerEventId ?? null, input.metadata,
-            input.provider ? crmEvidenceRequestHash(request) : null],
+            input.provider ? crmEvidenceRequestHash(request) : null,
+            purpose?.purposeId ?? null, purpose?.versionId ?? null, localized ?? purpose?.wording ?? null,
+            localized ? (purpose!.localeWordingHashes as Record<string,string>)[input.locale!] : purpose?.wordingHash ?? null,
+            localized ? input.locale : purpose?.defaultLocale ?? null],
         )
         if (!result.rows[0] && input.provider && input.providerEventId) {
           const raced = await replay()

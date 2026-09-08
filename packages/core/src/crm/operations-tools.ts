@@ -19,6 +19,7 @@ import {
   CrmOperationsError,
   CrmOperationsStableKeySchema,
   CrmOperationsUuidSchema,
+  CrmWordingLocaleSchema,
   RecordCrmSubmissionCommandSchema,
   type CrmOperationsActor,
   type CrmOperationsCommand,
@@ -151,6 +152,7 @@ const UpdateSubmissionInputSchema = z.object({
 const RecordConsentInputSchema = z.object({
   contact_id: CrmOperationsUuidSchema,
   purpose_key: CrmOperationsStableKeySchema,
+  locale: CrmWordingLocaleSchema.optional(),
   action: z.enum(['granted', 'withdrawn']),
   source: CrmOperationsStableKeySchema,
   occurred_at: z.string().datetime({ offset: true }).optional(),
@@ -550,11 +552,12 @@ export function createCrmOperationsTools(options: {
   })
   const recordCrmConsent = buildTool({
     name: 'recordCrmConsent', requiresCapability: 'crm',
-    description: 'Append consent evidence for a CRM contact and an enumerated purpose. This never overwrites history. Consent withdrawal requires user confirmation.',
+    description: 'Append consent evidence for a CRM contact and an enumerated purpose. Optional locale selects stored translated wording, falling back to the stored default; never infer language from the operator. The server freezes wording, hash and version. Consent withdrawal requires user confirmation.',
     inputSchema: RecordConsentInputSchema,
     resolveConfirmation: async (_context, input) => RecordConsentInputSchema.parse(input).action === 'withdrawn',
     execute: write((input) => ({
       kind: 'record_consent', contactId: input.contact_id, purposeKey: input.purpose_key,
+      locale: input.locale,
       action: input.action, source: input.source, occurredAt: input.occurred_at,
       provider: input.provider, providerEventId: input.provider_event_id, metadata: input.metadata,
     } as CrmOperationsCommand)),

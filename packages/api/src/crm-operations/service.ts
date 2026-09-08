@@ -13,6 +13,8 @@ import {
   CrmOperationsCommandSchema,
   CrmOperationsContextSchema,
   CrmOperationsError,
+  CrmLocaleWordingsSchema,
+  CrmWordingLocaleSchema,
   CrmSegmentPredicateSchema,
   actorAuditIdentity,
   assertCrmOperationsAuthority,
@@ -346,6 +348,7 @@ async function executeSubmission(
       contactId: resolvedContactId,
       purpose,
       purposeKey: mapping.purposeKey,
+      locale: mapping.locale ?? (mapping.localeFieldKey ? CrmWordingLocaleSchema.parse(command.fields[mapping.localeFieldKey]) : undefined),
       action,
       source: 'intake',
       occurredAt: submittedAt,
@@ -494,8 +497,21 @@ export function createCrmOperationsService(
           return result(command.kind, record)
         }
         if (command.kind === 'save_consent_purpose') {
+          const previous = command.purposeId ? await tx.getConsentPurpose(command.purposeKey) : null
+          if (command.purposeId && previous?.id !== command.purposeId) {
+            throw new CrmOperationsError('not_found', 'Consent purpose was not found for this stable key.')
+          }
+          const defaultLocale = command.defaultLocale === undefined ? (previous?.defaultLocale as string | null) ?? null : command.defaultLocale
+          const localeWordings = CrmLocaleWordingsSchema.parse(command.localeWordings ?? previous?.localeWordings ?? {})
+          if (defaultLocale && localeWordings[defaultLocale as keyof typeof localeWordings] !== undefined
+            && localeWordings[defaultLocale as keyof typeof localeWordings] !== command.wording) {
+            invalidInput('The default locale translation must equal the default wording.')
+          }
           const saved = await tx.saveConsentPurpose({
             ...command,
+            defaultLocale,
+            localeWordings,
+            localeWordingHashes: Object.fromEntries(Object.entries(localeWordings).map(([locale, text]) => [locale, crmOperationsSha256(text)])),
             wordingHash: crmOperationsSha256(command.wording),
             createdByUserId: actorUserId(context.actor),
           })

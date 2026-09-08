@@ -119,6 +119,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'crm_intake_credentials',
   'crm_intake_definition_versions',
   'crm_intake_definitions',
+  'crm_consent_purpose_versions',
   'crm_consent_purposes',
   'crm_segments',
   'episodes',

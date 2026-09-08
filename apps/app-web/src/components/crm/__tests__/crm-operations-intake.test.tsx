@@ -74,7 +74,11 @@ beforeEach(async () => {
   vi.clearAllMocks();
   api.listCrmIntakeDefinitions.mockResolvedValue([definition]);
   api.listCrmIntakeCredentials.mockResolvedValue([credential]);
-  api.listCrmConsentPurposes.mockResolvedValue([]);
+  api.listCrmConsentPurposes.mockResolvedValue([{
+    id: "purpose-fixture", purposeKey: "updates", label: "Updates", description: "Existing description",
+    requiresConsent: false, applicableChannels: ["email"], wordingVersion: "1", wording: "Default fixture text",
+    defaultLocale: "en", localeWordings: { ja: "元の文言" }, archivedAt: null,
+  }]);
   api.listCrmOperationsAudit.mockResolvedValue([]);
   api.listCrmEventDelivery.mockResolvedValue([]);
   api.saveCrmIntakeDefinition.mockResolvedValue({ record: definition, created: true });
@@ -132,4 +136,26 @@ describe("[COMP:app-web/crm-operations] CRM intake settings", () => {
       }),
     );
   });
+  it("edits a purpose under an explicit new version without losing its existing policy", async () => {
+    const button = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((item) => item.textContent?.trim() === label)!;
+    await act(async () => button(en.crmPage.operations.editWording).click());
+    const labeledInput = (label: string) => Array.from(host.querySelectorAll("label")).find((item) => item.querySelector("span")?.textContent === label)?.querySelector("input")!;
+    expect(labeledInput(en.crmPage.operations.purposeKey).disabled).toBe(true);
+    expect(labeledInput(en.crmPage.operations.wordingVersion).value).toBe("1");
+    await act(async () => {
+      setInput(labeledInput(en.crmPage.operations.wordingVersion), "2");
+      const translation = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Optional translation (日本語)"]')!;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(translation, "新しい文言");
+      translation.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => button(en.crmPage.operations.saveWordingVersion).click());
+    await settle();
+    expect(api.saveCrmConsentPurpose).toHaveBeenCalledWith("workspace-1", {
+      purposeId: "purpose-fixture", purposeKey: "updates", label: "Updates", description: "Existing description",
+      requiresConsent: false, applicableChannels: ["email"], wordingVersion: "2", wording: "Default fixture text",
+      defaultLocale: "en", localeWordings: { ja: "新しい文言" }, archived: false,
+    });
+    expect(host.textContent).toContain(en.crmPage.operations.wordingImmutableHelp);
+  });
+
 });

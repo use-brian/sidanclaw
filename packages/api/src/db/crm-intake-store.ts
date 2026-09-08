@@ -120,6 +120,10 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
               applicable_channels AS "applicableChannels",
               active_wording_version AS "wordingVersion",
               wording_snapshot AS wording, wording_hash AS "wordingHash",
+              default_locale AS "defaultLocale", locale_wordings AS "localeWordings",
+              locale_wording_hashes AS "localeWordingHashes",
+              (SELECT v.id FROM crm_consent_purpose_versions v WHERE v.workspace_id=crm_consent_purposes.workspace_id
+                AND v.purpose_id=crm_consent_purposes.id AND v.version=crm_consent_purposes.active_wording_version) AS "wordingVersionId",
               archived_at AS "archivedAt", created_at AS "createdAt",
               updated_at AS "updatedAt"
          FROM crm_consent_purposes
@@ -285,6 +289,7 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
           `SELECT e.id, e.purpose_id AS "purposeId", e.purpose AS "purposeKey",
                   e.action, e.wording_version AS "wordingVersion",
                   e.wording_hash AS "wordingHash", e.wording_snapshot AS wording,
+                  e.wording_version_id AS "wordingVersionId", e.wording_locale AS "wordingLocale",
                   e.source, to_char(e.occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt", e.provider,
                   e.provider_event_id AS "providerEventId", e.actor_kind AS "actorKind",
                   e.acting_user_id AS "actingUserId", e.created_at AS "createdAt",

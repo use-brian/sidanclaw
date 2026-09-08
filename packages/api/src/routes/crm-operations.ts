@@ -16,6 +16,7 @@ import {
   CrmIntegrationScopeError,
   CrmOperationsStableKeySchema,
   CrmOperationsUuidSchema,
+  CrmWordingLocaleSchema,
   CrmPageQuerySchema,
   RecordCrmConsentCommandSchema,
   RecordCrmParticipationCommandSchema,
@@ -59,6 +60,7 @@ const UpdateSubmissionBody = z.object({
 const SavePurposeBody = SaveCrmConsentPurposeCommandSchema.omit({ kind: true }).strict()
 const ConsentBody = z.object({
   purposeKey: CrmOperationsStableKeySchema,
+  locale: CrmWordingLocaleSchema.optional(),
   action: z.enum(['granted', 'withdrawn']),
   source: CrmOperationsStableKeySchema,
   occurredAt: z.string().datetime({ offset: true }).optional(),

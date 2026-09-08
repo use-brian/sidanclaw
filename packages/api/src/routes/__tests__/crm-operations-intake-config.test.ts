@@ -132,6 +132,21 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     })
   })
 
+  it('forwards locale configuration and selection while refusing client-owned evidence', async () => {
+    const owner = build()
+    const purpose = { purposeKey: 'updates',label: 'Updates',wordingVersion: '1',wording: 'Default',defaultLocale: 'en',localeWordings: { ja: '同意します' } }
+    expect((await request(owner.app).post(`/api/crm/${WORKSPACE_ID}/operations/consent-purposes`).send(purpose)).status).toBe(201)
+    expect(owner.service.execute).toHaveBeenLastCalledWith(expect.anything(),expect.objectContaining(purpose))
+    const path = `/api/crm/${WORKSPACE_ID}/operations/contacts/${CONTACT_ID}/consent`
+    const evidence = { purposeKey: 'updates',action: 'granted',source: 'manual',locale: 'ja' }
+    expect((await request(owner.app).post(path).send(evidence)).status).toBe(201)
+    expect(owner.service.execute).toHaveBeenLastCalledWith(expect.anything(),expect.objectContaining({ kind: 'record_consent',contactId: CONTACT_ID,...evidence }))
+    for (const extra of [{ locale: 'xx' },{ wording: 'Caller text' },{ wordingHash: 'a'.repeat(64) },{ wordingVersionId: PLAN_ID }]) {
+      expect((await request(owner.app).post(path).send({ ...evidence,...extra })).status).toBe(400)
+    }
+    expect(owner.service.execute).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps purpose configuration admin-only and exposes compliance reads to members', async () => {
     const member = build('member')
     member.service.execute.mockRejectedValueOnce(new CrmOperationsError(

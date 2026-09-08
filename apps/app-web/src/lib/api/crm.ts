@@ -8,6 +8,7 @@
  * [COMP:app-web/crm-surface]
  */
 
+import type { AppLocale } from "@use-brian/shared";
 import { authFetch } from "@/lib/auth-fetch";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -331,7 +332,7 @@ export type CrmIntakeDefinition = {
   fields: CrmIntakeFieldDefinition[];
   identityPolicy: "external_subject" | "trusted_verified_email" | "new_or_review";
   allowedIdentityProvider?: string | null;
-  consentMappings: Array<{ fieldKey: string; grantedValue: string | boolean | number; purposeKey: string }>;
+  consentMappings: Array<{ fieldKey: string; grantedValue: string | boolean | number; purposeKey: string; locale?: AppLocale; localeFieldKey?: string }>;
   queueKey: string;
   ownerUserId?: string | null;
   followUpTaskTemplate?: { title: string; description: string; priority: "low" | "medium" | "high" | "urgent"; tags: string[] } | null;
@@ -384,6 +385,10 @@ export type CrmConsentPurpose = {
   wordingVersion: string;
   wording: string;
   wordingHash: string;
+  wordingVersionId?: string;
+  defaultLocale?: AppLocale | null;
+  localeWordings?: Partial<Record<AppLocale, string>>;
+  localeWordingHashes?: Partial<Record<AppLocale, string>>;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -394,6 +399,8 @@ export type CrmCompliance = {
   purposes: CrmConsentPurpose[];
   events: Array<{
     id: string; purposeKey: string; action: "granted" | "withdrawn";
+    wordingVersionId?: string | null; wordingLocale?: AppLocale | null;
+    wording?: string | null; wordingHash?: string | null;
     wordingVersion: string; source: string; occurredAt: string; createdAt: string;
   }>;
   suppressions: Array<{
@@ -662,6 +669,7 @@ export function saveCrmConsentPurpose(
     purposeId?: string; purposeKey: string; label: string; description?: string;
     requiresConsent?: boolean; applicableChannels?: CrmDeliveryChannel[];
     wordingVersion: string; wording: string; archived?: boolean;
+    defaultLocale?: AppLocale | null; localeWordings?: Partial<Record<AppLocale, string>>;
   },
 ): Promise<{ record: CrmConsentPurpose; created: boolean }> {
   return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/consent-purposes`, {
@@ -676,7 +684,7 @@ export function getCrmCompliance(workspaceId: string, contactId: string): Promis
 export function recordCrmConsent(
   workspaceId: string,
   contactId: string,
-  input: { purposeKey: string; action: "granted" | "withdrawn"; source: string },
+  input: { purposeKey: string; action: "granted" | "withdrawn"; source: string; locale?: AppLocale },
 ): Promise<{ record: Record<string, unknown> }> {
   return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/contacts/${encodeURIComponent(contactId)}/consent`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),

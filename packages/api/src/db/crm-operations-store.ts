@@ -10,6 +10,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import {
   CrmOperationsError,
+  CrmLocaleWordingsSchema,
   crmOperationsSha256,
   mayTransitionCrmEntitlement,
   mayTransitionCrmParticipation,
@@ -130,6 +131,7 @@ export type CrmOperationsTransaction = {
     contactId: string
     purpose: CrmOperationsRecord | null
     purposeKey: string
+    locale?: 'en' | 'zh' | 'zh-CN' | 'ja'
     action: 'granted' | 'withdrawn'
     source: string
     occurredAt: string
@@ -190,6 +192,9 @@ export type CrmOperationsTransaction = {
     wordingVersion: string
     wording: string
     wordingHash: string
+    defaultLocale: string | null
+    localeWordings: Record<string, string>
+    localeWordingHashes: Record<string, string>
     archived: boolean
     createdByUserId: string | null
   }): Promise<{ record: CrmOperationsRecord; created: boolean }>
@@ -531,6 +536,11 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                 applicable_channels AS "applicableChannels",
                 active_wording_version AS "wordingVersion",
                 wording_snapshot AS wording, wording_hash AS "wordingHash",
+                default_locale AS "defaultLocale",locale_wordings AS "localeWordings",
+                locale_wording_hashes AS "localeWordingHashes",
+                (SELECT v.id FROM crm_consent_purpose_versions v
+                  WHERE v.workspace_id=crm_consent_purposes.workspace_id AND v.purpose_id=crm_consent_purposes.id
+                    AND v.version=crm_consent_purposes.active_wording_version) AS "wordingVersionId",
                 archived_at AS "archivedAt"
            FROM crm_consent_purposes
           WHERE workspace_id = $1 AND purpose_key = $2`,
@@ -542,10 +552,12 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     async appendConsent(params) {
       const request: CrmEvidenceRequest = { kind: 'consent', contactId: params.contactId,
         purposeKey: params.purposeKey, action: params.action, source: params.source,
+        locale: params.locale,
         occurredAt: params.requestedOccurredAt, metadata: params.metadata }
       const select = `id, contact_id AS "contactId", purpose, action,
         wording_version AS "wordingVersion", wording_hash AS "wordingHash",
         wording_snapshot AS wording, source, occurred_at AS "occurredAt",
+        wording_version_id AS "wordingVersionId",wording_locale AS "wordingLocale",
         provider, provider_event_id AS "providerEventId", metadata, created_at AS "createdAt"`
       const replay = () => client.query<DbRecord>(
         `SELECT ${select}, request_fingerprint AS "__requestHash",
@@ -562,23 +574,31 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       if (!purpose || purpose.archivedAt || purpose.purposeKey !== params.purposeKey) {
         throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', { purposeKey: params.purposeKey })
       }
+      const locales = CrmLocaleWordingsSchema.parse(purpose.localeWordings ?? {})
+      const localized = params.locale ? locales[params.locale] : undefined
+      const wording = localized ?? purpose.wording
+      const wordingLocale = localized ? params.locale : purpose.defaultLocale ?? null
+      const wordingHash = localized
+        ? (purpose.localeWordingHashes as Record<string, string>)[params.locale!]
+        : purpose.wordingHash
       const result = await client.query<DbRecord>(
         `INSERT INTO association_consent_events (
            workspace_id, contact_id, purpose, purpose_id, action,
            wording_version, wording_hash, wording_snapshot, source, occurred_at,
            provider, provider_event_id, metadata, actor_kind,
-           actor_credential_id, acting_user_id, request_fingerprint
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17)
+           actor_credential_id, acting_user_id, request_fingerprint,wording_version_id,wording_locale
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19)
          ON CONFLICT (workspace_id, provider, provider_event_id)
            WHERE provider IS NOT NULL DO NOTHING
          RETURNING ${select}`,
         [workspaceId, params.contactId, purpose.purposeKey, purpose.id,
-          params.action, purpose.wordingVersion, purpose.wordingHash,
-          purpose.wording, params.source, params.occurredAt,
+          params.action, purpose.wordingVersion, wordingHash,
+          wording, params.source, params.occurredAt,
           params.provider ?? null, params.providerEventId ?? null,
           JSON.stringify(params.metadata), params.actor.actorKind,
           params.actor.actorCredentialId, params.actor.actingUserId,
-          params.provider ? crmEvidenceRequestHash(request) : null],
+          params.provider ? crmEvidenceRequestHash(request) : null,
+          purpose.wordingVersionId ?? null,wordingLocale],
       )
       if (result.rows[0]) return { record: result.rows[0], created: true }
       return { record: resolveCrmEvidenceReplay(first(await replay()), request), created: false }
@@ -760,12 +780,22 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async saveConsentPurpose(params) {
+      // A separate statement sees rows inserted by the BEFORE trigger; a
+      // RETURNING subquery still uses the original statement snapshot.
+      const withVersion = async (record: CrmOperationsRecord) => {
+        const version = await client.query<{ id: string }>(
+          `SELECT id FROM crm_consent_purpose_versions WHERE workspace_id=$1 AND purpose_id=$2 AND version=$3`,
+          [workspaceId, record.id, record.wordingVersion],
+        )
+        return { ...record, wordingVersionId: first(version).id }
+      }
       if (params.purposeId) {
         const updated = await client.query<DbRecord>(
           `UPDATE crm_consent_purposes
               SET label=$3, description=$4, requires_consent=$5,
                   applicable_channels=$6, active_wording_version=$7,
                   wording_snapshot=$8, wording_hash=$9,
+                  default_locale=$11,locale_wordings=$12::jsonb,locale_wording_hashes=$13::jsonb,
                   archived_at=CASE WHEN $10 THEN COALESCE(archived_at,now()) ELSE NULL END,
                   updated_at=now()
             WHERE workspace_id=$1 AND id=$2
@@ -774,33 +804,37 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                      applicable_channels AS "applicableChannels",
                      active_wording_version AS "wordingVersion",
                      wording_snapshot AS wording, wording_hash AS "wordingHash",
+                     default_locale AS "defaultLocale",locale_wordings AS "localeWordings",locale_wording_hashes AS "localeWordingHashes",
                      archived_at AS "archivedAt", created_at AS "createdAt",
                      updated_at AS "updatedAt"`,
           [workspaceId, params.purposeId, params.label, params.description,
             params.requiresConsent, params.applicableChannels, params.wordingVersion,
-            params.wording, params.wordingHash, params.archived],
+            params.wording, params.wordingHash, params.archived,params.defaultLocale,
+            JSON.stringify(params.localeWordings),JSON.stringify(params.localeWordingHashes)],
         )
         if (!updated.rows[0]) throw new Error('crm consent purpose not found')
-        return { record: updated.rows[0], created: false }
+        return { record: await withVersion(updated.rows[0]), created: false }
       }
       const created = await client.query<DbRecord>(
         `INSERT INTO crm_consent_purposes (
            workspace_id,purpose_key,label,description,requires_consent,
            applicable_channels,active_wording_version,wording_snapshot,
-           wording_hash,archived_at,created_by_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10 THEN now() END,$11)
+           wording_hash,archived_at,created_by_user_id,default_locale,locale_wordings,locale_wording_hashes
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10 THEN now() END,$11,$12,$13::jsonb,$14::jsonb)
          RETURNING id, purpose_key AS "purposeKey", label, description,
                    requires_consent AS "requiresConsent",
                    applicable_channels AS "applicableChannels",
                    active_wording_version AS "wordingVersion",
                    wording_snapshot AS wording, wording_hash AS "wordingHash",
+                   default_locale AS "defaultLocale",locale_wordings AS "localeWordings",locale_wording_hashes AS "localeWordingHashes",
                    archived_at AS "archivedAt", created_at AS "createdAt",
                    updated_at AS "updatedAt"`,
         [workspaceId, params.purposeKey, params.label, params.description,
           params.requiresConsent, params.applicableChannels, params.wordingVersion,
-          params.wording, params.wordingHash, params.archived, params.createdByUserId],
+          params.wording, params.wordingHash, params.archived, params.createdByUserId,
+          params.defaultLocale,JSON.stringify(params.localeWordings),JSON.stringify(params.localeWordingHashes)],
       )
-      return { record: first(created), created: true }
+      return { record: await withVersion(first(created)), created: true }
     },
 
     async saveSegment(params) {
@@ -1281,6 +1315,10 @@ export function createDbCrmOperationsStore(pool: Pool = getPool()): CrmOperation
         return result
       } catch (error) {
         await client.query('ROLLBACK')
+        if ((error as { constraint?: string }).constraint === 'crm_consent_wording_immutable') {
+          throw new CrmOperationsError('conflict', 'Wording versions are immutable. Save changed wording under a new version.',
+            { reason: 'wording_version_immutable' })
+        }
         throw error
       } finally {
         client.release()

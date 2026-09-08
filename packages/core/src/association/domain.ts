@@ -12,6 +12,7 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { APP_LOCALES } from '@use-brian/shared'
 import { CrmPageQuerySchema } from '../crm/pagination.js'
 import { CrmIntegrationAuthoritySchema } from '../crm/integration-authority.js'
 
@@ -77,6 +78,7 @@ export const AssociationConsentInputSchema = z.object({
   purpose: StableKey,
   action: z.enum(['granted', 'withdrawn']),
   wordingVersion: z.string().trim().min(1).max(100),
+  locale: z.enum(APP_LOCALES).optional(),
   source: StableKey,
   occurredAt: Instant.optional(),
   provider: ProviderKey.optional(),

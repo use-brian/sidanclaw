@@ -21,6 +21,7 @@ import {
   type CrmIntakeDefinition,
   type CrmIntakeDefinitionInput,
 } from "@/lib/api/crm";
+import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/client";
 import { CrmOperationsAuditView } from "./audit-view";
 
@@ -36,10 +37,14 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
   const [definitionKey, setDefinitionKey] = useState("");
   const [identityPolicy, setIdentityPolicy] = useState<CrmIntakeDefinition["identityPolicy"]>("trusted_verified_email");
   const [schemaText, setSchemaText] = useState("");
+  const [consentMappingsText, setConsentMappingsText] = useState("[]");
   const [credentialLabel, setCredentialLabel] = useState("");
   const [credentialDefinitionId, setCredentialDefinitionId] = useState("");
   const [oneTimeKey, setOneTimeKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [editingPurpose, setEditingPurpose] = useState<CrmConsentPurpose | null>(null);
+  const [defaultLocale, setDefaultLocale] = useState<Locale | "default">("default");
+  const [localeWordings, setLocaleWordings] = useState<Partial<Record<Locale, string>>>({});
   const [purposeLabel, setPurposeLabel] = useState("");
   const [purposeKey, setPurposeKey] = useState("");
   const [wordingVersion, setWordingVersion] = useState("v1");
@@ -86,7 +91,7 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
         definition: {
           fields,
           identityPolicy,
-          consentMappings: [],
+          consentMappings: JSON.parse(consentMappingsText) as CrmIntakeDefinition["consentMappings"],
           queueKey: "general",
           followUpTaskTemplate: null,
           followUpDueMinutes: null,
@@ -128,24 +133,36 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
     setError(null);
     try {
       await saveCrmConsentPurpose(workspaceId, {
+        ...(editingPurpose ? { purposeId: editingPurpose.id } : {}),
         purposeKey: purposeKey.trim(),
         label: purposeLabel.trim(),
-        description: "",
-        requiresConsent: true,
+        description: editingPurpose?.description ?? "",
+        requiresConsent: editingPurpose?.requiresConsent ?? true,
         applicableChannels: purposeChannels,
         wordingVersion: wordingVersion.trim(),
         wording: wording.trim(),
-        archived: false,
+        defaultLocale: defaultLocale === "default" ? null : defaultLocale,
+        localeWordings: Object.fromEntries(Object.entries(localeWordings).filter(([, text]) => text.trim()).map(([locale, text]) => [locale, text.trim()])),
+        archived: Boolean(editingPurpose?.archivedAt),
       });
-      setPurposeLabel("");
-      setPurposeKey("");
-      setWording("");
+      selectPurpose(null);
       await reload();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t.saveFailed);
     } finally {
       setBusy(false);
     }
+  }
+
+  function selectPurpose(purpose: CrmConsentPurpose | null) {
+    setEditingPurpose(purpose);
+    setPurposeLabel(purpose?.label ?? "");
+    setPurposeKey(purpose?.purposeKey ?? "");
+    setWordingVersion(purpose?.wordingVersion ?? "v1");
+    setWording(purpose?.wording ?? "");
+    setDefaultLocale(purpose?.defaultLocale ?? "default");
+    setLocaleWordings(purpose?.localeWordings ?? {});
+    setPurposeChannels(purpose?.applicableChannels ?? ["email"]);
   }
 
   async function revoke(credential: CrmIntakeCredential) {
@@ -194,6 +211,8 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
             </label>
             <label className="text-xs sm:col-span-2"><span className="mb-1 block text-muted-foreground">{t.fieldSchema}</span><textarea rows={9} spellCheck={false} className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[11px]" value={schemaText} onChange={(event) => setSchemaText(event.target.value)} /></label>
           </div>
+          <label className="mt-2 block text-xs"><span className="mb-1 block text-muted-foreground">{t.consentMappings}</span><textarea aria-label={t.consentMappings} rows={4} spellCheck={false} className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-[11px]" value={consentMappingsText} onChange={(event) => setConsentMappingsText(event.target.value)} /></label>
+          <p className="text-[11px] text-muted-foreground">{t.consentMappingsHelp}</p>
           <Button className="mt-2" size="sm" disabled={busy || !definitionLabel.trim() || !definitionKey.trim()} onClick={() => void createDefinition()}><Plus aria-hidden />{t.createDefinition}</Button>
           <div className="mt-3 space-y-2">
             {definitions.map((definition) => <div key={definition.id} className="rounded-lg bg-muted/30 px-3 py-2 text-xs"><div className="font-medium">{definition.label}</div><div className="font-mono text-[10px] text-muted-foreground">{definition.definitionKey} · v{definition.currentVersion}</div></div>)}
@@ -225,16 +244,27 @@ export function CrmIntakeSettings({ workspaceId }: { workspaceId: string }) {
       <div className="mt-4 rounded-xl border border-border p-3">
         <h4 className="text-xs font-semibold">{t.purposes}</h4>
         <p className="mt-1 text-[11px] text-muted-foreground">{t.purposesHelp}</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">{t.wordingImmutableHelp}</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
           <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.purposeLabel}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3" value={purposeLabel} onChange={(event) => { setPurposeLabel(event.target.value); if (!purposeKey) setPurposeKey(stableKey(event.target.value)); }} /></label>
-          <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.purposeKey}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono" value={purposeKey} onChange={(event) => setPurposeKey(stableKey(event.target.value))} /></label>
+          <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.purposeKey}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3 font-mono" disabled={Boolean(editingPurpose)} value={purposeKey} onChange={(event) => setPurposeKey(stableKey(event.target.value))} /></label>
           <label className="text-xs"><span className="mb-1 block text-muted-foreground">{t.wordingVersion}</span><input className="h-9 w-full rounded-md border border-input bg-transparent px-3" value={wordingVersion} onChange={(event) => setWordingVersion(event.target.value)} /></label>
           <label className="text-xs sm:col-span-3"><span className="mb-1 block text-muted-foreground">{t.wording}</span><textarea rows={3} className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2" value={wording} onChange={(event) => setWording(event.target.value)} /></label>
+          <div className="text-xs"><span className="mb-1 block text-muted-foreground">{t.wordingDefaultLocale}</span>
+            <Select value={defaultLocale} onValueChange={(value) => setDefaultLocale((value ?? "default") as typeof defaultLocale)}>
+              <SelectTrigger aria-label={t.wordingDefaultLocale}><SelectValue /></SelectTrigger><SelectContent>
+                <SelectItem value="default">{t.wordingCombined}</SelectItem>
+                {LOCALES.map((locale) => <SelectItem key={locale} value={locale}>{LOCALE_LABELS[locale]}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="sm:col-span-3 grid gap-2 sm:grid-cols-2">{LOCALES.map((locale) => <label key={locale} className="text-xs"><span className="mb-1 block text-muted-foreground">{t.wordingTranslation} ({LOCALE_LABELS[locale]})</span><textarea aria-label={`${t.wordingTranslation} (${LOCALE_LABELS[locale]})`} rows={2} maxLength={20000} className="w-full resize-y rounded-md border border-input bg-transparent px-3 py-2" value={localeWordings[locale] ?? ""} onChange={(event) => setLocaleWordings((current) => ({ ...current, [locale]: event.target.value }))} /></label>)}</div>
           <div className="sm:col-span-3"><div className="mb-1 text-xs text-muted-foreground">{t.channels}</div><div className="flex flex-wrap gap-1">{(["email", "sms", "phone", "whatsapp", "telegram", "slack"] as const).map((channel) => <Button key={channel} type="button" size="xs" variant={purposeChannels.includes(channel) ? "secondary" : "outline"} aria-pressed={purposeChannels.includes(channel)} onClick={() => setPurposeChannels((current) => current.includes(channel) ? current.filter((item) => item !== channel) : [...current, channel])}>{t.channelLabels[channel]}</Button>)}</div></div>
         </div>
-        <Button className="mt-2" size="sm" disabled={busy || !purposeLabel.trim() || !purposeKey.trim() || !wording.trim() || purposeChannels.length === 0} onClick={() => void createPurpose()}><Plus aria-hidden />{t.createPurpose}</Button>
+        <Button className="mt-2" size="sm" disabled={busy || !purposeLabel.trim() || !purposeKey.trim() || !wording.trim() || purposeChannels.length === 0} onClick={() => void createPurpose()}><Plus aria-hidden />{editingPurpose ? t.saveWordingVersion : t.createPurpose}</Button>
+        {editingPurpose && <Button className="mt-2 ml-2" size="sm" variant="outline" disabled={busy} onClick={() => selectPurpose(null)}>{t.cancel}</Button>}
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {purposes.map((purpose) => <div key={purpose.id} className="rounded-lg bg-muted/30 px-3 py-2 text-xs"><div className="font-medium">{purpose.label}</div><div className="font-mono text-[10px] text-muted-foreground">{purpose.purposeKey} · {purpose.wordingVersion} · {purpose.archivedAt ? t.archived : purpose.applicableChannels.map((channel) => t.channelLabels[channel]).join(", ")}</div></div>)}
+          {purposes.map((purpose) => <div key={purpose.id} className="rounded-lg bg-muted/30 px-3 py-2 text-xs"><div className="flex items-center justify-between gap-2"><span className="font-medium">{purpose.label}</span><Button size="xs" variant="outline" disabled={busy} onClick={() => selectPurpose(purpose)}>{t.editWording}</Button></div><div className="font-mono text-[10px] text-muted-foreground">{purpose.purposeKey} · {purpose.wordingVersion} · {purpose.archivedAt ? t.archived : purpose.applicableChannels.map((channel) => t.channelLabels[channel]).join(", ")}</div></div>)}
           {purposes.length === 0 && <div className="text-xs text-muted-foreground">{t.noPurposes}</div>}
         </div>
       </div>

@@ -23,6 +23,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'association_enquiries',
   'association_enquiry_notes',
   'crm_consent_purposes',
+  'crm_consent_purpose_versions',
   'association_consent_events',
   'crm_suppression_events',
   'crm_segments',

@@ -9,7 +9,7 @@ type Common = {
   occurredAt?: string; metadata: Record<string, unknown>
 }
 export type CrmEvidenceRequest = Common & (
-  | { kind: 'consent'; purposeKey: string; wordingVersion?: string }
+  | { kind: 'consent'; purposeKey: string; wordingVersion?: string; locale?: 'en' | 'zh' | 'zh-CN' | 'ja' }
   | { kind: 'suppression'; channel: string; reasonCode: string }
 )
 
@@ -30,6 +30,9 @@ export function resolveCrmEvidenceReplay(
   if (__requestHash != null) {
     if (__requestHash === expected) return record
   } else {
+    if (request.kind === 'consent' && request.locale !== undefined && request.locale !== record.wordingLocale) {
+      throw new CrmOperationsError('idempotency_conflict', 'Legacy evidence cannot establish the requested wording locale.')
+    }
     if (request.occurredAt === undefined) throw new CrmOperationsError('idempotency_conflict',
       'Legacy provider evidence requires its original occurrence time for replay.',
       { reason: 'legacy_evidence_requires_occurred_at' })
@@ -38,6 +41,7 @@ export function resolveCrmEvidenceReplay(
       occurredAt: String(__occurredAt) }
     const original: CrmEvidenceRequest = request.kind === 'consent'
       ? { ...common, kind: 'consent', purposeKey: String(record.purpose),
+          ...(request.locale !== undefined ? { locale: request.locale } : {}),
           ...(request.wordingVersion !== undefined ? { wordingVersion: String(record.wordingVersion) } : {}) }
       : { ...common, kind: 'suppression', channel: String(record.channel), reasonCode: String(record.reasonCode) }
     if (crmEvidenceRequestHash(original) === expected) return record
