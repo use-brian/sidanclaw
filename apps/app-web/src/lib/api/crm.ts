@@ -476,6 +476,8 @@ export type CrmEntitlement = {
   planKey: string;
   planName: string;
   status: CrmEntitlementStatus;
+  isEffective?: boolean;
+  effectiveAt?: string;
   startsAt: string;
   endsAt: string | null;
   renewalMode: "none" | "manual" | "auto";
@@ -782,11 +784,13 @@ export async function listCrmEntitlementPlans(
 
 export async function listCrmEntitlements(
   workspaceId: string,
-  filters: { contactId?: string; planId?: string; status?: CrmEntitlementStatus; limit?: number } = {},
+  filters: { contactId?: string; planId?: string; status?: CrmEntitlementStatus; activeOnly?: boolean; effectiveAt?: string; limit?: number } = {},
 ): Promise<CrmEntitlement[]> {
   const params = new URLSearchParams();
   if (filters.contactId) params.set("contactId", filters.contactId);
   if (filters.planId) params.set("planId", filters.planId);
+  if (filters.activeOnly !== undefined) params.set("activeOnly", String(filters.activeOnly));
+  if (filters.effectiveAt) params.set("effectiveAt", filters.effectiveAt);
   if (filters.status) params.set("status", filters.status);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();

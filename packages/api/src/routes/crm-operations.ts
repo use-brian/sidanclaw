@@ -116,6 +116,8 @@ export const EntitlementsQuery = CrmPageQuerySchema.extend({
   contactId: CrmOperationsUuidSchema.optional(),
   planId: CrmOperationsUuidSchema.optional(),
   status: EntitlementStatus.optional(),
+  activeOnly: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+  effectiveAt: z.string().datetime({ offset: true }).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
 export const EventsQuery = CrmPageQuerySchema.extend({

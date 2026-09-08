@@ -2,7 +2,7 @@
 import {
   ASSOCIATION_READ_COMMANDS, AssociationCommandSchema, AssociationContextSchema,
   AssociationError, CrmOperationsError, CrmIntegrationScopeError,
-  actorAuditIdentity, crmIntegrationResourceSelection, decodeAssociationCursor,
+  actorAuditIdentity, crmIntegrationResourceSelection,
   requireCrmIntegrationOperation, requireCrmIntegrationResources,
   type AssociationActor, type AssociationContext, type AssociationServicePort,
   type CrmIntegrationOperation, type CrmOperationsServicePort,
@@ -50,9 +50,8 @@ export function createAssociationService(options: {
       const output = { command: command.kind }
       const pagination = () => {
         if (!('limit' in command)) throw new Error('Command has no pagination')
-        const cursor = decodeAssociationCursor(command.cursor)
-        if (command.cursor && !cursor) throw new CrmOperationsError('invalid_input', 'Invalid Association cursor.')
-        return { limit: command.limit, cursor }
+        return { limit: command.limit, cursor: command.cursor ?? null,
+          createdAfter: command.createdAfter, createdBefore: command.createdBefore }
       }
       switch (command.kind) {
         case 'module_status': return { ...output, record: { ...(await modules().getAssociation(workspaceId)) } }

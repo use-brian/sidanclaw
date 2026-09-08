@@ -26,7 +26,6 @@ import type { OAuthAuthorizationStore } from '../db/oauth-authorization-store.js
 import {
   AssociationError,
   ConsentInputSchema,
-  decodeAssociationCursor,
   EnquiryCreateSchema,
   EnquiryNoteInputSchema,
   EnquiryStatusSchema,
@@ -147,12 +146,7 @@ function parsed<Schema extends z.ZodTypeAny>(
 function listInput(value: unknown, res: Response) {
   const pagination = parsed(ListPageSchema, value, res)
   if (!pagination) return null
-  const cursor = decodeAssociationCursor(pagination.cursor)
-  if (pagination.cursor && !cursor) {
-    res.status(400).json({ error: 'invalid_cursor' })
-    return null
-  }
-  return { limit: pagination.limit, cursor }
+  return { ...pagination, cursor: pagination.cursor ?? null }
 }
 
 export function associationErrorResponse(error: unknown, res: Response): void {
@@ -267,6 +261,8 @@ export function associationRoutes(opts: Options): Router {
     const query = parsed(z.object({
       limit: z.string().optional(),
       cursor: z.string().optional(),
+      createdAfter: z.string().datetime({ offset: true }).optional(),
+      createdBefore: z.string().datetime({ offset: true }).optional(),
       status: EnquiryStatusSchema.optional(),
       queueKey: StableKey.optional(),
       ownerUserId: UUID.optional(),
@@ -347,6 +343,8 @@ export function associationRoutes(opts: Options): Router {
     const query = parsed(z.object({
       limit: z.string().optional(),
       cursor: z.string().optional(),
+      createdAfter: z.string().datetime({ offset: true }).optional(),
+      createdBefore: z.string().datetime({ offset: true }).optional(),
       published: truthyQuery.optional(),
     }), req.query, res)
     if (!query) return
@@ -383,7 +381,12 @@ export function associationRoutes(opts: Options): Router {
   router.get('/contacts/:contactId/memberships', endpoint(async (req, res) => {
     const contactId = parsed(UUID, req.params.contactId, res)
     if (!contactId) return
-    const memberships = await store.listMemberships(res.locals.associationAuth.workspaceId, contactId)
+    const filters = parsed(z.object({
+      activeOnly: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+      effectiveAt: z.string().datetime({ offset: true }).optional(),
+    }).strict(), req.query, res)
+    if (!filters) return
+    const memberships = await store.listMemberships(res.locals.associationAuth.workspaceId, contactId, filters)
     res.json({ memberships })
   }))
 
@@ -412,6 +415,8 @@ export function associationRoutes(opts: Options): Router {
     const query = parsed(z.object({
       limit: z.string().optional(),
       cursor: z.string().optional(),
+      createdAfter: z.string().datetime({ offset: true }).optional(),
+      createdBefore: z.string().datetime({ offset: true }).optional(),
       status: z.enum(['draft', 'published', 'cancelled', 'completed']).optional(),
     }), req.query, res)
     if (!query) return
@@ -497,6 +502,8 @@ export function associationRoutes(opts: Options): Router {
     const query = parsed(z.object({
       limit: z.string().optional(),
       cursor: z.string().optional(),
+      createdAfter: z.string().datetime({ offset: true }).optional(),
+      createdBefore: z.string().datetime({ offset: true }).optional(),
       status: z.enum(['pending', 'sending', 'sent', 'failed', 'suppressed']).optional(),
     }), req.query, res)
     if (!query) return

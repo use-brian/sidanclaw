@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   associationFingerprint,
-  decodeAssociationCursor,
-  encodeAssociationCursor,
+  ListPageSchema,
   EnquiryCreateSchema,
   EventInputSchema,
   mayTransitionRegistration,
@@ -86,12 +85,10 @@ describe('[COMP:crm/association-domain] bounded domain contracts', () => {
     expect(EventInputSchema.safeParse({ ...base, timezone: 'Hong Kong time' }).success).toBe(false)
   })
 
-  it('round-trips opaque list cursors and rejects malformed values', () => {
-    const cursor = {
-      createdAt: '2027-02-02T10:00:00.000Z',
-      id: CONTACT_ID,
-    }
-    expect(decodeAssociationCursor(encodeAssociationCursor(cursor))).toEqual(cursor)
-    expect(decodeAssociationCursor('not-a-cursor')).toBeNull()
+  it('bounds page inputs while leaving query binding to the authoritative store', () => {
+    expect(ListPageSchema.parse({ limit: 7, cursor: 'opaque', createdAfter: '2026-01-01T00:00:00Z' }))
+      .toEqual({ limit: 7, cursor: 'opaque', createdAfter: '2026-01-01T00:00:00Z' })
+    expect(ListPageSchema.safeParse({ limit: 101 }).success).toBe(false)
+    expect(ListPageSchema.safeParse({ cursor: 'x'.repeat(4097) }).success).toBe(false)
   })
 })

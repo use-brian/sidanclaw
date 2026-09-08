@@ -143,7 +143,7 @@ export async function loadCrmSegmentCatalog(
     }
     for (const row of plans.rows) {
       entries.push(entry('entitlement', row.planKey, row.name, 'enum', ENUM_OPS, {
-        validValues: ['pending', 'active', 'expired', 'cancelled', 'none'], sqlKind: 'status', sourceKey: row.planKey,
+        validValues: ['pending', 'active', 'expired', 'cancelled', 'inactive', 'none'], sqlKind: 'status', sourceKey: row.planKey,
       }))
       if (`${row.planKey}_starts_at`.length <= 63) entries.push(entry('entitlement', `${row.planKey}_starts_at`, `${row.name} starts at`, 'date', DATE_OPS, { sqlKind: 'starts_at', sourceKey: row.planKey }))
       if (`${row.planKey}_ends_at`.length <= 63) entries.push(entry('entitlement', `${row.planKey}_ends_at`, `${row.name} ends at`, 'date', DATE_OPS, { sqlKind: 'ends_at', sourceKey: row.planKey }))
@@ -160,7 +160,7 @@ export async function loadCrmSegmentCatalog(
   return { entries, catalog: { fields } }
 }
 
-type CompileState = { params: unknown[]; next: number; entries: Map<string, CatalogEntry> }
+type CompileState = { params: unknown[]; next: number; entries: Map<string, CatalogEntry>; pageTime: boolean }
 
 function param(state: CompileState, value: unknown): string {
   state.params.push(value)
@@ -227,11 +227,14 @@ function expressionFor(rule: CrmSegmentRule, field: CatalogEntry, state: Compile
   }
   if (rule.family === 'entitlement') {
     const plan = param(state, field.sourceKey)
-    const column = field.sqlKind === 'starts_at' ? 'm.starts_at' : field.sqlKind === 'ends_at' ? 'm.ends_at' : 'm.status'
+    const at = state.pageTime ? '(SELECT at FROM crm_page_context)' : 'statement_timestamp()'
+    const effective = `crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,${at})`
+    const column = field.sqlKind === 'starts_at' ? 'm.starts_at' : field.sqlKind === 'ends_at' ? 'm.ends_at'
+      : `CASE WHEN m.status='active' AND NOT ${effective} THEN 'inactive' ELSE m.status END`
     return `(SELECT ${column} FROM association_memberships m
       JOIN association_membership_plans mp ON mp.workspace_id=m.workspace_id AND mp.id=m.plan_id
       WHERE m.workspace_id=e.workspace_id AND m.contact_id=e.id AND mp.plan_key=${plan}
-      ORDER BY m.starts_at DESC,m.id DESC LIMIT 1)`
+      ORDER BY ${effective} DESC,m.starts_at DESC,m.id DESC LIMIT 1)`
   }
   if (rule.family === 'participation') {
     const event = param(state, field.sourceKey)
@@ -293,6 +296,7 @@ export function compileCrmSegmentPredicate(
   predicate: CrmSegmentPredicate,
   catalog: CrmSegmentCatalog,
   startIndex = 1,
+  pageTime = false,
 ): { sql: string; params: unknown[] } {
   const parsed = CrmSegmentPredicateSchema.parse(predicate)
   const issues = validateCrmSegmentCatalog(parsed, catalog)
@@ -302,7 +306,7 @@ export function compileCrmSegmentPredicate(
     })
   }
   const state: CompileState = {
-    params: [], next: startIndex,
+    params: [], next: startIndex, pageTime,
     entries: catalog.fields as Map<string, CatalogEntry>,
   }
   const walk = (group: CrmSegmentPredicate): string => {
@@ -395,7 +399,7 @@ export function createDbCrmSegmentStore(): CrmSegmentReadStore {
         throw new CrmOperationsError('invalid_input', 'Invalid CRM snapshot cursor.')
       }
       const parsed = CrmPageQuerySchema.parse({ ...pageQuery, limit: pageQuery.limit ?? 25 })
-      const compiled = compileCrmSegmentPredicate(predicate, loaded.catalog, 5)
+      const compiled = compileCrmSegmentPredicate(predicate, loaded.catalog, 5, true)
       const sql = `SELECT e.id,e.display_name AS name,e.kind,e.attributes,e.created_at AS "createdAt",e.updated_at AS "updatedAt",
                 count(*) OVER()::text AS "totalCount"
            FROM entities e

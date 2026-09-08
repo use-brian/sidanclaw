@@ -7,7 +7,7 @@
  */
 
 import {
-  CrmOperationsError,
+  CrmOperationsError, CrmEffectiveEntitlementQuerySchema,
   type CrmPage, type CrmPageQuery,
   CrmIntegrationScopeError,
   crmIntegrationResourceSelection, requireCrmIntegrationOperation, requireCrmIntegrationResources,
@@ -17,7 +17,7 @@ import {
   type CrmOperationsReadPort,
 } from '@use-brian/core'
 import { query } from './client.js'
-import { queryCrmPage } from '../crm-operations/pagination.js'
+import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { verifySecret } from './api-key-store.js'
 import { createDbCrmSegmentStore } from './crm-segment-store.js'
 
@@ -326,10 +326,14 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
     },
 
     async listEntitlements(workspaceId, filters = {}) {
+      const effective = CrmEffectiveEntitlementQuerySchema.parse({ activeOnly: filters.activeOnly, effectiveAt: filters.effectiveAt })
+      const at = 'coalesce($7::timestamptz,(SELECT at FROM crm_page_context))'
       return page('entitlements', workspaceId, filters,
         `SELECT m.id, m.contact_id AS "contactId", c.display_name AS "contactName",
                 m.plan_id AS "planId", p.plan_key AS "planKey", p.name AS "planName",
                 m.status, m.starts_at AS "startsAt", m.ends_at AS "endsAt",
+                crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,${at}) AS "isEffective",
+                to_char(${at} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt",
                 m.renewal_mode AS "renewalMode", m.provider,
                 m.provider_membership_id AS "providerEntitlementId",
                 m.created_at AS "createdAt", m.updated_at AS "updatedAt"
@@ -342,9 +346,11 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
             AND ($2::uuid IS NULL OR m.contact_id=$2)
             AND ($3::uuid IS NULL OR m.plan_id=$3)
             AND ($4::text IS NULL OR m.status=$4) AND ($5::uuid[] IS NULL OR m.plan_id=ANY($5::uuid[]))
-            AND c.valid_to IS NULL AND c.retracted_at IS NULL`,
+            AND c.valid_to IS NULL AND c.retracted_at IS NULL
+            AND (NOT $6::boolean OR crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,${at}))`,
         [workspaceId, filters.contactId ?? null, filters.planId ?? null,
-          filters.status ?? null, select(workspaceId, 'crm.entitlements.read', 'planIds')],
+          filters.status ?? null, select(workspaceId, 'crm.entitlements.read', 'planIds'),
+          effective.activeOnly ?? false, effective.effectiveAt ? crmPageInstant(effective.effectiveAt) : null],
       )
     },
 

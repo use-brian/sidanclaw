@@ -78,7 +78,7 @@ export function CrmProgramsPanel({
           <h2 className="text-lg font-semibold">{selectedPlan.name}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{t.planSummary.replace("{count}", String(entitlements.length))}</p>
           {selectedPlan.commerceManaged && <p className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">{t.commerceManagedPlan}</p>}
-          <div className="mt-4 divide-y divide-border/60">{entitlements.map((row) => <div key={row.id} className="flex justify-between gap-3 py-2 text-xs"><span>{row.contactName}</span><span>{t.entitlementStatusLabels[row.status]}</span></div>)}</div>
+          <div className="mt-4 divide-y divide-border/60">{entitlements.map((row) => <div key={row.id} className="flex justify-between gap-3 py-2 text-xs"><span>{row.contactName}</span><span className="text-right">{t.entitlementStatusLabels[row.status]}<span title={row.effectiveAt} className="block text-[10px] text-muted-foreground">{row.isEffective === true ? t.entitlementAccessAvailable : row.isEffective === false ? t.entitlementAccessUnavailable : t.entitlementAccessUnknown}</span></span></div>)}</div>
         </> : selectedEvent ? <>
           <h2 className="text-lg font-semibold">{selectedEvent.title}</h2>
           <p className="mt-1 text-xs text-muted-foreground">{t.eventSummary.replace("{count}", String(participation.length))}</p>

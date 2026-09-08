@@ -67,6 +67,8 @@ export type CrmOperationsReadPort = {
     limit?: number
   }): Promise<CrmPage<'plans'>>
   listEntitlements(workspaceId: string, filters?: CrmPageQuery & {
+    activeOnly?: boolean
+    effectiveAt?: string
     contactId?: string
     planId?: string
     status?: 'pending' | 'active' | 'expired' | 'cancelled'
@@ -448,12 +450,14 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmEntitlements = buildTool({
     name: 'listCrmEntitlements', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List canonical CRM entitlements with bounded contact, plan, and lifecycle-status filters. Results reuse Association membership ids and include stable plan keys. Follow nextCursor with the same filters until it is null.',
+    description: 'List canonical CRM entitlements with bounded contact, plan, and lifecycle-status filters. Results reuse Association membership ids and include stable plan keys, raw status, isEffective and effectiveAt. Use active_only for effective access at an optional effective_at instant; status active alone does not grant access. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
       ...PageInput,
       contact_id: CrmOperationsUuidSchema.optional(),
       plan_id: CrmOperationsUuidSchema.optional(),
       status: EntitlementStatusSchema.optional(),
+      active_only: z.boolean().optional(),
+      effective_at: z.string().datetime({ offset: true }).optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }).strict(),
     async execute(input, context) {
@@ -464,6 +468,7 @@ export function createCrmOperationsTools(options: {
           ...pageFilters(input),
           contactId: input.contact_id, planId: input.plan_id,
           status: input.status, limit: input.limit,
+          activeOnly: input.active_only, effectiveAt: input.effective_at,
         }) }
       } catch (error) { return failure(error) }
     },

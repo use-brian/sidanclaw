@@ -17,6 +17,12 @@ export const CrmOperationsUuidSchema = z.string().uuid()
 export const CrmOperationsStableKeySchema = z.string().trim().toLowerCase()
   .regex(/^[a-z][a-z0-9_-]{0,62}$/)
 export const CrmOperationsInstantSchema = z.string().datetime({ offset: true })
+export const CrmEffectiveEntitlementQuerySchema = z.object({
+  activeOnly: z.boolean().optional(),
+  effectiveAt: CrmOperationsInstantSchema.optional(),
+}).strict()
+export type CrmEffectiveEntitlementQuery = z.infer<typeof CrmEffectiveEntitlementQuerySchema>
+
 
 export function boundedCrmObject(maxBytes: number) {
   return z.record(z.string().trim().min(1).max(100), z.unknown()).refine(

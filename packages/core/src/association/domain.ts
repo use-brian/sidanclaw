@@ -12,6 +12,7 @@
 
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { CrmPageQuerySchema } from '../crm/pagination.js'
 import { CrmIntegrationAuthoritySchema } from '../crm/integration-authority.js'
 
 const UUID = z.string().uuid()
@@ -239,27 +240,7 @@ export const AssociationRegistrationUpdateSchema = z.object({
 })
 export type AssociationRegistrationUpdateInput = z.infer<typeof AssociationRegistrationUpdateSchema>
 
-export const AssociationListPageSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  cursor: z.string().trim().min(1).max(1_000).optional(),
-})
-
-export type AssociationCursor = { createdAt: string; id: string }
-
-export function encodeAssociationCursor(cursor: AssociationCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
-}
-
-export function decodeAssociationCursor(raw: string | undefined): AssociationCursor | null {
-  if (!raw) return null
-  try {
-    const value = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
-    const parsed = z.object({ createdAt: Instant, id: UUID }).safeParse(value)
-    return parsed.success ? parsed.data : null
-  } catch {
-    return null
-  }
-}
+export const AssociationListPageSchema = CrmPageQuerySchema.strip()
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize)

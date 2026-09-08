@@ -190,14 +190,14 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     const member = build('member')
     const entitlements = await request(member.app)
       .get(`/api/crm/${WORKSPACE_ID}/operations/entitlements`)
-      .query({ contactId: CONTACT_ID, status: 'active', limit: 25 })
+      .query({ contactId: CONTACT_ID, status: 'active', limit: 25, activeOnly: true, effectiveAt: '2026-01-01T00:00:00Z' })
     const participation = await request(member.app)
       .get(`/api/crm/${WORKSPACE_ID}/operations/participation`)
       .query({ eventId: EVENT_ID, sourceKind: 'commerce' })
     expect(entitlements.status).toBe(200)
     expect(participation.status).toBe(200)
     expect(member.readStore.listEntitlements).toHaveBeenCalledWith(WORKSPACE_ID, {
-      contactId: CONTACT_ID, status: 'active', limit: 25,
+      contactId: CONTACT_ID, status: 'active', limit: 25, activeOnly: true, effectiveAt: '2026-01-01T00:00:00Z',
     })
     expect(member.readStore.listParticipation).toHaveBeenCalledWith(WORKSPACE_ID, {
       eventId: EVENT_ID, sourceKind: 'commerce', limit: 50,

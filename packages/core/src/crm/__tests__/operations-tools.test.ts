@@ -90,6 +90,13 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
     })
   })
 
+  it('forwards effective access filters while keeping the returned raw lifecycle status', async () => {
+    vi.mocked(reads.listEntitlements).mockResolvedValueOnce({ entitlements: [{ status: 'active', isEffective: false }], nextCursor: null })
+    const result = await tools.listCrmEntitlements.execute({ active_only: true, effective_at: '2026-01-01T00:00:00Z' }, context())
+    expect(reads.listEntitlements).toHaveBeenCalledWith(WORKSPACE_ID, expect.objectContaining({ activeOnly: true, effectiveAt: '2026-01-01T00:00:00Z' }))
+    expect(result.data).toEqual({ entitlements: [{ status: 'active', isEffective: false }], nextCursor: null })
+  })
+
   it('derives the assistant actor and authority instead of accepting them as input', async () => {
     await tools.updateCrmSubmission.execute({
       submission_id: CONTACT_ID,

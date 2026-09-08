@@ -10,13 +10,13 @@
  */
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
-import { CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
+import { CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
+import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { getPool } from './client.js'
 import { lockAssociationModule, requireAssociationAdmission } from './workspace-modules-store.js'
 import {
   AssociationError,
   associationFingerprint,
-  encodeAssociationCursor,
   mayTransitionOrder,
   type AssociationActor,
   type ConsentInput,
@@ -42,9 +42,9 @@ export type AssociationRecord = Record<string, unknown>
 export type AssociationPage = { items: AssociationRecord[]; nextCursor: string | null }
 export type MutationResult = { record: AssociationRecord; created: boolean }
 
-export type AssociationListInput = {
+export type AssociationListInput = Omit<CrmPageQuery, 'cursor'> & {
   limit: number
-  cursor: { createdAt: string; id: string } | null
+  cursor: string | null
 }
 
 export type AssociationStore = {
@@ -60,7 +60,7 @@ export type AssociationStore = {
   upsertPlan(workspaceId: string, input: PlanInput, actor: AssociationActor): Promise<MutationResult>
   listPlans(workspaceId: string, input: AssociationListInput & { published?: boolean }): Promise<AssociationPage>
   createMembership(workspaceId: string, input: MembershipInput, actor: AssociationActor): Promise<MutationResult>
-  listMemberships(workspaceId: string, contactId: string): Promise<AssociationRecord[]>
+  listMemberships(workspaceId: string, contactId: string, filters?: CrmEffectiveEntitlementQuery): Promise<AssociationRecord[]>
   updateMembership(workspaceId: string, id: string, input: MembershipUpdateInput, actor: AssociationActor): Promise<AssociationRecord>
   upsertEvent(workspaceId: string, input: EventInput, actor: AssociationActor): Promise<MutationResult>
   listEvents(workspaceId: string, input: AssociationListInput & { status?: string }): Promise<AssociationPage>
@@ -249,17 +249,9 @@ async function audit(
   )
 }
 
-function page(rows: DbRow[], limit: number): AssociationPage {
-  const hasNext = rows.length > limit
-  const items = (hasNext ? rows.slice(0, limit) : rows) as AssociationRecord[]
-  const last = items.at(-1)
-  const nextCursor = hasNext && last
-    ? encodeAssociationCursor({
-        createdAt: new Date(String(last.createdAt)).toISOString(),
-        id: String(last.id),
-      })
-    : null
-  return { items, nextCursor }
+function page(pool: Pool, workspaceId: string, resource: string, input: AssociationListInput, sql: string, params: unknown[]): Promise<AssociationPage> {
+  return queryCrmPage(pool.query.bind(pool), { workspaceId, resource, key: 'items', sql, params,
+    query: { limit: input.limit, cursor: input.cursor ?? undefined, createdAfter: input.createdAfter, createdBefore: input.createdBefore } })
 }
 
 async function getOrderRecord(client: Pick<PoolClient, 'query'>, workspaceId: string, id: string): Promise<AssociationRecord | null> {
@@ -463,18 +455,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         values.push(input.ownerUserId)
         conditions.push(`owner_user_id = $${values.length}`)
       }
-      if (input.cursor) {
-        values.push(input.cursor.createdAt, input.cursor.id)
-        conditions.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`)
-      }
-      values.push(input.limit + 1)
-      const result = await pool.query<DbRow>(
-        `SELECT ${ENQUIRY_SELECT} FROM association_enquiries
-          WHERE ${conditions.join(' AND ')}
-          ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
-        values,
-      )
-      return page(result.rows, input.limit)
+      return page(pool, workspaceId, 'association.enquiries', input,
+        `SELECT ${ENQUIRY_SELECT} FROM association_enquiries WHERE ${conditions.join(' AND ')}`, values)
     },
 
     async updateEnquiry(workspaceId, id, input, actor) {
@@ -616,18 +598,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         values.push(input.published)
         conditions.push(`published = $${values.length}`)
       }
-      if (input.cursor) {
-        values.push(input.cursor.createdAt, input.cursor.id)
-        conditions.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`)
-      }
-      values.push(input.limit + 1)
-      const result = await pool.query<DbRow>(
-        `SELECT ${PLAN_SELECT} FROM association_membership_plans
-          WHERE ${conditions.join(' AND ')}
-          ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
-        values,
-      )
-      return page(result.rows, input.limit)
+      return page(pool, workspaceId, 'association.plans', input,
+        `SELECT ${PLAN_SELECT} FROM association_membership_plans WHERE ${conditions.join(' AND ')}`, values)
     },
 
     async createMembership(workspaceId, input, actor) {
@@ -698,14 +670,19 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
       })
     },
 
-    async listMemberships(workspaceId, contactId) {
+    async listMemberships(workspaceId, contactId, filters = {}) {
+      const input = CrmEffectiveEntitlementQuerySchema.parse(filters)
+      const at = 'coalesce($4::timestamptz,statement_timestamp())'
       const result = await pool.query<DbRow>(
-        `SELECT ${MEMBERSHIP_SELECT} FROM association_memberships m
-           JOIN association_membership_plans p
-             ON p.workspace_id = m.workspace_id AND p.id = m.plan_id
-          WHERE m.workspace_id = $1 AND m.contact_id = $2
-          ORDER BY m.created_at DESC, m.id DESC`,
-        [workspaceId, contactId],
+        `SELECT ${MEMBERSHIP_SELECT},
+             crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,${at}) AS "isEffective",
+             to_char(${at} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt"
+           FROM association_memberships m JOIN association_membership_plans p
+             ON p.workspace_id=m.workspace_id AND p.id=m.plan_id
+          WHERE m.workspace_id=$1 AND m.contact_id=$2
+            AND (NOT $3::boolean OR crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,${at}))
+          ORDER BY m.created_at DESC,m.id DESC`,
+        [workspaceId, contactId, input.activeOnly ?? false, input.effectiveAt ? crmPageInstant(input.effectiveAt) : null],
       )
       return result.rows
     },
@@ -758,18 +735,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         values.push(input.status)
         conditions.push(`status = $${values.length}`)
       }
-      if (input.cursor) {
-        values.push(input.cursor.createdAt, input.cursor.id)
-        conditions.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`)
-      }
-      values.push(input.limit + 1)
-      const result = await pool.query<DbRow>(
-        `SELECT ${EVENT_SELECT} FROM association_events
-          WHERE ${conditions.join(' AND ')}
-          ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
-        values,
-      )
-      return page(result.rows, input.limit)
+      return page(pool, workspaceId, 'association.events', input,
+        `SELECT ${EVENT_SELECT} FROM association_events WHERE ${conditions.join(' AND ')}`, values)
     },
 
     async upsertTicket(workspaceId, eventId, input, actor) {
@@ -995,8 +962,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
                  JOIN association_membership_plans p
                    ON p.workspace_id = m.workspace_id AND p.id = m.plan_id
                 WHERE m.workspace_id = $1 AND m.contact_id = $2
-                  AND m.status = 'active' AND m.starts_at <= now()
-                  AND (m.ends_at IS NULL OR m.ends_at > now())
+                  AND crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,statement_timestamp())
                   AND (cardinality($3::text[]) = 0 OR p.plan_key = ANY($3::text[]))
                 ORDER BY m.starts_at DESC LIMIT 1`,
               [workspaceId, input.contactId, ticket.eligible_plan_keys],
@@ -1082,20 +1048,15 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           WHERE l.workspace_id=$1 AND l.order_id=association_orders.id AND t.event_id=$${values.length})`)
       }
       if (input.allowedEventIds) {
-        values.push(input.allowedEventIds)
+        values.push([...input.allowedEventIds].sort())
         conditions.push(`EXISTS (SELECT 1 FROM association_order_lines l WHERE l.workspace_id=$1 AND l.order_id=association_orders.id)`)
         conditions.push(`NOT EXISTS (SELECT 1 FROM association_order_lines l JOIN association_ticket_types t ON t.workspace_id=l.workspace_id AND t.id=l.ticket_id
           WHERE l.workspace_id=$1 AND l.order_id=association_orders.id AND NOT (t.event_id=ANY($${values.length}::uuid[])))`)
       }
       const count = await pool.query<{ total: number }>(`SELECT count(*)::int AS total FROM association_orders WHERE ${conditions.join(' AND ')}`, values)
-      if (input.cursor) {
-        values.push(input.cursor.createdAt, input.cursor.id)
-        conditions.push(`(created_at,id)<($${values.length - 1}::timestamptz,$${values.length}::uuid)`)
-      }
-      values.push(input.limit + 1)
-      const result = await pool.query<DbRow>(`SELECT ${ORDER_SELECT} FROM association_orders WHERE ${conditions.join(' AND ')}
-        ORDER BY created_at DESC,id DESC LIMIT $${values.length}`, values)
-      return { ...page(result.rows, input.limit), total: count.rows[0].total }
+      const result = await page(pool, workspaceId, 'association.orders', input,
+        `SELECT ${ORDER_SELECT} FROM association_orders WHERE ${conditions.join(' AND ')}`, values)
+      return { ...result, total: count.rows[0].total }
     },
 
     cancelOrder: (workspaceId, id, actor) => settleWithoutProvider(pool, workspaceId, id, actor, 'cancel'),
@@ -1217,18 +1178,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         values.push(input.status)
         conditions.push(`status = $${values.length}`)
       }
-      if (input.cursor) {
-        values.push(input.cursor.createdAt, input.cursor.id)
-        conditions.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`)
-      }
-      values.push(input.limit + 1)
-      const result = await pool.query<DbRow>(
-        `SELECT ${REGISTRATION_SELECT} FROM association_registrations
-          WHERE ${conditions.join(' AND ')}
-          ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
-        values,
-      )
-      return page(result.rows, input.limit)
+      return page(pool, workspaceId, 'association.registrations', input,
+        `SELECT ${REGISTRATION_SELECT} FROM association_registrations WHERE ${conditions.join(' AND ')}`, values)
     },
 
     async getRegistrationManagement(workspaceId, id) {
@@ -1284,18 +1235,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         values.push(input.status)
         conditions.push(`status = $${values.length}`)
       }
-      if (input.cursor) {
-        values.push(input.cursor.createdAt, input.cursor.id)
-        conditions.push(`(created_at, id) < ($${values.length - 1}::timestamptz, $${values.length}::uuid)`)
-      }
-      values.push(input.limit + 1)
-      const result = await pool.query<DbRow>(
-        `SELECT ${NOTIFICATION_SELECT} FROM association_notification_outbox
-          WHERE ${conditions.join(' AND ')}
-          ORDER BY created_at DESC, id DESC LIMIT $${values.length}`,
-        values,
-      )
-      return page(result.rows, input.limit)
+      return page(pool, workspaceId, 'association.notifications', input,
+        `SELECT ${NOTIFICATION_SELECT} FROM association_notification_outbox WHERE ${conditions.join(' AND ')}`, values)
     },
   }
 }
