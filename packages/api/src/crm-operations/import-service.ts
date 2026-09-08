@@ -29,7 +29,7 @@ import { query } from '../db/client.js'
 import { parseCsv } from '../linkedin-import/csv.js'
 import { createCrmImportSources, type CrmImportSources } from '../db/crm-import-sources.js'
 import { requireImportCeiling, requireImportOperation, requireImportRowAuthority } from './import-authority.js'
-import { queryCrmPage } from './pagination.js'
+import { crmPageInstant, queryCrmPage } from './pagination.js'
 
 const MAX_IMPORT_BYTES = 30 * 1024 * 1024
 const MAX_IMPORT_ROWS = 100_000
@@ -43,9 +43,9 @@ const BASE_TARGETS = new Set([
   'name', 'email', 'phone', 'tags', 'domain', 'companyId', 'contactId',
   'stage', 'amount', 'currencyCode', 'closeDate', 'source', 'pipelineId',
   'stageId', 'identityProvider', 'identityProviderInstance', 'identitySubject',
-  'consentPurposeKey', 'consentAction', 'consentSource',
+  'consentPurposeKey', 'consentAction', 'consentSource', 'consentOccurredAt',
   'suppressionChannel', 'suppressionAction', 'suppressionReasonCode',
-  'suppressionSource', 'entitlementPlanId', 'entitlementIdempotencyKey',
+  'suppressionSource', 'suppressionOccurredAt', 'entitlementPlanId', 'entitlementIdempotencyKey',
   'entitlementStatus', 'entitlementStartsAt', 'entitlementEndsAt',
   'entitlementRenewalMode', 'participationEventId', 'participationSourceId',
   'participationStatus', 'participantName', 'participantEmail',
@@ -280,7 +280,7 @@ function validateMappedRow(
     && values.identityProvider !== mapping.trustedIdentitySource) {
     add('identity_source_mismatch', 'The mapped identity provider must match the confirmed trusted source.', 'identityProvider')
   }
-  const hasConsent = values.consentPurposeKey || values.consentAction || values.consentSource
+  const hasConsent = values.consentPurposeKey || values.consentAction || values.consentSource || values.consentOccurredAt
   if (hasConsent && !(values.consentPurposeKey && values.consentAction && values.consentSource)) {
     add('incomplete_consent', 'Consent purpose, action, and source are required together.', 'consentPurposeKey')
   }
@@ -290,7 +290,7 @@ function validateMappedRow(
   if (values.consentPurposeKey && !/^[a-z][a-z0-9_-]{0,62}$/.test(values.consentPurposeKey)) {
     add('invalid_catalog_key', 'Consent purpose must be a stable catalog key.', 'consentPurposeKey')
   }
-  const hasSuppression = values.suppressionChannel || values.suppressionAction || values.suppressionReasonCode || values.suppressionSource
+  const hasSuppression = values.suppressionChannel || values.suppressionAction || values.suppressionReasonCode || values.suppressionSource || values.suppressionOccurredAt
   if (hasSuppression && !(values.suppressionChannel && values.suppressionAction && values.suppressionReasonCode && values.suppressionSource)) {
     add('incomplete_suppression', 'Suppression channel, action, reason, and source are required together.', 'suppressionChannel')
   }
@@ -305,6 +305,11 @@ function validateMappedRow(
     'provider_block', 'legal', 'invalid_address', 'other',
   ].includes(values.suppressionReasonCode)) {
     add('invalid_suppression_reason', 'Suppression reason is outside the supported catalog.', 'suppressionReasonCode')
+  }
+  for (const field of ['consentOccurredAt', 'suppressionOccurredAt']) {
+    if (!values[field]) continue
+    try { crmPageInstant(values[field]) }
+    catch { add('invalid_instant', 'Value must be an ISO timestamp with a timezone and at most six fractional digits.', field) }
   }
   const hasEntitlement = values.entitlementPlanId || values.entitlementIdempotencyKey || values.entitlementStartsAt
   if (hasEntitlement && !(values.entitlementPlanId && values.entitlementIdempotencyKey && values.entitlementStartsAt)) {
@@ -682,6 +687,7 @@ export function createCrmProductionImportService(deps: {
         kind: 'record_consent', contactId, purposeKey: values.consentPurposeKey,
         action: values.consentAction as 'granted' | 'withdrawn', source: values.consentSource,
         provider: 'import', providerEventId: `${job.id}:${row.row}:consent:${values.consentPurposeKey}`,
+        ...(values.consentOccurredAt ? { occurredAt: values.consentOccurredAt } : {}),
         metadata: { importJobId: job.id, importRow: row.row },
       })
     }
@@ -693,6 +699,7 @@ export function createCrmProductionImportService(deps: {
         reasonCode: values.suppressionReasonCode as 'manual_do_not_contact' | 'hard_bounce' | 'soft_bounce' | 'complaint' | 'provider_block' | 'legal' | 'invalid_address' | 'other',
         source: values.suppressionSource,
         provider: 'import', providerEventId: `${job.id}:${row.row}:suppression:${values.suppressionChannel}`,
+        ...(values.suppressionOccurredAt ? { occurredAt: values.suppressionOccurredAt } : {}),
         metadata: { importJobId: job.id, importRow: row.row },
       })
     }

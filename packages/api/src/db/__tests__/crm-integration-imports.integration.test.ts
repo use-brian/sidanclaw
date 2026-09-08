@@ -7,6 +7,7 @@ import { CrmOperationsCommandSchema, type CrmIntegrationGrant, type CrmOperation
 import { createCrmIntegrationStore } from '../crm-integration-store.js'
 import { createCrmImportSources } from '../crm-import-sources.js'
 import { createDbCrmOperationsStore } from '../crm-operations-store.js'
+import { createDbCrmIntakeReadStore } from '../crm-intake-store.js'
 import { createCrmOperationsService } from '../../crm-operations/service.js'
 import { createCrmProductionImportService } from '../../crm-operations/import-service.js'
 import { crmIntegrationContext, crmIntegrationRoutes } from '../../routes/crm-integration.js'
@@ -122,5 +123,49 @@ describe('[COMP:crm/production-import] Actual machine source, job and row author
     await expect(imports.errorsCsv(writer.context, otherJob)).rejects.toMatchObject({ code: 'integration_scope_denied' })
     const foreign = await fixture(), foreignKey = await foreign.issue()
     expect(await imports.get(foreignKey.context, job.id)).toBeNull()
+  })
+
+  it('preserves microsecond historical evidence and cannot replace a later withdrawal or suppression on import or replay', async () => {
+    const f = await fixture(), contactId = randomUUID()
+    const writer = await f.issue([
+      { operation: 'crm.imports.write', selectors: { purposeKeys: 'all' } },
+      { operation: 'crm.consent.write', selectors: { purposeKeys: 'all' } },
+    ])
+    await pool.query(`INSERT INTO entities (id,workspace_id,kind,display_name,attributes,created_by_user_id,source)
+      VALUES ($1,$2,'person','Historical fixture','{"email":"history@example.com"}',$3,'manual')`, [contactId, f.workspaceId, f.userId])
+    const later = '2026-01-01T00:00:00.123457Z', earlier = '2026-01-01T03:00:00.123456+03:00'
+    const withdrawal = await operations.execute(f.member, CrmOperationsCommandSchema.parse({ kind: 'record_consent', contactId,
+      purposeKey: 'updates', action: 'withdrawn', source: 'fixture', occurredAt: later }))
+    const suppressed = await operations.execute(f.member, CrmOperationsCommandSchema.parse({ kind: 'record_suppression', contactId,
+      channel: 'email', action: 'suppressed', reasonCode: 'manual_do_not_contact', source: 'fixture', occurredAt: later }))
+    const columns = ['contactId', 'consentPurposeKey', 'consentAction', 'consentSource', 'consentOccurredAt',
+      'suppressionChannel', 'suppressionAction', 'suppressionReasonCode', 'suppressionSource', 'suppressionOccurredAt']
+    const bytes = Buffer.from([columns.join(','), [contactId, 'updates', 'granted', 'historical_import', earlier,
+      'email', 'released', 'manual_do_not_contact', 'historical_import', earlier].join(','), ''].join('\n'))
+    const source = await sources.stage(writer.context, randomUUID(), bytes)
+    const input = { sourceId: source.sourceId, entityKind: 'operations' as const,
+      mapping: { columns: Object.fromEntries(columns.map((column, index) => [index, column])) } }
+    const checked = await imports.dryRun(writer.context, input)
+    expect(checked).toMatchObject({ validRows: 1, failedRows: 0 })
+    const job = await imports.confirm(writer.context, { ...input, confirmed: true, dryRunHash: checked.dryRunHash })
+    expect(await imports.resume(writer.context, job.id)).toMatchObject({ status: 'completed', succeededRows: 1, failedRows: 0 })
+    const read = createDbCrmIntakeReadStore()
+    expect(await read.checkSendability(f.workspaceId, contactId, 'email', 'updates')).toMatchObject({
+      verdict: 'blocked', reasons: ['channel_suppression', 'consent_withdrawn'],
+      effectiveConsentEventId: withdrawal.record.id, effectiveSuppressionEventIds: [suppressed.record.id],
+    })
+    for (const table of ['association_consent_events', 'crm_suppression_events']) {
+      const evidence = await pool.query(`SELECT to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at,
+        provider_event_id FROM ${table} WHERE workspace_id=$1 AND provider='import'`, [f.workspaceId])
+      expect(evidence.rows).toEqual([{ at: '2026-01-01T00:00:00.123456Z', provider_event_id: `${job.id}:2:${table === 'association_consent_events' ? 'consent:updates' : 'suppression:email'}` }])
+    }
+    const counts = async () => (await pool.query(`SELECT
+      (SELECT count(*) FROM association_consent_events WHERE workspace_id=$1)::int AS consent,
+      (SELECT count(*) FROM crm_suppression_events WHERE workspace_id=$1)::int AS suppression,
+      (SELECT count(*) FROM association_audit_log WHERE workspace_id=$1)::int AS audit,
+      (SELECT count(*) FROM crm_domain_event_outbox WHERE workspace_id=$1)::int AS outbox`, [f.workspaceId])).rows[0]
+    const before = await counts()
+    expect(await imports.resume(writer.context, job.id)).toMatchObject({ status: 'completed', succeededRows: 1 })
+    expect(await counts()).toEqual(before)
   })
 })
