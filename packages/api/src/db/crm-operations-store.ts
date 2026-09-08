@@ -349,25 +349,38 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async resolveExternalIdentity(provider, subject) {
-      const result = await client.query<{ contactId: string }>(
-        `SELECT contact_id AS "contactId"
-           FROM association_external_identities
-          WHERE workspace_id = $1 AND provider = $2 AND provider_subject = $3`,
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        JSON.stringify(['crm-intake-identity', workspaceId, 'external_subject', provider, subject]),
+      ])
+      const result = await client.query<{ contactId: string; isLive: boolean }>(
+        `SELECT i.contact_id AS "contactId",
+                (e.kind='person' AND e.valid_to IS NULL AND e.retracted_at IS NULL
+                  AND NOT (e.attributes ? 'crm_archived_at')) AS "isLive"
+           FROM association_external_identities i
+           JOIN entities e ON e.workspace_id=i.workspace_id AND e.id=i.contact_id
+          WHERE i.workspace_id=$1 AND i.provider=$2 AND i.provider_subject=$3`,
         [workspaceId, provider, subject],
       )
-      return result.rows[0]?.contactId ?? null
+      const row = result.rows[0]
+      if (row && !row.isLive) throw new CrmOperationsError('conflict', 'The identity binding requires contact review.', { reason: 'identity_review_required' })
+      return row?.contactId ?? null
     },
 
     async findContactByEmail(email) {
+      const normalized = email.trim().toLowerCase()
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        JSON.stringify(['crm-intake-identity', workspaceId, 'email', normalized]),
+      ])
       const result = await client.query<{ id: string }>(
         `SELECT id FROM entities
           WHERE workspace_id = $1 AND kind = 'person' AND valid_to IS NULL
-            AND retracted_at IS NULL
-            AND lower(COALESCE(attributes->>'email', canonical_id, '')) = $2
-          ORDER BY created_at, id LIMIT 2`,
-        [workspaceId, email.trim().toLowerCase()],
+            AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
+            AND lower(btrim(COALESCE(NULLIF(btrim(attributes->>'email'),''),canonical_id,'')))=$2
+          ORDER BY created_at,id LIMIT 2`,
+        [workspaceId, normalized],
       )
-      return result.rows.length === 1 ? result.rows[0]!.id : null
+      if (result.rows.length > 1) throw new CrmOperationsError('conflict', 'Multiple live contacts match this email; review is required.', { reason: 'identity_review_required' })
+      return result.rows[0]?.id ?? null
     },
 
     async resolveAttributionUser(preferredUserId) {
