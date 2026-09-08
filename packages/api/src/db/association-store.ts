@@ -13,6 +13,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import { CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { getPool } from './client.js'
+import { lockCrmIntegrationCredential, type CrmIntegrationPrincipal } from './crm-integration-store.js'
 import { crmEvidenceRequestHash, resolveCrmEvidenceReplay, type CrmEvidenceRequest } from '../crm-operations/evidence-replay.js'
 import { lockAssociationModule, requireAssociationAdmission } from './workspace-modules-store.js'
 import {
@@ -82,26 +83,34 @@ export type AssociationStore = {
 type DbRow = QueryResultRow & Record<string, unknown>
 
 function authorizeIntegration(actor: AssociationActor, operation: CrmIntegrationOperation,
-  resources: Parameters<typeof requireCrmIntegrationResources>[2]): void {
+  resources: Parameters<typeof requireCrmIntegrationResources>[2], current?: CrmIntegrationPrincipal): void {
   if (actor.credentialKind === 'integration_key' && actor.integration?.credentialId !== actor.credentialId) {
     throw new CrmIntegrationScopeError(operation)
   }
   if (actor.integration) requireCrmIntegrationResources(actor.integration, operation, resources)
+  if (current) requireCrmIntegrationResources(current, operation, resources)
+}
+
+async function lockIntegrationActor(client: PoolClient, workspaceId: string, actor: AssociationActor): Promise<CrmIntegrationPrincipal | undefined> {
+  if (actor.credentialKind !== 'integration_key') return undefined
+  if (actor.integration?.credentialId !== actor.credentialId) throw new CrmIntegrationScopeError('association.orders.write')
+  return lockCrmIntegrationCredential(client, workspaceId, actor.credentialId)
 }
 
 async function authorizeOrderIntegration(client: PoolClient, workspaceId: string, orderId: string, actor: AssociationActor,
-  operation: CrmIntegrationOperation, provider?: string): Promise<void> {
+  operation: CrmIntegrationOperation, provider?: string, current?: CrmIntegrationPrincipal): Promise<void> {
   if (!actor.integration && actor.credentialKind !== 'integration_key') return
   const events = await client.query<{ event_id: string }>(`SELECT DISTINCT t.event_id FROM association_order_lines l
     JOIN association_ticket_types t ON t.workspace_id=l.workspace_id AND t.id=l.ticket_id
     WHERE l.workspace_id=$1 AND l.order_id=$2`, [workspaceId, orderId])
-  authorizeIntegration(actor, operation, { eventIds: events.rows.map((row) => row.event_id), ...(provider ? { providerKeys: provider } : {}) })
+  authorizeIntegration(actor, operation, { eventIds: events.rows.map((row) => row.event_id), ...(provider ? { providerKeys: provider } : {}) }, current)
 }
 
 async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string, actor: AssociationActor, action: 'cancel' | 'confirm_free'): Promise<MutationResult> {
   return transaction(pool, async (client) => {
+    const integration = await lockIntegrationActor(client, workspaceId, actor)
     await lockAssociationModule(client, workspaceId)
-    await authorizeOrderIntegration(client, workspaceId, id, actor, 'association.orders.write')
+    await authorizeOrderIntegration(client, workspaceId, id, actor, 'association.orders.write', undefined, integration)
     const current = await client.query<{ status: OrderStatus; total_minor: string; unexpired: boolean }>(
       `SELECT status,total_minor::text,reservation_expires_at>clock_timestamp() AS unexpired FROM association_orders
        WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, [workspaceId, id])
@@ -749,9 +758,10 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async upsertTicket(workspaceId, eventId, input, actor) {
       return transaction(pool, async (client) => {
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
         const module = await lockAssociationModule(client, workspaceId)
         requireAssociationAdmission(module)
-        authorizeIntegration(actor, 'crm.catalog.configure', { eventIds: eventId })
+        authorizeIntegration(actor, 'crm.catalog.configure', { eventIds: eventId }, integration)
         const event = await client.query(
           `SELECT 1 FROM association_events WHERE workspace_id = $1 AND id = $2`,
           [workspaceId, eventId],
@@ -768,7 +778,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           if (missing.length > 0) {
             throw new AssociationError('not_found', 'one or more eligible membership plan keys do not exist', { missing })
           }
-          authorizeIntegration(actor, 'crm.catalog.configure', { planIds: plans.rows.map((plan) => plan.id) })
+          authorizeIntegration(actor, 'crm.catalog.configure', { planIds: plans.rows.map((plan) => plan.id) }, integration)
         }
         const before = await client.query<{ id: string }>(
           `SELECT id FROM association_ticket_types WHERE workspace_id = $1 AND event_id = $2 AND ticket_key = $3`,
@@ -831,6 +841,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async createOrder(workspaceId, input, actor) {
       return transaction(pool, async (client) => {
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
         const module = await lockAssociationModule(client, workspaceId)
         const fingerprint = associationFingerprint(input)
         const existing = await client.query<DbRow>(
@@ -840,7 +851,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           [workspaceId, input.idempotencyKey],
         )
         if (existing.rows[0]) {
-          await authorizeOrderIntegration(client, workspaceId, String(existing.rows[0].id), actor, 'association.orders.write')
+          await authorizeOrderIntegration(client, workspaceId, String(existing.rows[0].id), actor, 'association.orders.write', undefined, integration)
           if (existing.rows[0].requestFingerprint !== fingerprint) {
             throw new AssociationError('conflict', 'idempotency key was already used for a different order')
           }
@@ -882,7 +893,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         if (ticketsResult.rows.length !== ticketIds.length) {
           throw new AssociationError('not_found', 'one or more ticket types were not found')
         }
-        authorizeIntegration(actor, 'association.orders.write', { eventIds: ticketsResult.rows.map((ticket) => ticket.event_id) })
+        authorizeIntegration(actor, 'association.orders.write', { eventIds: ticketsResult.rows.map((ticket) => ticket.event_id) }, integration)
         // A concurrent retry with the same request blocks on the same ticket
         // locks. Re-check after acquiring them so the loser returns the
         // winner's order instead of reserving inventory twice or surfacing a
@@ -1072,8 +1083,9 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async reconcileProviderEvent(workspaceId, orderId, input, actor) {
       return transaction(pool, async (client) => {
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
         await lockAssociationModule(client, workspaceId)
-        await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider)
+        await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
         const replay = await client.query<{
           order_id: string
           target_status: OrderStatus
@@ -1201,10 +1213,11 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async updateRegistration(workspaceId, id, input, actor) {
       return transaction(pool, async (client) => {
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
         await lockAssociationModule(client, workspaceId)
         if (actor.integration || actor.credentialKind === 'integration_key') {
           const resource = await client.query<{ event_id: string }>('SELECT event_id FROM association_registrations WHERE workspace_id=$1 AND id=$2', [workspaceId, id])
-          authorizeIntegration(actor, 'association.orders.write', { eventIds: resource.rows.map((row) => row.event_id) })
+          authorizeIntegration(actor, 'association.orders.write', { eventIds: resource.rows.map((row) => row.event_id) }, integration)
         }
         const current = await client.query<{ status: RegistrationStatus }>(
           `SELECT status FROM association_registrations

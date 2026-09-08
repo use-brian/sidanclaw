@@ -3,16 +3,24 @@
  */
 import type { PoolClient } from 'pg'
 import {
-  CrmOperationsError, CrmSegmentPredicateSchema, requireCrmIntegrationResources,
+  CrmOperationsError, CrmSegmentPredicateSchema, requireCrmIntegrationResources, assertCrmOperationsAuthority,
   type CrmOperationsCommand, type CrmOperationsContext,
 } from '@use-brian/core'
+import { lockCrmIntegrationCredential } from '../db/crm-integration-store.js'
 
 export async function authorizeCrmIntegrationCommand(client: PoolClient, context: CrmOperationsContext, command: CrmOperationsCommand): Promise<void> {
   const authority = context.authority.integration
   if (!authority) return
   const workspaceId = context.workspaceId
-  const required = (operation: Parameters<typeof requireCrmIntegrationResources>[1], resources: Parameters<typeof requireCrmIntegrationResources>[2]) =>
-    requireCrmIntegrationResources(authority, operation, resources)
+  const ceilings = [authority]
+  if (context.actor.kind === 'integration_key') {
+    const current = await lockCrmIntegrationCredential(client, workspaceId, context.actor.credentialId)
+    assertCrmOperationsAuthority({ ...context, authority: { ...context.authority, integration: current } }, command)
+    ceilings.push(current)
+  }
+  const required = (operation: Parameters<typeof requireCrmIntegrationResources>[1], resources: Parameters<typeof requireCrmIntegrationResources>[2]) => {
+    for (const ceiling of ceilings) requireCrmIntegrationResources(ceiling, operation, resources)
+  }
   const rows = async (sql: string, values: unknown[]) => (await client.query(sql, [workspaceId, ...values])).rows
   const existing = async (sql: string, id: string): Promise<Record<string, string>> => {
     const row = (await rows(sql, [id]))[0]

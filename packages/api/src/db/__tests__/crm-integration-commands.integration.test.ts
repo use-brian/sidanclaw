@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { setTimeout } from 'node:timers/promises'
 import pg from 'pg'
 import { afterAll, describe, expect, it } from 'vitest'
-import { AssociationCommandSchema, CrmOperationsCommandSchema, type CrmIntegrationGrant, type AssociationContext } from '@use-brian/core'
+import { AssociationCommandSchema, CrmOperationsCommandSchema, CRM_INTEGRATION_OPERATIONS, CRM_INTEGRATION_RESOURCE_CATALOG,
+  type CrmIntegrationGrant, type AssociationContext } from '@use-brian/core'
 import { createCrmOperationsService } from '../../crm-operations/service.js'
 import { createDbCrmOperationsStore } from '../crm-operations-store.js'
 import { createDbCrmIntakeReadStore } from '../crm-intake-store.js'
@@ -9,6 +11,7 @@ import { createCrmIntegrationRecordReadStore } from '../crm-integration-records.
 import { createAssociationService } from '../../association/service.js'
 import { createAssociationStore } from '../association-store.js'
 import { createWorkspaceModulesStore } from '../workspace-modules-store.js'
+import { createCrmIntegrationStore } from '../crm-integration-store.js'
 import { crmIntegrationContext } from '../../routes/crm-integration.js'
 import { getPool } from '../client.js'
 import { EventInputSchema, OrderCreateSchema, TicketInputSchema } from '../../association/domain.js'
@@ -20,23 +23,45 @@ const app = new pg.Pool({ connectionString: process.env.DATABASE_URL_APP })
 const crm = createCrmOperationsService(createDbCrmOperationsStore(pool))
 const commerce = createAssociationStore(pool)
 const modules = createWorkspaceModulesStore(pool, app)
+const keys = createCrmIntegrationStore(pool, app)
 const association = createAssociationService({ crmService: crm, store: commerce, modules })
 const legacy = { credentialKind: 'api_key' as const, credentialId: 'fixture' }
 const event = (slug: string) => EventInputSchema.parse({ slug, title: slug, startsAt: '2099-01-01T12:00:00Z', endsAt: '2099-01-01T14:00:00Z', timezone: 'UTC', mode: 'venue', status: 'published', capacity: 100 })
 const ticket = TicketInputSchema.parse({ key: 'general', name: 'General', currency: 'USD', priceMinor: 0, status: 'on_sale', capacity: 100 })
 async function fixture() {
-  const workspaceId = randomUUID(), userId = randomUUID(), credentialId = randomUUID(), contactId = randomUUID()
+  const workspaceId = randomUUID(), userId = randomUUID(), contactId = randomUUID()
   await pool.query('INSERT INTO users (id,auth_provider_id) VALUES ($1::uuid,$1::text)', [userId])
   await pool.query(`INSERT INTO workspaces (id,name,owner_user_id) VALUES ($1,'Command fixture',$2)`, [workspaceId, userId])
   await pool.query(`INSERT INTO workspace_members (workspace_id,user_id,role) VALUES ($1,$2,'owner')`, [workspaceId, userId])
   await pool.query(`INSERT INTO entities (id,workspace_id,kind,display_name,created_by_user_id,source) VALUES ($1,$2,'person','Fixture person',$3,'manual')`, [contactId, workspaceId, userId])
+  const allGrants: CrmIntegrationGrant[] = CRM_INTEGRATION_OPERATIONS.map((operation) => ({ operation,
+    selectors: Object.fromEntries(CRM_INTEGRATION_RESOURCE_CATALOG[operation].map((dimension) => [dimension, 'all'])) }))
+  const credential = await keys.create(workspaceId, userId, { label: 'Fixture command key', expiresAt: '2099-01-01T00:00:00Z', grants: allGrants })
+  const credentialId = credential.id
   const context = (grants: CrmIntegrationGrant[]) => crmIntegrationContext({ workspaceId, credentialId, grants })
   const vertical = (grants: CrmIntegrationGrant[]): AssociationContext => {
     const ctx = context(grants)
     return { ...ctx, authority: { ...ctx.authority, canRead: true, canReconcileProvider: true } }
   }
   const reads = (grants: CrmIntegrationGrant[]) => createDbCrmIntakeReadStore({ workspaceId, credentialId, grants })
-  return { workspaceId, userId, credentialId, contactId, context, vertical, reads }
+  return { workspaceId, userId, credentialId, contactId, context, vertical, reads, allGrants }
+}
+
+async function blockedBy(pid: number): Promise<number> {
+  for (let attempt=0;attempt<200;attempt++) {
+    const rows=await pool.query<{ pid: number }>(`SELECT pid FROM pg_stat_activity
+      WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock'`,[pid])
+    if (rows.rows[0]) return rows.rows[0].pid
+    await setTimeout(10)
+  }
+  throw new Error('Fixture did not reach the intended PostgreSQL lock wait')
+}
+
+async function workspaceEffects(workspaceId: string) {
+  return (await pool.query(`SELECT
+    (SELECT count(*)::int FROM association_events WHERE workspace_id=$1) AS events,
+    (SELECT count(*)::int FROM association_audit_log WHERE workspace_id=$1) AS audit,
+    (SELECT count(*)::int FROM crm_domain_event_outbox WHERE workspace_id=$1) AS outbox`,[workspaceId])).rows[0]
 }
 
 describe('[COMP:api/crm-integration-auth] Actual command and joined resource isolation', () => {
@@ -56,6 +81,141 @@ describe('[COMP:api/crm-integration-auth] Actual command and joined resource iso
     const audit = await pool.query('SELECT actor_kind,actor_credential_id FROM association_audit_log WHERE workspace_id=$1', [f.workspaceId])
     expect(audit.rows).toHaveLength(2)
     expect(audit.rows.every((row) => row.actor_kind === 'integration_key' && row.actor_credential_id === f.credentialId)).toBe(true)
+  })
+  it('refuses stale revoked, expired, nonexistent and foreign-workspace principals without domain or audit changes', async () => {
+    const f=await fixture(), context=f.context(f.allGrants)
+    const command=CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('stale') })
+    const before=await workspaceEffects(f.workspaceId)
+    await keys.revoke(f.workspaceId,f.userId,f.credentialId)
+    await expect(crm.execute(context,command)).rejects.toMatchObject({ code: 'credential_revoked' })
+    const expired=await fixture()
+    await pool.query(`UPDATE crm_integration_credentials SET created_at=clock_timestamp()-interval '1 day',
+      expires_at=clock_timestamp()-interval '1 second' WHERE id=$1`,[expired.credentialId])
+    await expect(crm.execute(expired.context(expired.allGrants),command)).rejects.toMatchObject({ code: 'credential_revoked' })
+    const live=await fixture()
+    await expect(crm.execute({ ...live.context(live.allGrants),workspaceId: f.workspaceId },command)).rejects.toMatchObject({ code: 'credential_revoked' })
+    await expect(crm.execute(crmIntegrationContext({ workspaceId: f.workspaceId,credentialId: randomUUID(),grants: f.allGrants }),command))
+      .rejects.toMatchObject({ code: 'credential_revoked' })
+    expect(await workspaceEffects(f.workspaceId)).toEqual(before)
+    expect(await workspaceEffects(expired.workspaceId)).toEqual({ events: 0,audit: 0,outbox: 0 })
+  })
+
+  it('requires current stored grants as well as a request ceiling and fails closed on malformed persisted authority', async () => {
+    const f=await fixture(), created=await commerce.upsertEvent(f.workspaceId,event('restricted'),legacy)
+    const other=await commerce.upsertEvent(f.workspaceId,event('other'),legacy)
+    const issued=await keys.create(f.workspaceId,f.userId,{ label: 'Narrow fixture',expiresAt: '2099-01-01T00:00:00Z',
+      grants: [{ operation: 'crm.catalog.configure',selectors: { eventIds: [String(created.record.id)] } }] })
+    const exaggerated=crmIntegrationContext({ workspaceId: f.workspaceId,credentialId: issued.id,grants: f.allGrants })
+    const before=await workspaceEffects(f.workspaceId)
+    await expect(crm.execute(exaggerated,CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('other') })))
+      .rejects.toMatchObject({ code: 'integration_scope_denied',dimension: 'eventIds' })
+    const readOnly=await keys.create(f.workspaceId,f.userId,{ label: 'Read fixture',expiresAt: '2099-01-01T00:00:00Z',
+      grants: [{ operation: 'crm.records.read',selectors: {} }] })
+    await expect(crm.execute(crmIntegrationContext({ workspaceId: f.workspaceId,credentialId: readOnly.id,grants: f.allGrants }),
+      CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('restricted') }))).rejects.toMatchObject({ code: 'integration_scope_denied' })
+    // Simulate corrupt persisted authority without changing the immutable-grant trigger.
+    await pool.query('DELETE FROM crm_integration_credential_grants WHERE credential_id=$1',[issued.id])
+    await pool.query(`INSERT INTO crm_integration_credential_grants(workspace_id,credential_id,operation,selectors)
+      VALUES($1,$2,'crm.catalog.configure','{"eventIds":[]}')`,[f.workspaceId,issued.id])
+    await expect(crm.execute(exaggerated,CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('restricted') })))
+      .rejects.toMatchObject({ code: 'credential_revoked' })
+    expect(other.record.id).not.toBe(created.record.id)
+    expect(await workspaceEffects(f.workspaceId)).toEqual(before)
+  })
+
+  it('checks expiry after waiting for the credential lock, not before the wait', async () => {
+    const f=await fixture(), locker=await pool.connect()
+    let pending: Promise<unknown> | undefined
+    try {
+      await locker.query('BEGIN')
+      await locker.query(`UPDATE crm_integration_credentials SET created_at=clock_timestamp()-interval '1 day',
+        expires_at=clock_timestamp()+interval '500 milliseconds' WHERE id=$1`,[f.credentialId])
+      const pid=(await locker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      pending=crm.execute(f.context(f.allGrants),CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('expired-after-wait') }))
+        .then((value) => value,(error) => error)
+      await blockedBy(pid)
+      await locker.query(`SELECT pg_sleep(greatest(0,extract(epoch FROM (expires_at-clock_timestamp())))+0.025)
+        FROM crm_integration_credentials WHERE id=$1`,[f.credentialId])
+      await locker.query('COMMIT')
+      expect(await pending).toMatchObject({ code: 'credential_revoked' })
+      expect(await workspaceEffects(f.workspaceId)).toEqual({ events: 0,audit: 0,outbox: 0 })
+    } finally { await locker.query('ROLLBACK'); locker.release(); await pending }
+  },15_000)
+
+  it('refuses a waiting command when revocation wins admission', async () => {
+    const f=await fixture(), locker=await pool.connect()
+    let pending: Promise<unknown> | undefined
+    try {
+      await locker.query('BEGIN')
+      await locker.query('UPDATE crm_integration_credentials SET revoked_at=clock_timestamp() WHERE id=$1',[f.credentialId])
+      const pid=(await locker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      pending=crm.execute(f.context(f.allGrants),CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('revoked-while-waiting') }))
+        .then((value) => value,(error) => error)
+      await blockedBy(pid)
+      await locker.query('COMMIT')
+      expect(await pending).toMatchObject({ code: 'credential_revoked' })
+      expect(await workspaceEffects(f.workspaceId)).toEqual({ events: 0,audit: 0,outbox: 0 })
+    } finally { await locker.query('ROLLBACK'); locker.release(); await pending }
+  },15_000)
+
+  it('lets an admitted command commit before revocation returns without blocking another workspace', async () => {
+    const f=await fixture(), other=await fixture(), stored=await commerce.upsertEvent(f.workspaceId,event('admitted'),legacy), locker=await pool.connect()
+    let write: Promise<unknown> | undefined, revoke: Promise<unknown> | undefined
+    try {
+      await locker.query('BEGIN')
+      await locker.query('SELECT id FROM association_events WHERE id=$1 FOR UPDATE',[stored.record.id])
+      const pid=(await locker.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      write=crm.execute(f.context(f.allGrants),CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('admitted'),title: 'Admitted update' }))
+      const writer=await blockedBy(pid)
+      revoke=keys.revoke(f.workspaceId,f.userId,f.credentialId)
+      await blockedBy(writer)
+      expect((await crm.execute(other.context(other.allGrants),CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('independent') }))).created).toBe(true)
+      await locker.query('COMMIT')
+      expect(await write).toMatchObject({ record: { title: 'Admitted update' } })
+      expect(await revoke).toBe(true)
+      await expect(crm.execute(f.context(f.allGrants),CrmOperationsCommandSchema.parse({ kind: 'save_event',...event('after-revocation') })))
+        .rejects.toMatchObject({ code: 'credential_revoked' })
+      expect(await workspaceEffects(f.workspaceId)).toEqual({ events: 1,audit: 2,outbox: 0 })
+    } finally { await locker.query('ROLLBACK'); locker.release(); await Promise.allSettled([write,revoke]) }
+  },15_000)
+
+  it('rechecks stale credentials before every commerce mutation including exact order and provider replay', async () => {
+    const f=await fixture()
+    await modules.act(f.workspaceId,f.userId,{ action: 'enable',expectedVersion: 1 })
+    const e=await commerce.upsertEvent(f.workspaceId,event('commerce-admission'),legacy), eventId=String(e.record.id)
+    const t=await commerce.upsertTicket(f.workspaceId,eventId,ticket,legacy)
+    const input=OrderCreateSchema.parse({ contactId: f.contactId,idempotencyKey: randomUUID(),lines: [
+      { ticketId: t.record.id,quantity: 1,attendees: [{ name: 'Fixture attendee' }] },
+    ] })
+    const order=await commerce.createOrder(f.workspaceId,input,legacy), orderId=String(order.record.id)
+    const registrationId=String((order.record.registrations as Array<{ id: string }>)[0].id)
+    const provider={ provider: 'fixture',eventId: 'fixture_payment',targetStatus: 'paid',occurredAt: '2026-09-08T00:00:00Z' }
+    const paid=await association.execute(f.vertical(f.allGrants),AssociationCommandSchema.parse({ kind: 'reconcile_provider_event',orderId,event: provider }))
+    expect(paid.record?.status).toBe('paid')
+    const otherEvent=await commerce.upsertEvent(f.workspaceId,event('unrelated-grant'),legacy)
+    const narrow=await keys.create(f.workspaceId,f.userId,{ label: 'Unrelated commerce fixture',expiresAt: '2099-01-01T00:00:00Z',grants: [
+      { operation: 'crm.catalog.configure',selectors: { eventIds: [String(otherEvent.record.id)] } },
+      { operation: 'association.orders.write',selectors: { eventIds: [String(otherEvent.record.id)] } },
+      { operation: 'association.provider_events.write',selectors: { eventIds: [String(otherEvent.record.id)],providerKeys: ['fixture'] } },
+    ] })
+    const exaggerated=crmIntegrationContext({ workspaceId: f.workspaceId,credentialId: narrow.id,grants: f.allGrants })
+    const narrowContext: AssociationContext={ ...exaggerated,authority: { ...exaggerated.authority,canRead: true,canReconcileProvider: true } }
+    const commands=[
+      { kind: 'save_ticket',eventId,ticket },
+      { kind: 'create_order',order: { ...input,idempotencyKey: randomUUID() } },
+      { kind: 'create_order',order: input },
+      { kind: 'cancel_order',orderId },
+      { kind: 'confirm_free_order',orderId },
+      { kind: 'reconcile_provider_event',orderId,event: provider },
+      { kind: 'update_registration',registrationId,update: { status: 'checked_in' } },
+    ].map((command) => AssociationCommandSchema.parse(command))
+    const before=await workspaceEffects(f.workspaceId)
+    for (const command of commands) await expect(association.execute(narrowContext,command)).rejects.toMatchObject({ code: 'integration_scope_denied' })
+    await keys.revoke(f.workspaceId,f.userId,f.credentialId)
+    for (const command of commands) await expect(association.execute(f.vertical(f.allGrants),command)).rejects.toMatchObject({ code: 'credential_revoked' })
+    expect(await workspaceEffects(f.workspaceId)).toEqual(before)
+    expect((await commerce.getOrder(f.workspaceId,orderId))?.status).toBe('paid')
+    expect((await pool.query('SELECT count(*)::int AS count FROM association_orders WHERE workspace_id=$1',[f.workspaceId])).rows[0].count).toBe(1)
   })
   it('filters catalog and entitlement lists before LIMIT and checks workspace even for an empty selector', async () => {
     const f = await fixture()

@@ -159,7 +159,7 @@ export function associationErrorResponse(error: unknown, res: Response): void {
     return
   }
   if (error instanceof CrmOperationsError) {
-    const status = error.code === 'not_found' ? 404
+    const status = error.code === 'credential_revoked' ? 401 : error.code === 'not_found' ? 404
       : error.code === 'conflict' || error.code === 'idempotency_conflict' ? 409
         : error.code === 'not_authorized' ? 403 : 422
     res.status(status).json({ error: error.code, message: error.message, details: error.details })

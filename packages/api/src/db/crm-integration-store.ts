@@ -43,6 +43,23 @@ export function parseCrmIntegrationToken(token: string): { credentialId: string;
   return matched ? { credentialId: matched[1], secret: matched[2] } : null
 }
 
+/** Call inside the mutation transaction, before module/domain locks. Check
+ * expiry after any credential/grant lock wait, using current database time. */
+export async function lockCrmIntegrationCredential(client: PoolClient, workspaceId: string, credentialId: string): Promise<CrmIntegrationPrincipal> {
+  const credential = await client.query(`SELECT id FROM crm_integration_credentials
+    WHERE workspace_id=$1 AND id=$2 FOR SHARE`, [workspaceId, credentialId])
+  const unavailable = () => new CrmOperationsError('credential_revoked', 'The CRM integration credential is no longer active.')
+  if (!credential.rowCount) throw unavailable()
+  const rows = await client.query(`SELECT operation,selectors FROM crm_integration_credential_grants
+    WHERE workspace_id=$1 AND credential_id=$2 ORDER BY operation FOR SHARE`, [workspaceId, credentialId])
+  const grants = CrmIntegrationGrantsSchema.safeParse(rows.rows)
+  if (!grants.success) throw unavailable()
+  const active = await client.query(`SELECT revoked_at IS NULL AND expires_at>clock_timestamp() AS active
+    FROM crm_integration_credentials WHERE workspace_id=$1 AND id=$2`, [workspaceId, credentialId])
+  if (!active.rows[0]?.active) throw unavailable()
+  return { workspaceId, credentialId, grants: grants.data }
+}
+
 async function adminTransaction<T>(pool: Pool, workspaceId: string, userId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect()
   try {

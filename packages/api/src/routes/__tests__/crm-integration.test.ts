@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import express from 'express'
 import request from 'supertest'
 import { describe, expect, it, vi } from 'vitest'
-import { CrmIntegrationScopeError, type CrmOperationsServicePort, type AssociationServicePort } from '@use-brian/core'
+import { CrmIntegrationScopeError, CrmOperationsError, type CrmOperationsServicePort, type AssociationServicePort } from '@use-brian/core'
 import { crmIntegrationRoutes, crmIntegrationCredentialRoutes } from '../crm-integration.js'
 import { crmAssociationRoutes, associationMemberContext, workspaceModuleRoutes } from '../crm-association.js'
 import { createAssociationService } from '../../association/service.js'
@@ -55,6 +55,16 @@ describe('[COMP:api/crm-integration-auth] Route isolation and shared adapters', 
   it('rejects invalid/revoked keys and does not fall through to another authority', async () => {
     const f = fixture(null)
     expect((await request(f.app).get('/api/crm/integration/catalog').set('Authorization', `Bearer ${token}`)).status).toBe(401)
+    expect(f.jwtGuard).not.toHaveBeenCalled()
+  })
+  it('returns 401 when a previously authenticated key loses admission at transaction time', async () => {
+    const f=fixture()
+    f.service.execute.mockRejectedValueOnce(new CrmOperationsError('credential_revoked','The CRM integration credential is no longer active.'))
+    const response=await request(f.app).post('/api/crm/integration/operations/events').set('Authorization',`Bearer ${token}`).send({
+      slug: 'fixture',title: 'Fixture',startsAt: '2099-01-01T10:00:00Z',endsAt: '2099-01-01T12:00:00Z',timezone: 'UTC',mode: 'venue',
+    })
+    expect(response.status).toBe(401)
+    expect(response.body.error).toBe('credential_revoked')
     expect(f.jwtGuard).not.toHaveBeenCalled()
   })
   it.each(['/modules/association/actions', '/operations/intake-credentials', '/operations/integration-credentials', '/operations/contacts/erase', '/operations/privacy/erase', '/chat', '/brain/mcp'])(
