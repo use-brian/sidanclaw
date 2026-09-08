@@ -5,9 +5,11 @@ import { z } from 'zod'
 import {
   CrmIntegrationGrantsSchema, CrmOperationsError,
   type CrmIntegrationAuthority, type CrmIntegrationGrant,
+  type CrmPage, type CrmPageQuery,
 } from '@use-brian/core'
 import { applyRLSGucs, getAppPool, getPool } from './client.js'
 import { hashSecret, verifySecret } from './api-key-store.js'
+import { queryCrmPage } from '../crm-operations/pagination.js'
 
 export const CreateCrmIntegrationCredentialSchema = z.object({
   label: z.string().trim().min(1).max(200),
@@ -104,11 +106,12 @@ export function createCrmIntegrationStore(pool: Pool = getPool(), memberPool: Po
         return { ...result.rows[0], oneTimeSecret: plaintext }
       })
     },
-    async listForMember(workspaceId: string, userId: string): Promise<CrmIntegrationCredential[]> {
+    async listForMember(workspaceId: string, userId: string, filters: CrmPageQuery = {}): Promise<CrmPage<'credentials', CrmIntegrationCredential>> {
       return adminTransaction(memberPool, workspaceId, userId, async (client) => {
-        const result = await client.query<CrmIntegrationCredential>(`SELECT ${COLUMNS},${GRANTS} FROM crm_integration_credentials c
-          WHERE c.workspace_id=$1 ORDER BY c.created_at DESC,c.id DESC LIMIT 100`, [workspaceId])
-        return result.rows
+        return queryCrmPage<'credentials', CrmIntegrationCredential>(client.query.bind(client), {
+          workspaceId, resource: 'crm.integration-credentials', key: 'credentials', query: filters,
+          sql: `SELECT ${COLUMNS},${GRANTS} FROM crm_integration_credentials c WHERE c.workspace_id=$1`, params: [workspaceId],
+        })
       })
     },
     async revoke(workspaceId: string, userId: string, credentialId: string): Promise<boolean> {

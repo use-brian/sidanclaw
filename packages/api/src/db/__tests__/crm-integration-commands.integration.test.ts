@@ -63,8 +63,8 @@ describe('[COMP:api/crm-integration-auth] Actual command and joined resource iso
     for (const slug of ['first', 'second', 'third']) created.push(await commerce.upsertEvent(f.workspaceId, event(slug), legacy))
     const allowed = String(created[0].record.id)
     const read = f.reads([{ operation: 'crm.catalog.read', selectors: { eventIds: [allowed] } }])
-    expect((await read.listEvents(f.workspaceId, { limit: 1 })).map((row) => row.id)).toEqual([allowed])
-    expect(await read.listEntitlementPlans(f.workspaceId)).toEqual([])
+    expect((await read.listEvents(f.workspaceId, { limit: 1 })).events.map((row) => row.id)).toEqual([allowed])
+    expect(await read.listEntitlementPlans(f.workspaceId)).toEqual({ plans: [], nextCursor: null })
     await expect(read.listEvents(randomUUID())).rejects.toMatchObject({ code: 'integration_scope_denied' })
     await expect(read.listEntitlements(f.workspaceId)).rejects.toMatchObject({ code: 'integration_scope_denied' })
   })
@@ -99,10 +99,53 @@ describe('[COMP:api/crm-integration-auth] Actual command and joined resource iso
     expect(new Set(seen).size).toBe(103)
     expect(await records.get(other.contactId)).toBeNull()
     expect(await records.get(f.contactId)).toMatchObject({ id: f.contactId, kind: 'person' })
-    expect(await records.fields()).toEqual([])
+    expect(await records.fields()).toEqual({ fields: [], nextCursor: null })
     await expect(records.list({ kind: 'knowledge' })).rejects.toThrow()
     await expect(createCrmIntegrationRecordReadStore({ ...principal, grants: [{ operation: 'association.read', selectors: { eventIds: 'all' } }] }, pool).get(f.contactId))
       .rejects.toMatchObject({ code: 'integration_scope_denied' })
+  })
+  it('bounds traversal across new inserts and label edits, rejects cross-query cursors and pages all field definitions', async () => {
+    const f = await fixture()
+    const principal = { workspaceId: f.workspaceId, credentialId: f.credentialId,
+      grants: [{ operation: 'crm.records.read' as const, selectors: {} }] }
+    const records = createCrmIntegrationRecordReadStore(principal, pool)
+    await pool.query(`INSERT INTO entities (workspace_id,kind,display_name,created_by_user_id,source,created_at)
+      SELECT $1,'person','Fixture '||n,$2,'manual','2026-01-01T00:00:00.123456Z'::timestamptz FROM generate_series(1,105) n`, [f.workspaceId, f.userId])
+    const first = await records.list({ limit: 7 })
+    expect(first.nextCursor).toBeTruthy()
+    await pool.query(`UPDATE entities SET display_name='Renamed fixture' WHERE workspace_id=$1`, [f.workspaceId])
+    const newer = await pool.query(`INSERT INTO entities (workspace_id,kind,display_name,created_by_user_id,source,created_at)
+      VALUES ($1,'person','New fixture',$2,'manual','2099-01-01T00:00:00Z') RETURNING id`, [f.workspaceId, f.userId])
+    const ids = first.records.map((row) => row.id)
+    let cursor = first.nextCursor
+    while (cursor) {
+      const page = await records.list({ limit: 19, cursor })
+      ids.push(...page.records.map((row) => row.id))
+      cursor = page.nextCursor
+    }
+    expect(ids).toHaveLength(106)
+    expect(new Set(ids).size).toBe(106)
+    expect(ids).not.toContain(newer.rows[0].id)
+    for (const input of [{ kind: 'company' }, { query: 'Renamed' }, { includeArchived: 'true' }, { createdAfter: '2025-01-01T00:00:00Z' }]) {
+      await expect(records.list({ ...input, cursor: first.nextCursor })).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+    await expect(records.fields({ cursor: first.nextCursor })).rejects.toMatchObject({ code: 'invalid_input' })
+    const otherWorkspace = createCrmIntegrationRecordReadStore({ ...principal, workspaceId: randomUUID() }, pool)
+    await expect(otherWorkspace.list({ cursor: first.nextCursor })).rejects.toMatchObject({ code: 'invalid_input' })
+    await pool.query(`INSERT INTO crm_field_definitions (workspace_id,entity_kind,field_key,label,field_type)
+      SELECT $1,'person','fixture_'||n,'Fixture '||n,'text' FROM generate_series(1,105) n`, [f.workspaceId])
+    const fields: unknown[] = []
+    cursor = null
+    do {
+      const page = await records.fields({ limit: 17, cursor: cursor ?? undefined })
+      fields.push(...page.fields.map((row) => row.id))
+      cursor = page.nextCursor
+    } while (cursor)
+    expect(fields).toHaveLength(105)
+    expect(new Set(fields).size).toBe(105)
+    const window = await records.list({ limit: 100, createdAfter: '2026-01-01T00:00:00.123456Z', createdBefore: '2026-01-01T00:00:00.123457Z' })
+    expect(window.records).toHaveLength(100)
+    expect((await records.list({ limit: 100, createdAfter: '2026-01-01T00:00:00.123456Z', createdBefore: '2026-01-01T00:00:00.123457Z', cursor: window.nextCursor })).records).toHaveLength(5)
   })
   it('prevents ticket, mixed-order, by-id, provider and registration traversal across event grants', async () => {
     const f = await fixture()

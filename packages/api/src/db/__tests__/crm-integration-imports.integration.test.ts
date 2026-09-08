@@ -81,7 +81,7 @@ describe('[COMP:crm/production-import] Actual machine source, job and row author
     expect(audit.rows[0]).toMatchObject({ actor_credential_id: rotated.principal.credentialId })
     const inspection = await f.issue(reading)
     expect(await imports.get(inspection.context, id)).toMatchObject({ id, status: 'completed' })
-    expect((await imports.list(inspection.context)).map((job) => job.id)).toEqual([id])
+    expect((await imports.list(inspection.context)).jobs.map((job) => job.id)).toEqual([id])
     await expect(imports.resume(inspection.context, id)).rejects.toMatchObject({ code: 'integration_scope_denied' })
     await expect(pool.query(`UPDATE crm_import_jobs SET mapping='{}'::jsonb WHERE id=$1`, [id])).rejects.toThrow('immutable')
   })
@@ -114,7 +114,7 @@ describe('[COMP:crm/production-import] Actual machine source, job and row author
       entity_kind,status,mapping,mapping_hash,source_hash,total_rows)
       SELECT workspace_id,source_id,integration_credential_id,$2::jsonb,entity_kind,'completed',mapping,mapping_hash,source_hash,total_rows
       FROM crm_import_jobs CROSS JOIN generate_series(1,52) WHERE id=$1`, [job.id, JSON.stringify(grants.map((grant) => ({ ...grant, selectors: grant.operation === 'crm.records.write' ? {} : { purposeKeys: ['restricted'] } })))])
-    expect((await imports.list(writer.context)).map((row) => row.id)).toEqual([job.id])
+    expect((await imports.list(writer.context)).jobs.map((row) => row.id)).toEqual([job.id])
     const otherJob = (await pool.query(`SELECT id FROM crm_import_jobs WHERE workspace_id=$1 AND id<>$2 LIMIT 1`, [f.workspaceId, job.id])).rows[0].id
     await expect(imports.get(writer.context, otherJob)).rejects.toMatchObject({ code: 'integration_scope_denied' })
     await expect(imports.resume(writer.context, otherJob)).rejects.toMatchObject({ code: 'integration_scope_denied' })

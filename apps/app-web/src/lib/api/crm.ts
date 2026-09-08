@@ -546,11 +546,32 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+// Operations panels consume complete catalogs and lists. Keep the exported SDK
+// array contract while explicitly following the server's bounded continuation.
+async function allCrmPages<Key extends string, Item>(path: string, key: Key, first?: Record<Key, Item[]> & { nextCursor?: string | null }): Promise<Item[]> {
+  const items: Item[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const url = cursor ? `${path}${path.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}` : path;
+    const body = first ?? await jsonRequest<Record<Key, Item[]> & { nextCursor?: string | null }>(url);
+    first = undefined;
+    if (!Array.isArray(body[key])) throw new Error("invalid_crm_page");
+    items.push(...body[key]);
+    if (body.nextCursor != null && (typeof body.nextCursor !== "string" || !body.nextCursor || seen.has(body.nextCursor))) {
+      throw new Error("invalid_crm_cursor");
+    }
+    cursor = body.nextCursor ?? undefined;
+    if (cursor) seen.add(cursor);
+  } while (cursor);
+  return items;
+}
+
 export async function listCrmIntakeDefinitions(workspaceId: string): Promise<CrmIntakeDefinition[]> {
-  const body = await jsonRequest<{ definitions: CrmIntakeDefinition[] }>(
+  return allCrmPages<"definitions", CrmIntakeDefinition>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/intake-definitions`,
+    "definitions",
   );
-  return body.definitions;
 }
 
 export function saveCrmIntakeDefinition(
@@ -565,10 +586,10 @@ export function saveCrmIntakeDefinition(
 }
 
 export async function listCrmIntakeCredentials(workspaceId: string): Promise<CrmIntakeCredential[]> {
-  const body = await jsonRequest<{ credentials: CrmIntakeCredential[] }>(
+  return allCrmPages<"credentials", CrmIntakeCredential>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/intake-credentials`,
+    "credentials",
   );
-  return body.credentials;
 }
 
 export function createCrmIntakeCredential(
@@ -602,10 +623,10 @@ export async function listCrmSubmissions(
   if (filters.ownerUserId) params.set("ownerUserId", filters.ownerUserId);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ submissions: CrmSubmission[] }>(
+  return allCrmPages<"submissions", CrmSubmission>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/submissions${query ? `?${query}` : ""}`,
+    "submissions",
   );
-  return body.submissions;
 }
 
 export async function getCrmSubmission(workspaceId: string, submissionId: string): Promise<CrmSubmission> {
@@ -627,10 +648,10 @@ export function updateCrmSubmission(
 }
 
 export async function listCrmConsentPurposes(workspaceId: string, includeArchived = false): Promise<CrmConsentPurpose[]> {
-  const body = await jsonRequest<{ purposes: CrmConsentPurpose[] }>(
+  return allCrmPages<"purposes", CrmConsentPurpose>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/consent-purposes${includeArchived ? "?includeArchived=true" : ""}`,
+    "purposes",
   );
-  return body.purposes;
 }
 
 export function saveCrmConsentPurpose(
@@ -687,11 +708,27 @@ export async function listCrmSegments(
 ): Promise<{ segments: CrmSegment[]; catalog: CrmSegmentCatalogEntry[] }> {
   const params = new URLSearchParams({ entityKind });
   if (includeArchived) params.set("includeArchived", "true");
-  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/segments?${params}`);
+  const path = `/api/crm/${encodeURIComponent(workspaceId)}/operations/segments?${params}`;
+  const first = await jsonRequest<{ segments: CrmSegment[]; catalog: CrmSegmentCatalogEntry[]; nextCursor?: string | null }>(path);
+  const segments = await allCrmPages<"segments", CrmSegment>(path, "segments", first);
+  return { segments, catalog: first.catalog };
 }
 
-export function previewCrmSegment(workspaceId: string, segmentId: string): Promise<CrmSegmentPreview> {
-  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/segments/${encodeURIComponent(segmentId)}/preview?limit=25&snapshotLimit=1000`);
+export async function previewCrmSegment(workspaceId: string, segmentId: string): Promise<CrmSegmentPreview> {
+  const path = `/api/crm/${encodeURIComponent(workspaceId)}/operations/segments/${encodeURIComponent(segmentId)}/preview?limit=25&snapshotLimit=1000`;
+  const first = await jsonRequest<CrmSegmentPreview & { snapshotNextCursor?: string | null }>(path);
+  const snapshotIds = [...first.snapshotIds];
+  let cursor = first.snapshotNextCursor;
+  const seen = new Set<string>();
+  while (cursor) {
+    if (typeof cursor !== "string" || seen.has(cursor)) throw new Error("invalid_crm_cursor");
+    seen.add(cursor);
+    const page = await jsonRequest<CrmSegmentPreview & { snapshotNextCursor?: string | null }>(`${path}&snapshotCursor=${encodeURIComponent(cursor)}`);
+    if (!Array.isArray(page.snapshotIds)) throw new Error("invalid_crm_page");
+    snapshotIds.push(...page.snapshotIds);
+    cursor = page.snapshotNextCursor;
+  }
+  return { rows: first.rows, count: first.count, snapshotIds };
 }
 
 export function saveCrmSegment(
@@ -737,10 +774,10 @@ export async function listCrmEntitlementPlans(
   if (filters.published !== undefined) params.set("published", String(filters.published));
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ plans: CrmEntitlementPlan[] }>(
+  return allCrmPages<"plans", CrmEntitlementPlan>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/entitlement-plans${query ? `?${query}` : ""}`,
+    "plans",
   );
-  return body.plans;
 }
 
 export async function listCrmEntitlements(
@@ -753,10 +790,10 @@ export async function listCrmEntitlements(
   if (filters.status) params.set("status", filters.status);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ entitlements: CrmEntitlement[] }>(
+  return allCrmPages<"entitlements", CrmEntitlement>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/entitlements${query ? `?${query}` : ""}`,
+    "entitlements",
   );
-  return body.entitlements;
 }
 
 export function grantCrmEntitlement(
@@ -790,10 +827,10 @@ export async function listCrmEvents(
   if (filters.status) params.set("status", filters.status);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ events: CrmEvent[] }>(
+  return allCrmPages<"events", CrmEvent>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/events${query ? `?${query}` : ""}`,
+    "events",
   );
-  return body.events;
 }
 
 export async function listCrmParticipation(
@@ -807,10 +844,10 @@ export async function listCrmParticipation(
   if (filters.sourceKind) params.set("sourceKind", filters.sourceKind);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ participation: CrmParticipation[] }>(
+  return allCrmPages<"participation", CrmParticipation>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/participation${query ? `?${query}` : ""}`,
+    "participation",
   );
-  return body.participation;
 }
 
 export function recordCrmParticipation(
@@ -955,20 +992,20 @@ export async function listCrmOperationsAudit(
   workspaceId: string,
   limit = 50,
 ): Promise<CrmOperationsAuditEntry[]> {
-  const body = await jsonRequest<{ entries: CrmOperationsAuditEntry[] }>(
+  return allCrmPages<"entries", CrmOperationsAuditEntry>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/audit?limit=${limit}`,
+    "entries",
   );
-  return body.entries;
 }
 
 export async function listCrmEventDelivery(
   workspaceId: string,
   limit = 50,
 ): Promise<CrmEventDeliveryEntry[]> {
-  const body = await jsonRequest<{ events: CrmEventDeliveryEntry[] }>(
+  return allCrmPages<"events", CrmEventDeliveryEntry>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/event-delivery?limit=${limit}`,
+    "events",
   );
-  return body.events;
 }
 
 export async function downloadCrmOperationsPrivacyExport(workspaceId: string): Promise<Blob> {

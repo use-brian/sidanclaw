@@ -37,5 +37,6 @@ export {
 export * from './operations-types.js'
 export * from './integration-authority.js'
 export * from './operations-tools.js'
+export * from './pagination.js'
 export * from './sendability.js'
 export * from './segments.js'

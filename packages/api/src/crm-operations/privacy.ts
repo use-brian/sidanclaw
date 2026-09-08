@@ -9,6 +9,8 @@
  */
 
 import type pg from 'pg'
+import type { CrmPageQuery } from '@use-brian/core'
+import { queryCrmPage } from './pagination.js'
 import { getPool, query } from '../db/client.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
@@ -230,32 +232,21 @@ export async function pruneCrmOperationsRetention(
   }
 }
 
-export async function listCrmOperationsAudit(workspaceId: string, limit = 50) {
-  const result = await query<{
-    id: string; action: string; subjectKind: string; subjectId: string
-    actorKind: string; occurredAt: Date; details: Record<string, unknown>
-  }>(
-    `SELECT id,action,subject_kind AS "subjectKind",subject_id AS "subjectId",
-            actor_kind AS "actorKind",created_at AS "occurredAt",metadata AS details
-       FROM association_audit_log
-      WHERE workspace_id=$1 AND action LIKE 'crm.%'
-      ORDER BY created_at DESC,id DESC LIMIT $2`,
-    [workspaceId, Math.min(Math.max(limit, 1), 100)],
-  )
-  return result.rows
+export async function listCrmOperationsAudit(workspaceId: string, filters: CrmPageQuery = {}) {
+  return queryCrmPage(query, { workspaceId, resource: 'crm.audit', key: 'entries', query: filters,
+    sql: `SELECT id,action,subject_kind AS "subjectKind",subject_id AS "subjectId",
+            actor_kind AS "actorKind",created_at AS "occurredAt",created_at AS "createdAt",metadata AS details
+       FROM association_audit_log WHERE workspace_id=$1 AND action LIKE 'crm.%'`,
+    params: [workspaceId],
+  })
 }
 
-export async function listCrmEventDelivery(workspaceId: string, limit = 50) {
-  const result = await query<{
-    id: string; eventType: string; subjectKind: string; subjectId: string
-    status: string; attempts: number; occurredAt: Date; deliveredAt: Date | null
-  }>(
-    `SELECT id,event_type AS "eventType",subject_kind AS "subjectKind",
-            subject_id AS "subjectId",status,attempts,
+export async function listCrmEventDelivery(workspaceId: string, filters: CrmPageQuery = {}) {
+  return queryCrmPage(query, { workspaceId, resource: 'crm.event-delivery', key: 'events', query: filters,
+    sql: `SELECT id,event_type AS "eventType",subject_kind AS "subjectKind",
+            subject_id AS "subjectId",status,attempts,created_at AS "createdAt",
             occurred_at AS "occurredAt",delivered_at AS "deliveredAt"
-       FROM crm_domain_event_outbox
-      WHERE workspace_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT $2`,
-    [workspaceId, Math.min(Math.max(limit, 1), 100)],
-  )
-  return result.rows
+       FROM crm_domain_event_outbox WHERE workspace_id=$1`,
+    params: [workspaceId],
+  })
 }

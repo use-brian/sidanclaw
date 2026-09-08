@@ -6,6 +6,7 @@ import { z } from 'zod'
 import {
   CRM_INTEGRATION_OPERATIONS, CRM_INTEGRATION_RESOURCE_CATALOG,
   CrmOperationsCommandSchema, CrmOperationsError, assertCrmOperationsAuthority,
+  CrmPageQuerySchema, requireCrmIntegrationOperation,
   type CrmOperationsContext, type CrmOperationsServicePort, type AssociationServicePort,
 } from '@use-brian/core'
 import type { CrmIntegrationPrincipal, CrmIntegrationStore } from '../db/crm-integration-store.js'
@@ -15,6 +16,7 @@ import { createCrmIntegrationRecordReadStore } from '../db/crm-integration-recor
 import { MAX_CRM_IMPORT_SOURCE_BYTES, type CrmImportSources } from '../db/crm-import-sources.js'
 import type { CrmProductionImportService } from '../crm-operations/import-service.js'
 import { requireImportOperation } from '../crm-operations/import-authority.js'
+import { listCrmOperationsAudit, listCrmEventDelivery } from '../crm-operations/privacy.js'
 import type { WorkspaceStore } from '../db/workspace-store.js'
 import { associationErrorResponse } from './association.js'
 import { associationMemberContext, crmAssociationRoutes } from './crm-association.js'
@@ -77,8 +79,8 @@ export function crmIntegrationRoutes(options: {
   router.post('/operations/imports', endpoint(async (req, res) => {
     res.status(201).json(await imports().confirm(crmIntegrationContext(principal(res)), req.body))
   }))
-  router.get('/operations/imports', endpoint(async (_req, res) => {
-    res.json({ jobs: await imports().list(crmIntegrationContext(principal(res))) })
+  router.get('/operations/imports', endpoint(async (req, res) => {
+    res.json(await imports().list(crmIntegrationContext(principal(res)), CrmPageQuerySchema.parse(req.query)))
   }))
   router.get('/operations/imports/:id', endpoint(async (req, res) => {
     const job = await imports().get(crmIntegrationContext(principal(res)), UUID.parse(req.params.id))
@@ -94,6 +96,12 @@ export function crmIntegrationRoutes(options: {
     if (csv === null) { res.status(404).json({ error: 'not_found' }); return }
     res.type('text/csv').attachment('crm-import-errors.csv').send(csv)
   }))
+  for (const [path, list] of [['audit', listCrmOperationsAudit], ['event-delivery', listCrmEventDelivery]] as const) {
+    router.get(`/operations/${path}`, endpoint(async (req, res) => {
+      requireCrmIntegrationOperation(principal(res), 'crm.audit.read')
+      res.json(await list(principal(res).workspaceId, CrmPageQuerySchema.parse(req.query)))
+    }))
+  }
   router.get('/operations/records', endpoint(async (req, res) => {
     res.json(await createCrmIntegrationRecordReadStore(principal(res)).list(req.query))
   }))
@@ -102,8 +110,8 @@ export function crmIntegrationRoutes(options: {
     if (!record) { res.status(404).json({ error: 'not_found' }); return }
     res.json({ record })
   }))
-  router.get('/operations/record-fields', endpoint(async (_req, res) => {
-    res.json({ fields: await createCrmIntegrationRecordReadStore(principal(res)).fields() })
+  router.get('/operations/record-fields', endpoint(async (req, res) => {
+    res.json(await createCrmIntegrationRecordReadStore(principal(res)).fields(req.query))
   }))
   router.post('/operations/commands', endpoint(async (req, res) => {
     const context = crmIntegrationContext(principal(res))
@@ -129,15 +137,15 @@ export function crmIntegrationRoutes(options: {
     const result = await options.service.execute(context, command)
     res.status(result.created ? 201 : 200).json(result)
   }))
-  router.get('/operations/intake-definitions', endpoint(async (_req, res) => {
-    res.json({ definitions: await reads(res).listDefinitions(principal(res).workspaceId) })
+  router.get('/operations/intake-definitions', endpoint(async (req, res) => {
+    res.json(await reads(res).listDefinitions(principal(res).workspaceId, CrmPageQuerySchema.parse(req.query)))
   }))
   router.get('/operations/consent-purposes', endpoint(async (req, res) => {
-    const query = z.object({ includeArchived: z.enum(['true', 'false']).optional() }).strict().parse(req.query)
-    res.json({ purposes: await reads(res).listConsentPurposes(principal(res).workspaceId, query.includeArchived === 'true') })
+    const query = CrmPageQuerySchema.extend({ includeArchived: z.enum(['true', 'false']).optional() }).strict().parse(req.query)
+    res.json(await reads(res).listConsentPurposes(principal(res).workspaceId, query.includeArchived === 'true', query))
   }))
   router.get('/operations/submissions', endpoint(async (req, res) => {
-    res.json({ submissions: await reads(res).listSubmissions(principal(res).workspaceId, SubmissionQuery.parse(req.query)) })
+    res.json(await reads(res).listSubmissions(principal(res).workspaceId, SubmissionQuery.parse(req.query)))
   }))
   router.get('/operations/submissions/:id', endpoint(async (req, res) => {
     const submission = await reads(res).getSubmission(principal(res).workspaceId, UUID.parse(req.params.id))
@@ -145,16 +153,16 @@ export function crmIntegrationRoutes(options: {
     res.json({ submission })
   }))
   router.get('/operations/entitlement-plans', endpoint(async (req, res) => {
-    res.json({ plans: await reads(res).listEntitlementPlans(principal(res).workspaceId, EntitlementPlansQuery.parse(req.query)) })
+    res.json(await reads(res).listEntitlementPlans(principal(res).workspaceId, EntitlementPlansQuery.parse(req.query)))
   }))
   router.get('/operations/entitlements', endpoint(async (req, res) => {
-    res.json({ entitlements: await reads(res).listEntitlements(principal(res).workspaceId, EntitlementsQuery.parse(req.query)) })
+    res.json(await reads(res).listEntitlements(principal(res).workspaceId, EntitlementsQuery.parse(req.query)))
   }))
   router.get('/operations/events', endpoint(async (req, res) => {
-    res.json({ events: await reads(res).listEvents(principal(res).workspaceId, EventsQuery.parse(req.query)) })
+    res.json(await reads(res).listEvents(principal(res).workspaceId, EventsQuery.parse(req.query)))
   }))
   router.get('/operations/participation', endpoint(async (req, res) => {
-    res.json({ participation: await reads(res).listParticipation(principal(res).workspaceId, ParticipationQuery.parse(req.query)) })
+    res.json(await reads(res).listParticipation(principal(res).workspaceId, ParticipationQuery.parse(req.query)))
   }))
   router.get('/operations/contacts/:id/consent', endpoint(async (req, res) => {
     res.json(await reads(res).getConsent(principal(res).workspaceId, UUID.parse(req.params.id)))
@@ -186,7 +194,7 @@ export function crmIntegrationCredentialRoutes(options: { workspaceStore: Worksp
   }
   const path = '/:workspaceId/operations/integration-credentials'
   router.get(`${path}/catalog`, endpoint(async (_req, res) => { res.json({ operations: CRM_INTEGRATION_OPERATIONS, selectors: CRM_INTEGRATION_RESOURCE_CATALOG }) }))
-  router.get(path, endpoint(async (_req, res, workspaceId, userId) => { res.json({ credentials: await options.credentials.listForMember(workspaceId, userId) }) }))
+  router.get(path, endpoint(async (req, res, workspaceId, userId) => { res.json(await options.credentials.listForMember(workspaceId, userId, CrmPageQuerySchema.parse(req.query))) }))
   router.post(path, endpoint(async (req, res, workspaceId, userId) => {
     res.status(201).json(await options.credentials.create(workspaceId, userId, CreateCrmIntegrationCredentialSchema.parse(req.body)))
   }))

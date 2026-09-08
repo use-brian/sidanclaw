@@ -13,6 +13,7 @@ import {
   type SendabilityVerdict,
 } from './sendability.js'
 import { CrmSegmentPredicateSchema } from './segments.js'
+import type { CrmPage, CrmPageQuery } from './pagination.js'
 import {
   CrmExternalIdentityClaimSchema,
   CrmOperationsError,
@@ -26,15 +27,15 @@ import {
 } from './operations-types.js'
 
 export type CrmOperationsReadPort = {
-  listIntakeDefinitions(workspaceId: string): Promise<Array<Record<string, unknown>>>
-  listSubmissions(workspaceId: string, filters?: {
+  listIntakeDefinitions(workspaceId: string, filters?: CrmPageQuery): Promise<CrmPage<'definitions'>>
+  listSubmissions(workspaceId: string, filters?: CrmPageQuery & {
     status?: 'new' | 'in_progress' | 'resolved' | 'spam'
     definitionKey?: string
     ownerUserId?: string
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
+  }): Promise<CrmPage<'submissions'>>
   getSubmission(workspaceId: string, submissionId: string): Promise<Record<string, unknown> | null>
-  listConsentPurposes(workspaceId: string, includeArchived?: boolean): Promise<Array<Record<string, unknown>>>
+  listConsentPurposes(workspaceId: string, includeArchived?: boolean, page?: CrmPageQuery): Promise<CrmPage<'purposes'>>
   getConsent(workspaceId: string, contactId: string): Promise<{
     purposes: Array<Record<string, unknown>>
     events: Array<Record<string, unknown>>
@@ -46,47 +47,46 @@ export type CrmOperationsReadPort = {
     channel: z.infer<typeof CrmDeliveryChannelSchema>,
     purposeKey: string,
   ): Promise<SendabilityVerdict>
-  listSegments(workspaceId: string, filters?: {
+  listSegments(workspaceId: string, filters?: CrmPageQuery & {
     entityKind?: 'person' | 'company' | 'deal'
     includeArchived?: boolean
-  }): Promise<{
-    segments: Array<Record<string, unknown>>
-    catalog: Array<Record<string, unknown>>
-  }>
+  }): Promise<CrmPage<'segments'> & { catalog: Array<Record<string, unknown>> }>
   getSegment(workspaceId: string, segmentId: string): Promise<Record<string, unknown> | null>
-  previewSegment(workspaceId: string, segmentId: string, options?: {
-    limit?: number
+  previewSegment(workspaceId: string, segmentId: string, options?: CrmPageQuery & {
     snapshotLimit?: number
+    snapshotCursor?: string
   }): Promise<{
     rows: Array<Record<string, unknown>>
     count: number
     snapshotIds: string[]
+    nextCursor: string | null
+    snapshotNextCursor: string | null
   }>
-  listEntitlementPlans(workspaceId: string, filters?: {
+  listEntitlementPlans(workspaceId: string, filters?: CrmPageQuery & {
     published?: boolean
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listEntitlements(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'plans'>>
+  listEntitlements(workspaceId: string, filters?: CrmPageQuery & {
     contactId?: string
     planId?: string
     status?: 'pending' | 'active' | 'expired' | 'cancelled'
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listEvents(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'entitlements'>>
+  listEvents(workspaceId: string, filters?: CrmPageQuery & {
     status?: 'draft' | 'published' | 'cancelled' | 'completed'
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listParticipation(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'events'>>
+  listParticipation(workspaceId: string, filters?: CrmPageQuery & {
     contactId?: string
     eventId?: string
     status?: 'registered' | 'attended' | 'cancelled' | 'no_show'
     sourceKind?: 'commerce' | 'manual' | 'form' | 'workflow' | 'import'
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listPipelines(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'participation'>>
+  listPipelines(workspaceId: string, filters?: CrmPageQuery & {
     entityKind?: 'deal'
     includeArchived?: boolean
-  }): Promise<Array<Record<string, unknown>>>
+  }): Promise<CrmPage<'pipelines'>>
 }
 
 export type CrmOperationsTools = {
@@ -116,7 +116,18 @@ export type CrmOperationsTools = {
   setDealPipelineStage: Tool
 }
 
+const PageInput = {
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(4096).optional(),
+  created_after: z.string().datetime({ offset: true }).optional(),
+  created_before: z.string().datetime({ offset: true }).optional(),
+}
+function pageFilters(input: { limit?: number; cursor?: string; created_after?: string; created_before?: string }): CrmPageQuery {
+  return { limit: input.limit, cursor: input.cursor, createdAfter: input.created_after, createdBefore: input.created_before }
+}
+
 const SubmissionFiltersSchema = z.object({
+  ...PageInput,
   status: z.enum(['new', 'in_progress', 'resolved', 'spam']).optional(),
   definition_key: CrmOperationsStableKeySchema.optional(),
   owner_user_id: CrmOperationsUuidSchema.optional(),
@@ -288,15 +299,6 @@ export function createCrmOperationsTools(options: {
   reads: CrmOperationsReadPort
   service: CrmOperationsServicePort
 }): CrmOperationsTools {
-  const read = <T>(run: (workspaceId: string) => Promise<T>) => async (_input: unknown, context: ToolContext) => {
-    const workspace = workspaceId(context)
-    if (!workspace) return workspaceError()
-    try {
-      return { data: await run(workspace) }
-    } catch (error) {
-      return failure(error)
-    }
-  }
   const write = <T extends CrmOperationsCommand>(
     command: (input: Record<string, unknown>) => T,
   ) => async (input: Record<string, unknown>, context: ToolContext) => {
@@ -311,20 +313,25 @@ export function createCrmOperationsTools(options: {
 
   const listCrmIntakeDefinitions = buildTool({
     name: 'listCrmIntakeDefinitions', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List the active and archived CRM intake definitions in this workspace, including stable definition keys, versions, field catalogs, identity policy, routing, and payload limits. Use a returned definition_key rather than guessing one.',
-    inputSchema: z.object({}).strict(),
-    execute: read((workspace) => options.reads.listIntakeDefinitions(workspace)),
+    description: 'List the active and archived CRM intake definitions in this workspace, including stable definition keys, versions, field catalogs, identity policy, routing, and payload limits. Use a returned definition_key rather than guessing one. Follow nextCursor with the same filters until it is null.',
+    inputSchema: z.object(PageInput).strict(),
+    async execute(input, context) {
+      const workspace = workspaceId(context)
+      if (!workspace) return workspaceError()
+      try { return { data: await options.reads.listIntakeDefinitions(workspace, pageFilters(input)) } }
+      catch (error) { return failure(error) }
+    },
   })
   const listCrmSubmissions = buildTool({
     name: 'listCrmSubmissions', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List CRM intake submissions with bounded status, definition, owner, and limit filters. Returns stable submission and contact ids. Use getCrmSubmission for the complete captured fields and notes.',
+    description: 'List CRM intake submissions with bounded status, definition, owner, and limit filters. Returns stable submission and contact ids. Use getCrmSubmission for the complete captured fields and notes. Follow nextCursor with the same filters until it is null.',
     inputSchema: SubmissionFiltersSchema,
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listSubmissions(workspace, {
-          status: input.status,
+          ...pageFilters(input), status: input.status,
           definitionKey: input.definition_key,
           ownerUserId: input.owner_user_id,
           limit: input.limit,
@@ -347,12 +354,12 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmConsentPurposes = buildTool({
     name: 'listCrmConsentPurposes', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate the workspace consent-purpose catalog, including stable purpose keys, applicable channels, consent requirement, wording version, and archive state. Use a returned purpose_key for consent and sendability calls.',
-    inputSchema: z.object({ include_archived: z.boolean().default(false) }).strict(),
+    description: 'Enumerate the workspace consent-purpose catalog, including stable purpose keys, applicable channels, consent requirement, wording version, and archive state. Use a returned purpose_key for consent and sendability calls. Follow nextCursor with the same filters until it is null.',
+    inputSchema: z.object({ ...PageInput, include_archived: z.boolean().default(false) }).strict(),
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
-      try { return { data: await options.reads.listConsentPurposes(workspace, input.include_archived) } }
+      try { return { data: await options.reads.listConsentPurposes(workspace, input.include_archived, pageFilters(input)) } }
       catch (error) { return failure(error) }
     },
   })
@@ -384,8 +391,9 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmSegments = buildTool({
     name: 'listCrmSegments', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List workspace-shared dynamic CRM segments and their bounded predicates. Optionally filter by entity kind. Returns stable segment ids and keys; use previewCrmSegment to evaluate current membership.',
+    description: 'List workspace-shared dynamic CRM segments and their bounded predicates. Optionally filter by entity kind. Returns stable segment ids and keys; use previewCrmSegment to evaluate current membership. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       entity_kind: z.enum(['person', 'company', 'deal']).default('person'),
       include_archived: z.boolean().default(false),
     }).strict(),
@@ -394,6 +402,7 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listSegments(workspace, {
+          ...pageFilters(input),
           entityKind: input.entity_kind,
           includeArchived: input.include_archived,
         }) }
@@ -402,9 +411,11 @@ export function createCrmOperationsTools(options: {
   })
   const previewCrmSegment = buildTool({
     name: 'previewCrmSegment', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Evaluate one saved CRM segment at read time. Returns a bounded row preview, the complete count, and a bounded stable-id snapshot suitable for workflow input or export. Unknown catalog fields fail closed with valid choices.',
+    description: 'Evaluate one saved CRM segment at read time. Returns a row preview, complete current count and stable-id page. Continue rows with nextCursor/cursor and IDs with snapshotNextCursor/snapshot_cursor until null; keep the same segment and filters. A dynamic snapshot is not continuing send permission. Unknown catalog fields fail closed with valid choices.',
     inputSchema: z.object({
+      ...PageInput,
       segment_id: CrmOperationsUuidSchema,
+      snapshot_cursor: z.string().min(1).max(4096).optional(),
       limit: z.number().int().min(1).max(100).default(25),
       snapshot_limit: z.number().int().min(1).max(10_000).default(1_000),
     }).strict(),
@@ -413,30 +424,33 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.previewSegment(workspace, input.segment_id, {
-          limit: input.limit,
+          ...pageFilters(input),
           snapshotLimit: input.snapshot_limit,
+          snapshotCursor: input.snapshot_cursor,
         }) }
       } catch (error) { return failure(error) }
     },
   })
   const listCrmEntitlementPlans = buildTool({
     name: 'listCrmEntitlementPlans', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate CRM entitlement plans with stable plan ids and keys, lifecycle dates, publication state, and any provider or fee metadata. Use returned ids for entitlement grants instead of guessing labels.',
+    description: 'Enumerate CRM entitlement plans with stable plan ids and keys, lifecycle dates, publication state, and any provider or fee metadata. Use returned ids for entitlement grants instead of guessing labels. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       published: z.boolean().optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }).strict(),
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
-      try { return { data: await options.reads.listEntitlementPlans(workspace, input) } }
+      try { return { data: await options.reads.listEntitlementPlans(workspace, { ...pageFilters(input), published: input.published }) } }
       catch (error) { return failure(error) }
     },
   })
   const listCrmEntitlements = buildTool({
     name: 'listCrmEntitlements', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List canonical CRM entitlements with bounded contact, plan, and lifecycle-status filters. Results reuse Association membership ids and include stable plan keys.',
+    description: 'List canonical CRM entitlements with bounded contact, plan, and lifecycle-status filters. Results reuse Association membership ids and include stable plan keys. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       contact_id: CrmOperationsUuidSchema.optional(),
       plan_id: CrmOperationsUuidSchema.optional(),
       status: EntitlementStatusSchema.optional(),
@@ -447,6 +461,7 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listEntitlements(workspace, {
+          ...pageFilters(input),
           contactId: input.contact_id, planId: input.plan_id,
           status: input.status, limit: input.limit,
         }) }
@@ -455,22 +470,24 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmEvents = buildTool({
     name: 'listCrmEvents', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate CRM events over the existing Association event catalog, including stable event ids and slugs, schedule, status, capacity, and whether ticket commerce is configured.',
+    description: 'Enumerate CRM events over the existing Association event catalog, including stable event ids and slugs, schedule, status, capacity, and whether ticket commerce is configured. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       status: z.enum(['draft', 'published', 'cancelled', 'completed']).optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }).strict(),
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
-      try { return { data: await options.reads.listEvents(workspace, input) } }
+      try { return { data: await options.reads.listEvents(workspace, { ...pageFilters(input), status: input.status }) } }
       catch (error) { return failure(error) }
     },
   })
   const listCrmParticipation = buildTool({
     name: 'listCrmParticipation', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List canonical event participation with bounded contact, event, status, and source filters. Commerce-created registrations are mapped to generic lifecycle statuses and marked commerce_managed.',
+    description: 'List canonical event participation with bounded contact, event, status, and source filters. Commerce-created registrations are mapped to generic lifecycle statuses and marked commerce_managed. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       contact_id: CrmOperationsUuidSchema.optional(),
       event_id: CrmOperationsUuidSchema.optional(),
       status: ParticipationStatusSchema.optional(),
@@ -482,6 +499,7 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listParticipation(workspace, {
+          ...pageFilters(input),
           contactId: input.contact_id, eventId: input.event_id,
           status: input.status, sourceKind: input.source_kind, limit: input.limit,
         }) }
@@ -490,8 +508,9 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmPipelines = buildTool({
     name: 'listCrmPipelines', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate the live deal pipeline catalog for this workspace, including stable pipeline and stage ids, keys, labels, categories, order, probability, required fields, and archive state. Call this before moving a deal and never guess a stage from prose.',
+    description: 'Enumerate the live deal pipeline catalog for this workspace, including stable pipeline and stage ids, keys, labels, categories, order, probability, required fields, and archive state. Call this before moving a deal and never guess a stage from prose. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       entity_kind: z.literal('deal').default('deal'),
       include_archived: z.boolean().default(false),
     }).strict(),
@@ -500,6 +519,8 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listPipelines(workspace, {
+          ...pageFilters(input),
+          ...pageFilters(input),
           entityKind: input.entity_kind,
           includeArchived: input.include_archived,
         }) }

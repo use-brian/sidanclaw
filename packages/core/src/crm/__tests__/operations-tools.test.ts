@@ -29,24 +29,24 @@ function context(patch: Partial<ToolContext> = {}): ToolContext {
 }
 
 const reads: CrmOperationsReadPort = {
-  listIntakeDefinitions: vi.fn(async () => [{ definitionKey: 'website_contact' }]),
-  listSubmissions: vi.fn(async () => [{ id: 'submission-1' }]),
+  listIntakeDefinitions: vi.fn(async () => ({ definitions: [{ definitionKey: 'website_contact' }], nextCursor: null })),
+  listSubmissions: vi.fn(async () => ({ submissions: [{ id: 'submission-1' }], nextCursor: null })),
   getSubmission: vi.fn(async () => ({ id: 'submission-1' })),
-  listConsentPurposes: vi.fn(async () => [{ purposeKey: 'marketing' }]),
+  listConsentPurposes: vi.fn(async () => ({ purposes: [{ purposeKey: 'marketing' }], nextCursor: null })),
   getConsent: vi.fn(async () => ({ purposes: [], events: [], suppressions: [] })),
   checkSendability: vi.fn(async () => ({
     verdict: 'unknown' as const,
     reasons: ['consent_not_recorded' as const],
     effectiveSuppressionEventIds: [],
   })),
-  listSegments: vi.fn(async () => ({ segments: [], catalog: [] })),
+  listSegments: vi.fn(async () => ({ segments: [], catalog: [], nextCursor: null })),
   getSegment: vi.fn(async () => null),
-  previewSegment: vi.fn(async () => ({ rows: [], count: 0, snapshotIds: [] })),
-  listEntitlementPlans: vi.fn(async () => [{ id: 'plan-1', planKey: 'member' }]),
-  listEntitlements: vi.fn(async () => [{ id: 'entitlement-1', contactId: CONTACT_ID }]),
-  listEvents: vi.fn(async () => [{ id: 'event-1', slug: 'annual-meeting' }]),
-  listParticipation: vi.fn(async () => [{ id: 'participation-1', contactId: CONTACT_ID }]),
-  listPipelines: vi.fn(async () => [{ id: 'pipeline-1', stages: [{ id: 'stage-1' }] }]),
+  previewSegment: vi.fn(async () => ({ rows: [], count: 0, snapshotIds: [], nextCursor: null, snapshotNextCursor: null })),
+  listEntitlementPlans: vi.fn(async () => ({ plans: [{ id: 'plan-1', planKey: 'member' }], nextCursor: null })),
+  listEntitlements: vi.fn(async () => ({ entitlements: [{ id: 'entitlement-1', contactId: CONTACT_ID }], nextCursor: null })),
+  listEvents: vi.fn(async () => ({ events: [{ id: 'event-1', slug: 'annual-meeting' }], nextCursor: null })),
+  listParticipation: vi.fn(async () => ({ participation: [{ id: 'participation-1', contactId: CONTACT_ID }], nextCursor: null })),
+  listPipelines: vi.fn(async () => ({ pipelines: [{ id: 'pipeline-1', stages: [{ id: 'stage-1' }] }], nextCursor: null })),
 }
 const execute = vi.fn<CrmOperationsServicePort['execute']>(async (_ctx, command) => ({
   command: command.kind,
@@ -86,6 +86,7 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
     expect(output.isError).toBeFalsy()
     expect(reads.listSubmissions).toHaveBeenCalledWith(WORKSPACE_ID, {
       status: 'new', definitionKey: 'website_contact', ownerUserId: undefined, limit: 20,
+      cursor: undefined, createdAfter: undefined, createdBefore: undefined,
     })
   })
 
@@ -103,6 +104,15 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
     expect(command).toMatchObject({ kind: 'update_submission', submissionId: CONTACT_ID, status: 'in_progress' })
     expect(command).not.toHaveProperty('workspaceId')
     expect(command).not.toHaveProperty('actor')
+  })
+
+  it('exposes a named page and forwards the cursor and time window without widening the query', async () => {
+    vi.mocked(reads.listEvents).mockResolvedValueOnce({ events: [{ id: 'fixture-event' }], nextCursor: 'next-page' })
+    const output = await tools.listCrmEvents.execute({ cursor: 'previous-page', limit: 17,
+      status: 'published', created_after: '2026-01-01T00:00:00Z' }, context())
+    expect(output.data).toEqual({ events: [{ id: 'fixture-event' }], nextCursor: 'next-page' })
+    expect(reads.listEvents).toHaveBeenCalledWith(WORKSPACE_ID, { cursor: 'previous-page', limit: 17,
+      status: 'published', createdAfter: '2026-01-01T00:00:00Z', createdBefore: undefined })
   })
 
   it('preserves the authenticated Brain credential family in service audit context', async () => {
@@ -167,7 +177,8 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
   it('enumerates custom stages and moves deals only by catalog ids', async () => {
     await tools.listCrmPipelines.execute({ entity_kind: 'deal', include_archived: false }, context())
     expect(reads.listPipelines).toHaveBeenCalledWith(WORKSPACE_ID, {
-      entityKind: 'deal', includeArchived: false,
+      entityKind: 'deal', includeArchived: false, limit: undefined,
+      cursor: undefined, createdAfter: undefined, createdBefore: undefined,
     })
     const stageId = '00000000-0000-4000-8000-000000000007'
     const pipelineId = '00000000-0000-4000-8000-000000000008'

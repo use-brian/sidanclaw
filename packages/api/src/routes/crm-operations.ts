@@ -13,8 +13,10 @@ import {
   CrmDeliveryChannelSchema,
   GrantCrmEntitlementCommandSchema,
   CrmOperationsError,
+  CrmIntegrationScopeError,
   CrmOperationsStableKeySchema,
   CrmOperationsUuidSchema,
+  CrmPageQuerySchema,
   RecordCrmConsentCommandSchema,
   RecordCrmParticipationCommandSchema,
   RecordCrmSuppressionCommandSchema,
@@ -83,7 +85,7 @@ const SuppressionBody = z.object({
   (value) => (value.provider === undefined) === (value.providerEventId === undefined),
   'provider and providerEventId must be supplied together',
 )
-export const SubmissionQuery = z.object({
+export const SubmissionQuery = CrmPageQuerySchema.extend({
   status: z.enum(['new', 'in_progress', 'resolved', 'spam']).optional(),
   definitionKey: CrmOperationsStableKeySchema.optional(),
   ownerUserId: CrmOperationsUuidSchema.optional(),
@@ -95,31 +97,32 @@ export const SendabilityQuery = z.object({
 }).strict()
 const SaveSegmentCreateBody = SaveCrmSegmentCommandSchema.omit({ kind: true, segmentId: true }).strict()
 const SaveSegmentUpdateBody = SaveCrmSegmentCommandSchema.omit({ kind: true, segmentId: true }).strict()
-const SegmentListQuery = z.object({
+const SegmentListQuery = CrmPageQuerySchema.extend({
   entityKind: z.enum(['person', 'company', 'deal']).default('person'),
   includeArchived: z.enum(['true', 'false']).optional(),
 }).strict()
-const SegmentPreviewQuery = z.object({
+const SegmentPreviewQuery = CrmPageQuerySchema.extend({
+  snapshotCursor: z.string().min(1).max(4096).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   snapshotLimit: z.coerce.number().int().min(1).max(10_000).default(1_000),
 }).strict()
 const EntitlementStatus = z.enum(['pending', 'active', 'expired', 'cancelled'])
 const ParticipationStatus = z.enum(['registered', 'attended', 'cancelled', 'no_show'])
-export const EntitlementPlansQuery = z.object({
+export const EntitlementPlansQuery = CrmPageQuerySchema.extend({
   published: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-export const EntitlementsQuery = z.object({
+export const EntitlementsQuery = CrmPageQuerySchema.extend({
   contactId: CrmOperationsUuidSchema.optional(),
   planId: CrmOperationsUuidSchema.optional(),
   status: EntitlementStatus.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-export const EventsQuery = z.object({
+export const EventsQuery = CrmPageQuerySchema.extend({
   status: z.enum(['draft', 'published', 'cancelled', 'completed']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-export const ParticipationQuery = z.object({
+export const ParticipationQuery = CrmPageQuerySchema.extend({
   contactId: CrmOperationsUuidSchema.optional(),
   eventId: CrmOperationsUuidSchema.optional(),
   status: ParticipationStatus.optional(),
@@ -150,15 +153,13 @@ const UpdateEntitlementBody = z.object({
 )
 const RecordParticipationBody = RecordCrmParticipationCommandSchema.omit({ kind: true }).strict()
 const UpdateParticipationBody = UpdateCrmParticipationCommandSchema.omit({ kind: true, participationId: true }).strict()
-const PipelineListQuery = z.object({
+const PipelineListQuery = CrmPageQuerySchema.extend({
   entityKind: z.literal('deal').default('deal'),
   includeArchived: z.enum(['true', 'false']).optional(),
 }).strict()
 const SetPipelineStageBody = SetDealPipelineStageCommandSchema
   .omit({ kind: true, dealId: true }).strict()
-const OperationsLogQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-}).strict()
+const OperationsLogQuery = CrmPageQuerySchema
 const RetentionBody = z.object({
   before: z.string().datetime({ offset: true }),
   confirmed: z.literal(true),
@@ -172,6 +173,14 @@ type Options = {
 }
 
 function writeError(res: Response, error: unknown): void {
+  if (error instanceof CrmIntegrationScopeError) {
+    res.status(403).json({ error: error.code, message: error.message })
+    return
+  }
+  if (error instanceof z.ZodError) {
+    res.status(400).json({ error: 'invalid_input', issues: error.issues })
+    return
+  }
   if (error instanceof CrmOperationsError) {
     const status = error.code === 'not_found' ? 404
       : error.code === 'not_authorized' ? 403
@@ -214,7 +223,7 @@ export function crmOperationsRoutes(options: Options): Router {
     const ctx = await context(req, res)
     if (!ctx) return
     try {
-      res.json({ definitions: await options.readStore.listDefinitions(ctx.workspaceId) })
+      res.json(await options.readStore.listDefinitions(ctx.workspaceId, CrmPageQuerySchema.parse(req.query)))
     } catch (error) {
       writeError(res, error)
     }
@@ -244,7 +253,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ credentials: await options.readStore.listCredentials(ctx.workspaceId) })
+      res.json(await options.readStore.listCredentials(ctx.workspaceId, CrmPageQuerySchema.parse(req.query)))
     } catch (error) {
       writeError(res, error)
     }
@@ -287,7 +296,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ submissions: await options.readStore.listSubmissions(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listSubmissions(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -326,9 +335,8 @@ export function crmOperationsRoutes(options: Options): Router {
     const ctx = await context(req, res)
     if (!ctx) return
     try {
-      res.json({ purposes: await options.readStore.listConsentPurposes(
-        ctx.workspaceId, req.query.includeArchived === 'true',
-      ) })
+      const filters = CrmPageQuerySchema.extend({ includeArchived: z.enum(['true', 'false']).optional() }).parse(req.query)
+      res.json(await options.readStore.listConsentPurposes(ctx.workspaceId, filters.includeArchived === 'true', filters))
     } catch (error) { writeError(res, error) }
   })
 
@@ -416,6 +424,7 @@ export function crmOperationsRoutes(options: Options): Router {
     }
     try {
       res.json(await options.readStore.listSegments(ctx.workspaceId, {
+        ...parsed.data,
         entityKind: parsed.data.entityKind,
         includeArchived: parsed.data.includeArchived === 'true',
       }))
@@ -525,7 +534,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ plans: await options.readStore.listEntitlementPlans(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listEntitlementPlans(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -538,7 +547,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ entitlements: await options.readStore.listEntitlements(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listEntitlements(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -593,7 +602,7 @@ export function crmOperationsRoutes(options: Options): Router {
       res.status(400).json({ error: 'invalid_input', issues: filters.error.issues })
       return
     }
-    try { res.json({ events: await options.readStore.listEvents(ctx.workspaceId, filters.data) }) }
+    try { res.json(await options.readStore.listEvents(ctx.workspaceId, filters.data)) }
     catch (error) { writeError(res, error) }
   })
 
@@ -606,7 +615,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ participation: await options.readStore.listParticipation(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listParticipation(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -651,10 +660,9 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ pipelines: await options.readStore.listPipelines(ctx.workspaceId, {
-        entityKind: filters.data.entityKind,
-        includeArchived: filters.data.includeArchived === 'true',
-      }) })
+      res.json(await options.readStore.listPipelines(ctx.workspaceId, {
+        ...filters.data, includeArchived: filters.data.includeArchived === 'true',
+      }))
     } catch (error) { writeError(res, error) }
   })
 
@@ -721,7 +729,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ jobs: await options.importService.list(ctx) })
+      res.json(await options.importService.list(ctx, CrmPageQuerySchema.parse(req.query)))
     } catch (error) { writeError(res, error) }
   })
 
@@ -815,7 +823,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ entries: await listCrmOperationsAudit(ctx.workspaceId, filters.data.limit) })
+      res.json(await listCrmOperationsAudit(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -828,7 +836,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ events: await listCrmEventDelivery(ctx.workspaceId, filters.data.limit) })
+      res.json(await listCrmEventDelivery(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 

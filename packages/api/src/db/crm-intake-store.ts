@@ -8,6 +8,7 @@
 
 import {
   CrmOperationsError,
+  type CrmPage, type CrmPageQuery,
   CrmIntegrationScopeError,
   crmIntegrationResourceSelection, requireCrmIntegrationOperation, requireCrmIntegrationResources,
   type CrmIntegrationAuthority, type CrmIntegrationOperation, type CrmIntegrationSelector,
@@ -16,6 +17,7 @@ import {
   type CrmOperationsReadPort,
 } from '@use-brian/core'
 import { query } from './client.js'
+import { queryCrmPage } from '../crm-operations/pagination.js'
 import { verifySecret } from './api-key-store.js'
 import { createDbCrmSegmentStore } from './crm-segment-store.js'
 
@@ -47,8 +49,8 @@ type AuthRow = CrmIntakePrincipal & {
 
 export type CrmIntakeReadStore = {
   authenticate(token: string, definitionKey: string): Promise<CrmIntakePrincipal | null>
-  listDefinitions(workspaceId: string): Promise<Array<Record<string, unknown>>>
-  listCredentials(workspaceId: string): Promise<Array<Record<string, unknown>>>
+  listDefinitions(workspaceId: string, filters?: CrmPageQuery): Promise<CrmPage<'definitions'>>
+  listCredentials(workspaceId: string, filters?: CrmPageQuery): Promise<CrmPage<'credentials'>>
 }
 
 export type DbCrmOperationsReadStore = CrmIntakeReadStore & CrmOperationsReadPort & {
@@ -72,9 +74,12 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
     if (!integration) return null
     authorize(workspaceId, operation)
     const allowed = crmIntegrationResourceSelection(integration, operation, dimension)
-    return allowed === 'all' ? null : allowed
+    return allowed === 'all' ? null : [...allowed].sort()
   }
 
+  const page = <Key extends string>(key: Key, workspaceId: string, filters: CrmPageQuery, sql: string, params: unknown[]) =>
+    queryCrmPage(query, { workspaceId, resource: `crm.${key}`, key, sql, params,
+      query: { limit: filters.limit, cursor: filters.cursor, createdAfter: filters.createdAfter, createdBefore: filters.createdBefore } })
   const segmentStore = createDbCrmSegmentStore()
   const authorizeSegments = (workspaceId: string) => {
     if (!integration) return
@@ -86,8 +91,8 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
     requireCrmIntegrationResources(integration, 'crm.entitlements.read', { planIds: null })
     requireCrmIntegrationResources(integration, 'crm.participation.read', { eventIds: null })
   }
-  const listDefinitions = async (workspaceId: string) => {
-    const result = await query<Record<string, unknown>>(
+  const listDefinitions = async (workspaceId: string, filters: CrmPageQuery = {}) => {
+    return page('definitions', workspaceId, filters,
       `SELECT d.id, d.definition_key AS "definitionKey", d.label, d.active,
               d.current_version AS "currentVersion", v.field_catalog AS fields,
               v.identity_policy AS "identityPolicy",
@@ -103,16 +108,13 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
          JOIN crm_intake_definition_versions v
            ON v.workspace_id = d.workspace_id AND v.definition_id = d.id
           AND v.version = d.current_version
-        WHERE d.workspace_id = $1 AND ($2::uuid[] IS NULL OR d.id=ANY($2::uuid[]))
-        ORDER BY d.label, d.id
-        LIMIT 200`,
+        WHERE d.workspace_id = $1 AND ($2::uuid[] IS NULL OR d.id=ANY($2::uuid[]))`,
       [workspaceId, select(workspaceId, 'crm.catalog.read', 'definitionIds')],
     )
-    return result.rows
   }
 
-  const listConsentPurposes = async (workspaceId: string, includeArchived = false, operation: CrmIntegrationOperation = 'crm.catalog.read') => {
-    const result = await query<Record<string, unknown>>(
+  const listConsentPurposes = async (workspaceId: string, includeArchived = false, filters: CrmPageQuery = {}, operation: CrmIntegrationOperation = 'crm.catalog.read') => {
+    return page('purposes', workspaceId, filters,
       `SELECT id, purpose_key AS "purposeKey", label, description,
               requires_consent AS "requiresConsent",
               applicable_channels AS "applicableChannels",
@@ -122,12 +124,9 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
               updated_at AS "updatedAt"
          FROM crm_consent_purposes
         WHERE workspace_id=$1 AND ($2::boolean OR archived_at IS NULL)
-          AND ($3::text[] IS NULL OR purpose_key=ANY($3::text[]))
-        ORDER BY label, id
-        LIMIT 200`,
+          AND ($3::text[] IS NULL OR purpose_key=ANY($3::text[]))`,
       [workspaceId, includeArchived, select(workspaceId, operation, 'purposeKeys')],
     )
-    return result.rows
   }
 
   return {
@@ -185,9 +184,9 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
       return result.rows[0] ?? null
     },
 
-    async listCredentials(workspaceId) {
+    async listCredentials(workspaceId, filters = {}) {
       if (integration) throw new CrmOperationsError('not_authorized', 'Integration credentials cannot administer intake credentials.')
-      const result = await query<Record<string, unknown>>(
+      return page('credentials', workspaceId, filters,
         `SELECT c.id, c.label, c.secret_prefix AS prefix,
                 c.revoked_at AS "revokedAt", c.last_used_at AS "lastUsedAt",
                 c.created_at AS "createdAt",
@@ -197,17 +196,13 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
            LEFT JOIN crm_intake_credential_definitions b
              ON b.workspace_id = c.workspace_id AND b.credential_id = c.id
           WHERE c.workspace_id = $1
-          GROUP BY c.id
-          ORDER BY c.created_at DESC, c.id DESC
-          LIMIT 200`,
+          GROUP BY c.id`,
         [workspaceId],
       )
-      return result.rows
     },
 
     async listSubmissions(workspaceId, filters = {}) {
-      const limit = Math.min(100, Math.max(1, filters.limit ?? 50))
-      const result = await query<Record<string, unknown>>(
+      return page('submissions', workspaceId, filters,
         `SELECT e.id, e.contact_id AS "contactId", c.display_name AS "contactName",
                 e.definition_id AS "definitionId", d.definition_key AS "definitionKey",
                 d.label AS "definitionLabel", e.status, e.queue_key AS "queueKey",
@@ -222,13 +217,10 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
             AND ($2::text IS NULL OR e.status=$2)
             AND ($3::text IS NULL OR d.definition_key=$3)
             AND ($4::uuid IS NULL OR e.owner_user_id=$4)
-            AND ($6::uuid[] IS NULL OR e.definition_id=ANY($6::uuid[]))
-          ORDER BY e.submitted_at DESC, e.id DESC
-          LIMIT $5`,
+            AND ($5::uuid[] IS NULL OR e.definition_id=ANY($5::uuid[]))`,
         [workspaceId, filters.status ?? null, filters.definitionKey ?? null,
-          filters.ownerUserId ?? null, limit, select(workspaceId, 'crm.submissions.read', 'definitionIds')],
+          filters.ownerUserId ?? null, select(workspaceId, 'crm.submissions.read', 'definitionIds')],
       )
-      return result.rows
     },
 
     async getSubmission(workspaceId, submissionId) {
@@ -265,39 +257,60 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
       if (purposesAllowed?.length === 0) throw new CrmIntegrationScopeError('crm.consent.read', 'purposeKeys')
       const contact = await query(`SELECT 1 FROM entities WHERE workspace_id=$1 AND id=$2 AND kind='person'`, [workspaceId, contactId])
       if (contact.rowCount !== 1) throw new CrmOperationsError('not_found', 'CRM contact was not found.')
+      const evidence = async (resource: string, sql: string, params: unknown[]) => {
+        const rows: Record<string, unknown>[] = []
+        let cursor: string | undefined
+        do {
+          const page = await queryCrmPage(query, { workspaceId, resource, key: 'rows', sql, params, query: { limit: 100, cursor } })
+          rows.push(...page.rows)
+          cursor = page.nextCursor ?? undefined
+        } while (cursor)
+        // Keep the legacy occurrence-time display order after complete traversal.
+        rows.sort((a, b) => String(b.occurredAt).localeCompare(String(a.occurredAt))
+          || String(b.__recordedAt).localeCompare(String(a.__recordedAt)) || String(b.id).localeCompare(String(a.id)))
+        return rows.map(({ __recordedAt: _recordedAt, ...row }) => row)
+      }
       const [purposes, events, suppressions] = await Promise.all([
-        listConsentPurposes(workspaceId, true, 'crm.consent.read'),
-        query<Record<string, unknown>>(
+        (async () => {
+          const all: Record<string, unknown>[] = []
+          let cursor: string | undefined
+          do {
+            const result = await listConsentPurposes(workspaceId, true, { limit: 100, cursor }, 'crm.consent.read')
+            all.push(...result.purposes)
+            cursor = result.nextCursor ?? undefined
+          } while (cursor)
+          return all
+        })(),
+        evidence('crm.contact-consent',
           `SELECT e.id, e.purpose_id AS "purposeId", e.purpose AS "purposeKey",
                   e.action, e.wording_version AS "wordingVersion",
                   e.wording_hash AS "wordingHash", e.wording_snapshot AS wording,
-                  e.source, e.occurred_at AS "occurredAt", e.provider,
+                  e.source, to_char(e.occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt", e.provider,
                   e.provider_event_id AS "providerEventId", e.actor_kind AS "actorKind",
-                  e.acting_user_id AS "actingUserId", e.created_at AS "createdAt"
+                  e.acting_user_id AS "actingUserId", e.created_at AS "createdAt",
+                  to_char(e.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__recordedAt"
              FROM association_consent_events e
             WHERE e.workspace_id=$1 AND e.contact_id=$2 AND ($3::text[] IS NULL OR e.purpose=ANY($3::text[]))
-            ORDER BY e.occurred_at DESC, e.created_at DESC, e.id DESC
-            LIMIT 500`,
+`,
           [workspaceId, contactId, purposesAllowed],
-        ).then((rows) => rows.rows),
-        query<Record<string, unknown>>(
+        ),
+        evidence('crm.contact-suppressions',
           `SELECT id, channel, action, reason_code AS "reasonCode", source,
-                  occurred_at AS "occurredAt", provider,
+                  to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt", provider,
                   provider_event_id AS "providerEventId", actor_kind AS "actorKind",
-                  acting_user_id AS "actingUserId", created_at AS "createdAt"
+                  acting_user_id AS "actingUserId", created_at AS "createdAt",
+                  to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__recordedAt"
              FROM crm_suppression_events
             WHERE workspace_id=$1 AND contact_id=$2
-            ORDER BY occurred_at DESC, created_at DESC, id DESC
-            LIMIT 500`,
+`,
           [workspaceId, contactId],
-        ).then((rows) => rows.rows),
+        ),
       ])
       return { purposes, events, suppressions }
     },
 
     async listEntitlementPlans(workspaceId, filters = {}) {
-      const limit = Math.min(100, Math.max(1, filters.limit ?? 50))
-      const result = await query<Record<string, unknown>>(
+      return page('plans', workspaceId, filters,
         `SELECT p.id, p.plan_key AS "planKey", p.name, p.currency,
                 p.fee_minor::text AS "feeMinor", p.billing_period AS "billingPeriod",
                 p.benefits, p.eligibility_note AS "eligibilityNote",
@@ -307,16 +320,13 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
                 p.created_at AS "createdAt", p.updated_at AS "updatedAt"
            FROM association_membership_plans p
           WHERE p.workspace_id=$1
-            AND ($2::boolean IS NULL OR p.published=$2) AND ($4::uuid[] IS NULL OR p.id=ANY($4::uuid[]))
-          ORDER BY p.name, p.id LIMIT $3`,
-        [workspaceId, filters.published ?? null, limit, select(workspaceId, 'crm.catalog.read', 'planIds')],
+            AND ($2::boolean IS NULL OR p.published=$2) AND ($3::uuid[] IS NULL OR p.id=ANY($3::uuid[]))`,
+        [workspaceId, filters.published ?? null, select(workspaceId, 'crm.catalog.read', 'planIds')],
       )
-      return result.rows
     },
 
     async listEntitlements(workspaceId, filters = {}) {
-      const limit = Math.min(100, Math.max(1, filters.limit ?? 50))
-      const result = await query<Record<string, unknown>>(
+      return page('entitlements', workspaceId, filters,
         `SELECT m.id, m.contact_id AS "contactId", c.display_name AS "contactName",
                 m.plan_id AS "planId", p.plan_key AS "planKey", p.name AS "planName",
                 m.status, m.starts_at AS "startsAt", m.ends_at AS "endsAt",
@@ -331,18 +341,15 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
           WHERE m.workspace_id=$1
             AND ($2::uuid IS NULL OR m.contact_id=$2)
             AND ($3::uuid IS NULL OR m.plan_id=$3)
-            AND ($4::text IS NULL OR m.status=$4) AND ($6::uuid[] IS NULL OR m.plan_id=ANY($6::uuid[]))
-            AND c.valid_to IS NULL AND c.retracted_at IS NULL
-          ORDER BY m.created_at DESC, m.id DESC LIMIT $5`,
+            AND ($4::text IS NULL OR m.status=$4) AND ($5::uuid[] IS NULL OR m.plan_id=ANY($5::uuid[]))
+            AND c.valid_to IS NULL AND c.retracted_at IS NULL`,
         [workspaceId, filters.contactId ?? null, filters.planId ?? null,
-          filters.status ?? null, limit, select(workspaceId, 'crm.entitlements.read', 'planIds')],
+          filters.status ?? null, select(workspaceId, 'crm.entitlements.read', 'planIds')],
       )
-      return result.rows
     },
 
     async listEvents(workspaceId, filters = {}) {
-      const limit = Math.min(100, Math.max(1, filters.limit ?? 50))
-      const result = await query<Record<string, unknown>>(
+      return page('events', workspaceId, filters,
         `SELECT e.id, e.slug, e.programme_key AS "programmeKey", e.title,
                 e.description, e.starts_at AS "startsAt", e.ends_at AS "endsAt",
                 e.timezone, e.mode, e.venue, e.online_url AS "onlineUrl",
@@ -353,16 +360,13 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
                   WHERE t.workspace_id=e.workspace_id AND t.event_id=e.id) AS "commerceManaged",
                 e.created_at AS "createdAt", e.updated_at AS "updatedAt"
            FROM association_events e
-          WHERE e.workspace_id=$1 AND ($2::text IS NULL OR e.status=$2) AND ($4::uuid[] IS NULL OR e.id=ANY($4::uuid[]))
-          ORDER BY e.starts_at DESC, e.id DESC LIMIT $3`,
-        [workspaceId, filters.status ?? null, limit, select(workspaceId, 'crm.catalog.read', 'eventIds')],
+          WHERE e.workspace_id=$1 AND ($2::text IS NULL OR e.status=$2) AND ($3::uuid[] IS NULL OR e.id=ANY($3::uuid[]))`,
+        [workspaceId, filters.status ?? null, select(workspaceId, 'crm.catalog.read', 'eventIds')],
       )
-      return result.rows
     },
 
     async listParticipation(workspaceId, filters = {}) {
-      const limit = Math.min(100, Math.max(1, filters.limit ?? 50))
-      const result = await query<Record<string, unknown>>(
+      return page('participation', workspaceId, filters,
         `SELECT p.* FROM (
            SELECT r.id, r.event_id AS "eventId", e.slug AS "eventKey",
                   e.title AS "eventTitle", r.attendee_contact_id AS "contactId",
@@ -387,23 +391,21 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
             WHERE r.workspace_id=$1
               AND ($2::uuid IS NULL OR r.attendee_contact_id=$2)
               AND ($3::uuid IS NULL OR r.event_id=$3)
-              AND ($4::text IS NULL OR r.source_kind=$4) AND ($7::uuid[] IS NULL OR r.event_id=ANY($7::uuid[]))
+              AND ($4::text IS NULL OR r.source_kind=$4) AND ($6::uuid[] IS NULL OR r.event_id=ANY($6::uuid[]))
          ) p
-         WHERE ($5::text IS NULL OR p.status=$5)
-         ORDER BY p."createdAt" DESC, p.id DESC LIMIT $6`,
+         WHERE ($5::text IS NULL OR p.status=$5)`,
         [workspaceId, filters.contactId ?? null, filters.eventId ?? null,
-          filters.sourceKind ?? null, filters.status ?? null, limit, select(workspaceId, 'crm.participation.read', 'eventIds')],
+          filters.sourceKind ?? null, filters.status ?? null, select(workspaceId, 'crm.participation.read', 'eventIds')],
       )
-      return result.rows
     },
 
     async listPipelines(workspaceId, filters = {}) {
       authorize(workspaceId, 'crm.records.read')
       const includeArchived = filters.includeArchived ?? false
-      const result = await query<Record<string, unknown>>(
+      return page('pipelines', workspaceId, filters,
         `SELECT p.id, p.id::text AS "pipelineKey", 'deal'::text AS "entityKind",
                 p.name, p.is_default AS "isDefault", p.position,
-                p.archived_at AS "archivedAt",
+                p.archived_at AS "archivedAt", p.created_at AS "createdAt", p.updated_at AS "updatedAt",
                 COALESCE(jsonb_agg(jsonb_build_object(
                   'id', s.id, 'pipelineId', s.pipeline_id,
                   'stageKey', COALESCE(s.legacy_key, s.id::text),
@@ -417,12 +419,9 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
              ON s.workspace_id=p.workspace_id AND s.pipeline_id=p.id
             AND ($2::boolean OR s.archived_at IS NULL)
           WHERE p.workspace_id=$1 AND ($2::boolean OR p.archived_at IS NULL)
-          GROUP BY p.id
-          ORDER BY p.archived_at NULLS FIRST, p.position, p.id
-          LIMIT 100`,
+          GROUP BY p.id`,
         [workspaceId, includeArchived],
       )
-      return result.rows
     },
 
     async checkSendability(workspaceId, contactId, channel, purposeKey) {
@@ -438,14 +437,16 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
         [workspaceId, purposeKey],
       )
       if (!purpose.rows[0]) {
-        const valid = await query<{ purposeKey: string }>(
-          `SELECT purpose_key AS "purposeKey" FROM crm_consent_purposes
-            WHERE workspace_id=$1 AND ($2::text[] IS NULL OR purpose_key=ANY($2::text[])) ORDER BY purpose_key LIMIT 100`,
-          [workspaceId, select(workspaceId, 'crm.consent.read', 'purposeKeys')],
-        )
+        const valid: Record<string, unknown>[] = []
+        let cursor: string | undefined
+        do {
+          const page = await listConsentPurposes(workspaceId, true, { limit: 100, cursor }, 'crm.consent.read')
+          valid.push(...page.purposes)
+          cursor = page.nextCursor ?? undefined
+        } while (cursor)
         throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', {
           purposeKey,
-          validValues: valid.rows.map((row) => row.purposeKey),
+          validValues: valid.map((row) => row.purposeKey),
         })
       }
       const contact = await query<{

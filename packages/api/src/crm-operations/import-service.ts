@@ -18,6 +18,8 @@ import type {
   FilesApi,
   StableExternalIdentity,
   CrmIntegrationGrant,
+  CrmPage,
+  CrmPageQuery,
 } from '@use-brian/core'
 import { CrmOperationsError } from '@use-brian/core'
 import { createCompany, createContact, createDeal, updateContact } from '../db/crm.js'
@@ -27,6 +29,7 @@ import { query } from '../db/client.js'
 import { parseCsv } from '../linkedin-import/csv.js'
 import { createCrmImportSources, type CrmImportSources } from '../db/crm-import-sources.js'
 import { requireImportCeiling, requireImportOperation, requireImportRowAuthority } from './import-authority.js'
+import { queryCrmPage } from './pagination.js'
 
 const MAX_IMPORT_BYTES = 30 * 1024 * 1024
 const MAX_IMPORT_ROWS = 100_000
@@ -841,10 +844,15 @@ export function createCrmProductionImportService(deps: {
     return jobProjection(job)
   }
 
-  async function list(context: ImportServiceContext): Promise<CrmImportJob[]> {
+  async function list(context: ImportServiceContext, filters: CrmPageQuery = {}): Promise<CrmPage<'jobs', CrmImportJob>> {
     requireImportOperation(context, 'crm.imports.read')
-    const result = await query<ImportJobRow>(
-      `SELECT id,workspace_id AS "workspaceId",staged_file_id AS "stagedFileId",
+    const grants = context.authority.integration?.grants.map((grant) => ({ operation: grant.operation,
+      selectors: Object.fromEntries(Object.entries(grant.selectors).sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, selected]) => [key, Array.isArray(selected) ? [...selected].sort() : selected])),
+    })).sort((a, b) => a.operation.localeCompare(b.operation))
+    const result = await queryCrmPage<'jobs', ImportJobRow>(query, {
+      workspaceId: context.workspaceId, resource: 'crm.imports', key: 'jobs', query: filters,
+      sql: `SELECT id,workspace_id AS "workspaceId",staged_file_id AS "stagedFileId",
          source_id AS "sourceId",integration_credential_id AS "integrationCredentialId",integration_grants AS "integrationGrants",
          entity_kind AS "entityKind",status,mapping,mapping_hash AS "mappingHash",
          source_hash AS "sourceHash",total_rows AS "totalRows",processed_rows AS "processedRows",
@@ -865,11 +873,10 @@ export function createCrmProductionImportService(deps: {
                         OR (allowed->'selectors'->dimension.key) @> dimension.value,false)
                    )
               )
-           )))
-       ORDER BY created_at DESC,id DESC LIMIT 50`,
-      [context.workspaceId, context.authority.integration ? JSON.stringify(context.authority.integration.grants) : null],
-    )
-    return result.rows.map((row) => { jobContext(context, row, 'read'); return jobProjection(row) })
+           )))`,
+      params: [context.workspaceId, grants ? JSON.stringify(grants) : null],
+    })
+    return { ...result, jobs: result.jobs.map((row) => { jobContext(context, row, 'read'); return jobProjection(row) }) }
   }
 
   async function get(context: ImportServiceContext, jobId: string): Promise<CrmImportJob | null> {
