@@ -494,7 +494,7 @@ export function isBrainRowTool(name: string | undefined): boolean {
   return typeof name === "string" && BRAIN_ROW_TOOL_RE.test(name);
 }
 
-export const EAGER_TOOL_INPUT_CAP = 20;
+const EAGER_TOOL_INPUT_CAP = 20;
 
 /** The hashes to dereference eagerly for a summary: brain-row tool calls
  *  whose input is not inline yet, in step order, capped. */
@@ -539,7 +539,7 @@ const ROW_NAME_KEYS: readonly string[] = [
   "displayName",
 ];
 
-export const HIGHLIGHT_NAME_CAP = 20;
+const HIGHLIGHT_NAME_CAP = 20;
 
 /**
  * Entry NAMES a turn's brain-row tool calls looked up (lower-cased,
