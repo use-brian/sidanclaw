@@ -1014,4 +1014,38 @@ describe('[COMP:brain/graph-http] GET /api/brain/graph — knowledge nodes + edg
     expect(focused.body.focusNodeIds).toContain('entity-999')
     expect(focused.body.nodes.some((node: { id: string }) => node.id === 'entity-999')).toBe(true)
   })
+
+  it('marks exact focusIds: group counts at the overview, visible matches under reveal', async () => {
+    mockQuery
+      .mockResolvedValueOnce(memberRow)
+      .mockResolvedValueOnce(assistantRow)
+      .mockResolvedValueOnce(memberRow)
+      .mockResolvedValueOnce(assistantRow)
+    const entityRows = Array.from({ length: 1_000 }, (_, index) => ({
+      id: `entity-${index}`,
+      kind: index % 2 === 0 ? 'person' : 'company',
+      displayName: `Entity ${index}`,
+      sensitivity: 'internal',
+    }))
+    const app = makeApp(makeEntityStoreWithList(entityRows))
+
+    const marked = await request(app)
+      .get('/api/brain/graph?workspaceId=ws-1&focusIds=entity-1,entity-2,entity-3')
+      .expect(200)
+    expect(marked.body.scopeId).toBeNull()
+    const counts = marked.body.focusGroupCounts as Record<string, number>
+    expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(3)
+    expect(JSON.stringify(marked.body)).not.toContain('members')
+
+    const revealed = await request(app)
+      .get('/api/brain/graph?workspaceId=ws-1&focusIds=entity-1,entity-2,entity-3&reveal=1')
+      .expect(200)
+    expect(revealed.body.scopeId).not.toBeNull()
+    // The fixture has no edges, so entities bucket by kind: the two
+    // companies (odd ids) share a group and win the reveal; the person
+    // (entity-2) stays in its own group and is reported by count, not id.
+    const revealedIds = revealed.body.focusNodeIds as string[]
+    expect(revealedIds).toEqual(expect.arrayContaining(['entity-1', 'entity-3']))
+    expect(revealedIds.every((id) => ['entity-1', 'entity-2', 'entity-3'].includes(id))).toBe(true)
+  })
 })

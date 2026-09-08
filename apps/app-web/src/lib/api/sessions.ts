@@ -132,6 +132,9 @@ type RawListRow = {
   /** The session's bound assistant (echoed per row; spans assistants under
    *  `scope=workspace`). */
   assistantId?: string;
+  /** Where the conversation happened (`web`, `telegram`, `slack`, ...).
+   *  Echoed by the list route; only `channels=all` returns non-web rows. */
+  channelType?: string;
   contextGroupId?: string | null;
   contextProjectId?: string | null;
 };
@@ -352,6 +355,90 @@ export async function listWorkspaceSessions(opts: {
   } catch {
     return [];
   }
+}
+
+/**
+ * A row in the chat-audit browser's session list: the caller's own session
+ * on ANY channel plus the workspace's shared rooms, with the channel it ran
+ * on so the rail can label a Telegram thread as such.
+ */
+export type AuditSession = DocSession & {
+  channelType: string;
+  /** `true` for a workspace-shared room (listed for every member). */
+  shared: boolean;
+};
+
+/**
+ * Every conversation the viewer may audit in a workspace, newest first
+ * (`docs/architecture/features/chat-audit.md` -> "Session list"):
+ *
+ *   - own sessions across every assistant and every channel
+ *     (`GET /api/sessions?scope=workspace&channels=all`), and
+ *   - the workspace's shared rooms (`GET /api/sessions/workspace`), which
+ *     the server already clearance-filters.
+ *
+ * Merged and de-duplicated by id (a room the viewer started appears in
+ * both). Returns `[]` on failure - the rail reads as "nothing to audit yet".
+ */
+export async function listAuditSessions(opts: {
+  workspaceId: string;
+  signal?: AbortSignal;
+}): Promise<AuditSession[]> {
+  const qs = new URLSearchParams({
+    workspaceId: opts.workspaceId,
+    scope: "workspace",
+    channels: "all",
+  });
+  const [own, shared] = await Promise.all([
+    (async () => {
+      try {
+        const res = await authFetch(
+          `${API_URL}/api/sessions?${qs.toString()}`,
+          opts.signal ? { signal: opts.signal } : {},
+        );
+        if (!res.ok) return [] as AuditSession[];
+        const data = (await res.json()) as RawListRow[];
+        if (!Array.isArray(data)) return [] as AuditSession[];
+        return data.map<AuditSession>((r) => ({
+          id: r.id,
+          title: r.title,
+          channelId: r.channelId,
+          lastActive: toIso(r.lastActive),
+          appOrigin: r.appOrigin ?? null,
+          ...(r.assistantId ? { assistantId: r.assistantId } : {}),
+          contextGroupId: r.contextGroupId ?? null,
+          contextProjectId: r.contextProjectId ?? null,
+          channelType: r.channelType ?? "web",
+          shared: false,
+        }));
+      } catch {
+        return [] as AuditSession[];
+      }
+    })(),
+    listWorkspaceSessions({
+      workspaceId: opts.workspaceId,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    }),
+  ]);
+  const byId = new Map<string, AuditSession>();
+  for (const s of own) byId.set(s.id, s);
+  for (const s of shared) {
+    byId.set(s.id, {
+      id: s.id,
+      title: s.title,
+      channelId: s.channelId,
+      lastActive: s.lastActive,
+      appOrigin: s.appOrigin,
+      ...(s.assistantId ? { assistantId: s.assistantId } : {}),
+      contextGroupId: s.contextGroupId ?? null,
+      contextProjectId: s.contextProjectId ?? null,
+      channelType: "web",
+      shared: true,
+    });
+  }
+  return [...byId.values()].sort((a, b) =>
+    a.lastActive < b.lastActive ? 1 : a.lastActive > b.lastActive ? -1 : 0,
+  );
 }
 
 /**

@@ -64,6 +64,14 @@ export type BrainGraphHierarchyProjection = {
   parentScopeId: string | null
   scopeLabel: string | null
   focusNodeIds: string[]
+  /**
+   * For every GROUP node in the response, how many of the requested
+   * `focusIds` sit inside it (groups with zero matches are omitted). Lets
+   * a caller light up the bubbles that contain the entries it asked about
+   * without the response ever carrying member ids - the chat-audit
+   * retrieval highlight is the consumer.
+   */
+  focusGroupCounts: Record<string, number>
   renderBudget: { nodes: number; edges: number }
 }
 
@@ -79,7 +87,20 @@ type ProjectOptions = {
   truncated: boolean
   scopeId?: string | null
   focusQuery?: string | null
+  /**
+   * Exact entry ids to mark (the chat-audit retrieval highlight). Unlike
+   * `focusQuery`, id focus does NOT change scope by itself: the projection
+   * reports which visible entries matched (`focusNodeIds`) and how many
+   * matches each visible group holds (`focusGroupCounts`). Pass
+   * `revealFocus` to also open the bounded scope holding the MOST matches.
+   */
+  focusIds?: readonly string[] | null
+  revealFocus?: boolean
 }
+
+/** Id-focus lists are bounded so a malicious query cannot make the server
+ *  scan an unbounded set; the route clamps to the same ceiling. */
+export const FOCUS_ID_LIMIT = 64
 
 const RESPONSE_NODE_BUDGET = 200
 const RESPONSE_EDGE_BUDGET = 600
@@ -286,6 +307,39 @@ function groupContaining(
   return null
 }
 
+function countMatches(group: InternalGroup, ids: ReadonlySet<string>): number {
+  let count = 0
+  for (const member of group.members) if (ids.has(member.id)) count += 1
+  return count
+}
+
+/**
+ * The bounded scope holding the most id matches: the best top-level group,
+ * then (when it is split) its best child. Deterministic - ties resolve in
+ * `compareGroups` order, the same order the overview lists them.
+ */
+function groupWithMostMatches(
+  groups: InternalGroup[],
+  ids: ReadonlySet<string>,
+): InternalGroup | null {
+  const pick = (candidates: InternalGroup[]): InternalGroup | null => {
+    let best: InternalGroup | null = null
+    let bestCount = 0
+    for (const group of [...candidates].sort(compareGroups)) {
+      const count = countMatches(group, ids)
+      if (count > bestCount) {
+        best = group
+        bestCount = count
+      }
+    }
+    return best
+  }
+  const top = pick(groups)
+  if (!top) return null
+  if (top.children.length === 0) return top
+  return pick(top.children) ?? top
+}
+
 function bestFocusMatches(
   nodes: BrainGraphSourceNode[],
   query: string,
@@ -387,12 +441,23 @@ export function projectBrainGraphHierarchy(
     ? buildHierarchy(nodes, edges)
     : []
   const focusMatches = bestFocusMatches(nodes, options.focusQuery ?? '')
+  const focusIdSet = new Set(
+    (options.focusIds ?? []).filter((id) => id.length > 0).slice(0, FOCUS_ID_LIMIT),
+  )
+  const idMatches = focusIdSet.size > 0
+    ? nodes.filter((node) => focusIdSet.has(node.id))
+    : []
 
   let scope = options.scopeId
     ? findGroup(topGroups, options.scopeId)
     : null
   if (focusMatches.length > 0) {
     scope = groupContaining(topGroups, focusMatches[0]!.id)
+  } else if (idMatches.length > 0 && options.revealFocus && !options.scopeId) {
+    // Id focus reveals the scope with the MOST matches (a retrieval set
+    // usually spans a topic, not a single entry); a query reveal keeps its
+    // best-single-match semantics above.
+    scope = groupWithMostMatches(topGroups, focusIdSet)
   }
 
   let scopeNodes = nodes
@@ -408,10 +473,26 @@ export function projectBrainGraphHierarchy(
 
   const projected = projectedGraph(scopeNodes, edges, representatives)
   const visibleIds = new Set(projected.nodes.map((node) => node.id))
-  const focusNodeIds = focusMatches
+  const queryFocusIds = focusMatches
     .map((node) => node.id)
     .filter((id) => visibleIds.has(id))
     .slice(0, 20)
+  const visibleIdMatches = idMatches
+    .map((node) => node.id)
+    .filter((id) => visibleIds.has(id) && !queryFocusIds.includes(id))
+  const focusNodeIds = [...queryFocusIds, ...visibleIdMatches]
+
+  // Per-group match counts for the visible containers - counts only, never
+  // the member ids behind them (the hierarchy exists to keep those server-side).
+  const focusGroupCounts: Record<string, number> = {}
+  if (focusIdSet.size > 0) {
+    for (const representative of representatives) {
+      if (!('nodeType' in representative) || representative.nodeType !== 'group') continue
+      if (!visibleIds.has(representative.id)) continue
+      const count = countMatches(representative, focusIdSet)
+      if (count > 0) focusGroupCounts[representative.id] = count
+    }
+  }
 
   return {
     ...projected,
@@ -426,6 +507,7 @@ export function projectBrainGraphHierarchy(
     parentScopeId: scope?.parentId ?? null,
     scopeLabel: scope?.name ?? null,
     focusNodeIds,
+    focusGroupCounts,
     renderBudget: {
       nodes: RESPONSE_NODE_BUDGET,
       edges: RESPONSE_EDGE_BUDGET,

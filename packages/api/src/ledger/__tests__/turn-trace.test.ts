@@ -8,7 +8,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { createTurnTraceReader, legacyStepsFromContent } from '../turn-trace.js'
+import {
+  createTurnTraceReader,
+  legacyRetrievalStep,
+  legacyStepsFromContent,
+} from '../turn-trace.js'
 import type { TurnEventRow } from '../../db/turn-ledger-store.js'
 
 const EPOCH = new Date('2026-08-29T00:00:00Z')
@@ -53,6 +57,9 @@ describe('[COMP:api/turn-trace] epoch routing', () => {
         throw new Error('legacy path must not run')
       },
       loadUsageNear: async () => null,
+      loadLegacyRecalls: async () => {
+        throw new Error('legacy path must not run')
+      },
     })
     const trace = await read('msg-1')
     expect(trace?.fidelity).toBe('full')
@@ -80,6 +87,7 @@ describe('[COMP:api/turn-trace] epoch routing', () => {
         createdAt: new Date('2026-08-01T00:00:00Z'),
       }),
       loadUsageNear: async () => ({ calls: 3, inputTokens: 900, outputTokens: 120, costUsd: 0.01 }),
+      loadLegacyRecalls: async () => [],
     })
     const trace = await read('msg-old')
     expect(trace?.fidelity).toBe('legacy')
@@ -92,6 +100,61 @@ describe('[COMP:api/turn-trace] epoch routing', () => {
     expect(trace!.steps[2].metadata.approximate).toBe(true)
   })
 
+  it('pre-epoch turn folds memory_recall_events into one leading retrieval step', async () => {
+    const read = createTurnTraceReader({
+      listTraceEvents: async () => [],
+      getLedgerEpoch: async () => EPOCH,
+      loadMessage: async () => ({
+        id: 'msg-old',
+        sessionId: 'sess-9',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'the answer' }],
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      loadUsageNear: async () => null,
+      loadLegacyRecalls: async () => [
+        { memoryId: 'm-2', recallKind: 'index_inject', createdAt: new Date('2026-08-01T00:00:01Z') },
+        { memoryId: 'm-1', recallKind: 'index_inject', createdAt: new Date('2026-08-01T00:00:00Z') },
+        { memoryId: 'm-2', recallKind: 'tool_call', createdAt: new Date('2026-08-01T00:00:02Z') },
+      ],
+    })
+    const trace = await read('msg-old')
+    expect(trace?.fidelity).toBe('legacy')
+    expect(trace?.steps.map((s) => s.kind)).toEqual(['retrieval', 'response_text'])
+    expect(trace?.steps.map((s) => s.ordinal)).toEqual([0, 1])
+    const retrieval = trace!.steps[0]
+    expect(retrieval.metadata.source).toBe('memory_recall_events')
+    expect(retrieval.metadata.returnedRows).toEqual([
+      { primitive: 'memory', rowId: 'm-2' },
+      { primitive: 'memory', rowId: 'm-1' },
+    ])
+    expect(retrieval.metadata.recallKinds).toEqual({
+      'm-2': ['index_inject', 'tool_call'],
+      'm-1': ['index_inject'],
+    })
+    expect(retrieval.at?.toISOString()).toBe('2026-08-01T00:00:00.000Z')
+  })
+
+  it('a failing recall read degrades to no retrieval step, never a failed trace', async () => {
+    const read = createTurnTraceReader({
+      listTraceEvents: async () => [],
+      getLedgerEpoch: async () => EPOCH,
+      loadMessage: async () => ({
+        id: 'msg-old',
+        sessionId: 'sess-9',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'the answer' }],
+        createdAt: new Date('2026-08-01T00:00:00Z'),
+      }),
+      loadUsageNear: async () => null,
+      loadLegacyRecalls: async () => {
+        throw new Error('table missing')
+      },
+    })
+    const trace = await read('msg-old')
+    expect(trace?.steps.map((s) => s.kind)).toEqual(['response_text'])
+  })
+
   it('returns null for an unknown id and for non-assistant messages', async () => {
     const read = createTurnTraceReader({
       listTraceEvents: async () => [],
@@ -101,9 +164,16 @@ describe('[COMP:api/turn-trace] epoch routing', () => {
           ? { id, sessionId: 's', role: 'user', content: [], createdAt: new Date() }
           : null,
       loadUsageNear: async () => null,
+      loadLegacyRecalls: async () => [],
     })
     expect(await read('nope')).toBeNull()
     expect(await read('user-msg')).toBeNull()
+  })
+})
+
+describe('[COMP:api/turn-trace] legacy recall folding', () => {
+  it('returns null for no recalls', () => {
+    expect(legacyRetrievalStep([])).toBeNull()
   })
 })
 

@@ -103,12 +103,14 @@ import {
   Plus,
   Reply,
   RotateCw,
+  Route,
   Sparkles,
   Square,
   User,
   Users,
   X,
 } from "lucide-react";
+import { auditTurnUrl } from "@/lib/turn-audit";
 import { createSSEBuffer, parseSSEStream } from "@use-brian/chat-ui";
 import {
   useMidTurnQueue,
@@ -3271,6 +3273,9 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     onRetry?: () => void,
     onEdit?: () => void,
     onReply?: () => void,
+    /** Assistant rows only: jump to the Brain's Audit section on this turn
+     *  (which tools ran, which entries were retrieved, lit on the graph). */
+    onAudit?: () => void,
   ) => (
     <div
       className={cn(
@@ -3325,6 +3330,17 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <RotateCw className="size-3.5" aria-hidden />
+        </button>
+      ) : null}
+      {onAudit ? (
+        <button
+          type="button"
+          onClick={onAudit}
+          aria-label={t.auditTurn}
+          title={t.auditTurn}
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <Route className="size-3.5" aria-hidden />
         </button>
       ) : null}
     </div>
@@ -4252,6 +4268,24 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
                           canReplyToMessage(m)
                             ? () =>
                                 startReply(m, { authorName: quoteAuthorFor(m) })
+                            : undefined,
+                          activeSessionId
+                            ? () =>
+                                router.push(
+                                  auditTurnUrl(
+                                    "",
+                                    workspaceId,
+                                    activeSessionId,
+                                    // A live-streamed reply carries a synthetic
+                                    // client id until the next reload; only a
+                                    // persisted row id can address a turn, so
+                                    // the audit page falls back to the newest
+                                    // turn (which the live reply is) otherwise.
+                                    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(m.id)
+                                      ? m.id
+                                      : null,
+                                  ),
+                                )
                             : undefined,
                         )
                       : null}

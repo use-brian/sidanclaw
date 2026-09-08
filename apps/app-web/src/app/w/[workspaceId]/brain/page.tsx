@@ -88,6 +88,7 @@ import { ChunkSentinel } from "@/components/chrome/chunk-sentinel";
 import { useCachedResource } from "@/lib/surface-cache";
 import { brainGraphCacheKey } from "@/lib/surface-prefetch";
 import { parseBrainDeepLink } from "@/lib/brain-deep-link";
+import { parseAuditDeepLink, type AuditTurn } from "@/lib/turn-audit";
 import {
   listWorkspaceSkills,
   type WorkspaceSkillSummary,
@@ -118,6 +119,7 @@ import { suggestedSkillCount } from "@/lib/skills-view";
 import { FilterStrip } from "@/components/brain/filter-strip";
 import { EmptyState, PristineBrainNudge } from "@/components/brain/empty-state";
 import { ReviewAllClear, ReviewPanel } from "@/components/brain/review-panel";
+import { AuditPanel } from "@/components/brain/audit-panel";
 import { BrainTopbar, BrainTopbarPager } from "@/components/brain/brain-topbar";
 import { BrainDetailDrawer } from "@/components/brain/detail-drawer";
 import { BrainGraphView } from "@/components/brain/graph-view";
@@ -172,6 +174,10 @@ function BrainPageInner() {
     closeSkillCreator,
     selectedReviewKey,
     setSelectedReviewKey,
+    auditSessionId,
+    auditTurnId,
+    setAuditTurnId,
+    openAudit,
     primitives,
     togglePrimitive,
     reviewFilters,
@@ -216,6 +222,26 @@ function BrainPageInner() {
     if (searchParams.get("view") === "skills") setSection("skills");
     if (searchParams.get("view") === "blueprints") setSection("blueprints");
   }, [searchParams, setSection, setViewMode]);
+
+  // Audit deep link — `?audit=<sessionId>[&turn=<messageId>]` (the chat
+  // surface's "Audit this turn" lands here). Keyed on the pair, not once:
+  // a second link from another turn while already on Brain must re-seed.
+  const auditLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    const link = parseAuditDeepLink(new URLSearchParams(searchParams.toString()));
+    if (!link) return;
+    const key = `${link.sessionId}:${link.turnId ?? ""}`;
+    if (auditLinkRef.current === key) return;
+    auditLinkRef.current = key;
+    openAudit(link.sessionId, link.turnId);
+  }, [searchParams, openAudit]);
+
+  // The audited session's turn list, reported by `AuditPanel` so the topbar
+  // pager can step through it. Cleared when the session changes.
+  const [auditTurns, setAuditTurns] = useState<AuditTurn[]>([]);
+  useEffect(() => {
+    setAuditTurns([]);
+  }, [auditSessionId]);
 
   // Any search / filter / pending engagement flips off the pristine nudge, and
   // stays off even after the user clears back to empty.
@@ -379,6 +405,10 @@ function BrainPageInner() {
   // chunk as the user scrolls toward the end, instead of the old single
   // `limit: 100` shot that capped the surface at 100 rows with no way to reach
   // the rest ([COMP:app-web/brain-entries]).
+  // Only the LIST view reads the entries pages. The graph (the default
+  // landing) is a separate, cached projection, so the paged list fetch is
+  // deferred until the user actually switches to List — the pristine check
+  // below reads the facets (which primitives have any row) instead.
   const entries = useBrainEntries({
     workspaceId: activeId ?? null,
     viewerId: me.id || null,
@@ -386,7 +416,7 @@ function BrainPageInner() {
     search,
     viewpointAssistantId,
     refreshTick,
-    enabled: section === "entries",
+    enabled: section === "entries" && viewMode === "grouped",
   });
   const rows = entries.rows;
   // Row keys from the most recent chunk — only these animate in. Recomputed
@@ -408,7 +438,12 @@ function BrainPageInner() {
   // these (`taskStatus` defaults to active), so there's no overlap.
   const tasksInScope = primitives.length === 0 || primitives.includes("tasks");
   useEffect(() => {
-    if (!activeId || section !== "entries" || !tasksInScope) {
+    if (
+      !activeId ||
+      section !== "entries" ||
+      viewMode !== "grouped" ||
+      !tasksInScope
+    ) {
       setCompletedTasks(null);
       return;
     }
@@ -469,6 +504,7 @@ function BrainPageInner() {
   }, [
     activeId,
     section,
+    viewMode,
     tasksInScope,
     search,
     viewpointAssistantId,
@@ -618,12 +654,12 @@ function BrainPageInner() {
     };
   }, [activeId, refreshTick, cacheScope]);
 
-  // Workspace blueprints (fillable templates) — fetched on every brain refresh,
-  // the same contract as skills, so a create/delete from the library converges.
-  // The list API returns every page template; the library filters to those with
-  // an `extraction` spec.
+  // Workspace blueprints (fillable templates) — fetched while the Blueprints
+  // section is open (nothing else reads them) and on every brain refresh, so
+  // a create/delete from the library converges. The list API returns every
+  // page template; the library filters to those with an `extraction` spec.
   useEffect(() => {
-    if (!activeId) return;
+    if (!activeId || section !== "blueprints") return;
     let cancelled = false;
     void (async () => {
       let hasCached = false;
@@ -660,7 +696,7 @@ function BrainPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [activeId, refreshTick, cacheScope]);
+  }, [activeId, section, refreshTick, cacheScope]);
 
   // Skill row clicks (library + sidebar quick-list) open the FULL editor page
   // (brain-skill-management-ux.md §3.1); only the graph-node click path keeps
@@ -772,12 +808,19 @@ function BrainPageInner() {
   // before it arrives.
   const graphLoading = graph === null;
   const graphHasNodes = (graph?.nodes.length ?? 0) > 0;
+  // "The list has nothing": in List view that is the loaded page itself; in
+  // Graph view (where the paged list is never fetched) it is the facets —
+  // no primitive has a single row. Facets fail OPEN (all present) on error,
+  // so a failed presence check can never conjure the pristine nudge.
+  const listEmpty =
+    viewMode === "grouped"
+      ? !loading && rows.length === 0
+      : facets !== null && !Object.values(facets).some(Boolean);
   // The pristine nudge counts skills too — a workspace whose only brain
   // content is a skill isn't pristine.
   const showNoData =
-    !loading &&
+    listEmpty &&
     !graphLoading &&
-    rows.length === 0 &&
     !graphHasNodes &&
     (skills?.length ?? 0) === 0 &&
     !search &&
@@ -849,6 +892,26 @@ function BrainPageInner() {
           if (next) setSelectedReviewKey(reviewItemKey(next));
         }}
       />
+    ) : section === "audit" && auditTurns.length > 0 ? (
+      /* Turn pager — steps the audited conversation one assistant turn at
+         a time (the same pager the Reviews queue uses). */
+      (() => {
+        const idx = auditTurns.findIndex((turn) => turn.id === auditTurnId);
+        return (
+          <BrainTopbarPager
+            current={(idx < 0 ? auditTurns.length - 1 : idx) + 1}
+            total={auditTurns.length}
+            onPrev={() => {
+              const prev = auditTurns[(idx < 0 ? auditTurns.length - 1 : idx) - 1];
+              if (prev) setAuditTurnId(prev.id);
+            }}
+            onNext={() => {
+              const next = auditTurns[(idx < 0 ? auditTurns.length - 1 : idx) + 1];
+              if (next) setAuditTurnId(next.id);
+            }}
+          />
+        );
+      })()
     ) : null;
 
   const topbarRight =
@@ -997,7 +1060,7 @@ function BrainPageInner() {
       <div className="md:hidden flex flex-col gap-2 border-b border-border bg-muted/20 px-3 py-2.5">
         {/* Three-way section segmented control — Entries / Skills / Reviews. */}
         <div className="inline-flex w-full rounded-md border border-border bg-muted/30 p-0.5 text-[12px]">
-          {(["entries", "skills", "blueprints", "reviews"] as BrainSection[]).map((s) => (
+          {(["entries", "skills", "blueprints", "reviews", "audit"] as BrainSection[]).map((s) => (
             <button
               key={s}
               type="button"
@@ -1054,6 +1117,28 @@ function BrainPageInner() {
               onActed={handleReviewActed}
               onMoreOptions={() => setSelected(currentReview.row)}
               readOnly={offline}
+            />
+          ) : null
+        ) : section === "audit" ? (
+          /* Audit — the chat-history audit browser (features/chat-audit.md):
+             the sidebar picked a conversation; the panel steps through its
+             turns with the tool trace and lights the retrieved entries on
+             the SAME cached graph the entries view renders. */
+          activeId ? (
+            <AuditPanel
+              workspaceId={activeId}
+              sessionId={auditSessionId}
+              turnId={auditTurnId}
+              onSelectTurn={setAuditTurnId}
+              onTurnsLoaded={setAuditTurns}
+              graph={graph}
+              viewpointAssistantId={viewpointAssistantId}
+              cacheScope={cacheScope}
+              onOpenRow={openRow}
+              onSelectSkillNode={(skillRowId) => {
+                const match = skills?.find((s) => s.rowId === skillRowId);
+                if (match) setSelectedSkill(match);
+              }}
             />
           ) : null
         ) : section === "skills" ? (
@@ -1132,6 +1217,7 @@ function BrainPageInner() {
             loading={graph === null}
             focusQuery={search}
             filterKinds={graphFilterKinds}
+            selectedId={selected?.id ?? selectedSkill?.rowId ?? null}
             onSelect={openRow}
             onSelectSkillNode={(skillRowId) => {
               const match = skills?.find((s) => s.rowId === skillRowId);

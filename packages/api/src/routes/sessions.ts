@@ -274,6 +274,15 @@ export function sessionRoutes(opts: SessionRouteOptions = {}): Router {
       // still owner-visibility, still the caller's own rows.
       const workspaceScope =
         req.query.scope === 'workspace' && Boolean(requestedWorkspaceId)
+      // `scope=workspace&channels=all` - the chat-audit browser's list: the
+      // caller's OWN sessions across every assistant AND every channel
+      // (web, Telegram, Slack, ...) in the workspace, newest first. The
+      // owner-visibility / draft / tuning exclusions below still apply;
+      // only the surface filter is lifted. Sessions from other channels
+      // are where most real usage lives, and an audit that could not see
+      // them would review the quiet half of the history.
+      // Spec: docs/architecture/features/chat-audit.md -> "Session list".
+      const allChannels = workspaceScope && req.query.channels === 'all'
 
       // …and because that thread is per-turn ADDRESSABLE, the resume may only
       // return rows another workspace assistant is allowed to answer on —
@@ -289,10 +298,12 @@ export function sessionRoutes(opts: SessionRouteOptions = {}): Router {
       // re-address them — the 2026-09-01 dead-thread bug. Losing them costs
       // only same-assistant continuation of a legacy NULL-origin thread; the
       // dock mints a fresh doc row on the next send instead.
-      const surfaceFilter = workspaceScope
-        ? `AND s.channel_type = $3 AND s.app_origin = $4`
-        : `AND s.channel_type IN ('web', 'notification')
-           AND ($3::text IS NULL OR s.app_origin = $3 OR s.app_origin IS NULL)`
+      const surfaceFilter = allChannels
+        ? ''
+        : workspaceScope
+          ? `AND s.channel_type = $3 AND s.app_origin = $4`
+          : `AND s.channel_type IN ('web', 'notification')
+             AND ($3::text IS NULL OR s.app_origin = $3 OR s.app_origin IS NULL)`
 
       // Hide feed-web's single-thread surfaces from the main web sidebar:
       // post-drafting sessions (`mode='draft'`) and the sticky tuning /
@@ -306,13 +317,14 @@ export function sessionRoutes(opts: SessionRouteOptions = {}): Router {
       const result = await query<{
         id: string; title: string | null; channelId: string;
         lastActiveAt: Date; status: string; appOrigin: string | null
-        assistantId: string
+        assistantId: string; channelType: string
         contextGroupId: string | null; contextProjectId: string | null
       }>(
         `SELECT s.id, s.title, s.channel_id as "channelId",
                 s.last_active_at as "lastActiveAt", s.status,
                 s.app_origin as "appOrigin",
                 s.assistant_id as "assistantId",
+                s.channel_type as "channelType",
                 s.context_group_id as "contextGroupId",
                 s.context_project_id as "contextProjectId"
          FROM sessions s
@@ -330,15 +342,17 @@ export function sessionRoutes(opts: SessionRouteOptions = {}): Router {
            AND s.channel_id NOT LIKE 'draft-iter:%'
            ${surfaceFilter}
          ORDER BY s.last_active_at DESC
-         LIMIT 50`,
-        workspaceScope
-          ? [
-              requestedWorkspaceId,
-              user.id,
-              DOC_DOCK_RESUME_ROW.channelType,
-              DOC_DOCK_RESUME_ROW.appOrigin,
-            ]
-          : [assistant.id, user.id, appOrigin],
+         LIMIT ${allChannels ? 200 : 50}`,
+        allChannels
+          ? [requestedWorkspaceId, user.id]
+          : workspaceScope
+            ? [
+                requestedWorkspaceId,
+                user.id,
+                DOC_DOCK_RESUME_ROW.channelType,
+                DOC_DOCK_RESUME_ROW.appOrigin,
+              ]
+            : [assistant.id, user.id, appOrigin],
       )
 
       res.json(result.rows.map((s) => ({
@@ -354,6 +368,9 @@ export function sessionRoutes(opts: SessionRouteOptions = {}): Router {
         // assistants, so the caller needs it; on the per-assistant path it
         // simply echoes the requested id.
         assistantId: s.assistantId,
+        // Where the conversation happened (`web`, `telegram`, `slack`, ...).
+        // Always echoed; only `channels=all` returns anything but web.
+        channelType: s.channelType,
         contextGroupId: s.contextGroupId,
         contextProjectId: s.contextProjectId,
       })))

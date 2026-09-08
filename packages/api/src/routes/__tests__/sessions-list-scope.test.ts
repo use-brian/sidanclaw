@@ -192,4 +192,32 @@ describe('[COMP:api/sessions-list] doc-dock workspace-scope resume', () => {
     expect(sql).toContain('s.assistant_id = $1')
     expect(params[0]).toBe(EXPLICIT_ASSISTANT_ID)
   })
+
+  it('scope=workspace&channels=all lifts the surface filter but keeps owner visibility (chat audit list)', async () => {
+    mockWorkspacePrimary.mockResolvedValue(assistant(WS_PRIMARY_ASSISTANT_ID))
+
+    await request(makeApp())
+      .get(`/api/sessions?scope=workspace&channels=all&workspaceId=${WS_ID}`)
+      .expect(200)
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]]
+    expect(sql).toContain('a.workspace_id = $1')
+    expect(sql).toContain("s.visibility = 'owner'")
+    expect(sql).toContain('s.channel_type as "channelType"')
+    expect(sql).not.toContain('s.channel_type = $3')
+    expect(sql).not.toContain("s.channel_type IN ('web'")
+    expect(params).toEqual([WS_ID, USER_ID])
+  })
+
+  it('channels=all is ignored without scope=workspace', async () => {
+    mockUserAssistant.mockResolvedValue(assistant(EXPLICIT_ASSISTANT_ID))
+
+    await request(makeApp())
+      .get(`/api/sessions?channels=all&assistantId=${EXPLICIT_ASSISTANT_ID}`)
+      .expect(200)
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]]
+    expect(sql).toContain("s.channel_type IN ('web', 'notification')")
+    expect(params).toHaveLength(3)
+  })
 })
