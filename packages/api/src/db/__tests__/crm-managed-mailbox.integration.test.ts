@@ -123,10 +123,12 @@ describe('[COMP:crm/delivery-policy] Final managed mailbox admission',()=>{
     await api.sendMessage('sender@example.com',{to:[recipient],text:'Fixture'},f.scope,intent)
     expect(fetch).toHaveBeenCalledTimes(1)
     expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toEqual({to:[recipient],text:'Fixture'})
+    await api.replyToMessage('sender@example.com','incoming',{to:[recipient],text:'Reply'},f.scope,intent)
+    expect(JSON.parse(fetch.mock.calls[1]![1]!.body as string)).toEqual({to:[recipient],cc:[],bcc:[],reply_all:false,text:'Reply'})
     await expect(api.createDraft('sender@example.com',{to:[recipient],send_at:'2030-01-01T00:00:00Z'},f.scope,intent)).rejects.toMatchObject(denied('managed_provider_scheduling_unavailable'))
     await expect(api.sendDraft('sender@example.com','draft',f.scope,intent)).rejects.toMatchObject(denied('managed_recipient_snapshot_required'))
     await expect(api.replyToMessage('sender@example.com','incoming',{text:'Fixture'},f.scope,intent)).rejects.toMatchObject(denied('managed_recipient_snapshot_required'))
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
   })
   it('preserves only exact interactive replies and never leaks that privilege beyond the adapter call',async()=>{
     const fetch=vi.fn(async(_url:string,_init?:RequestInit)=>ok()),api=createAgentmailClient({apiKey:'fixture',fetchImpl:fetch})

@@ -347,6 +347,12 @@ export function createAgentmailClient(params: { apiKey: string; fetchImpl?: Fetc
     },
     async replyToMessage(inboxId, messageId, params, context, intent) {
       const p = structuredClone(params)
+      if (p.to !== undefined && !p.reply_all) {
+        // Pin every recipient field instead of relying on vendor defaults.
+        p.reply_all = false
+        p.cc = list(p.cc)
+        p.bcc = list(p.bcc)
+      }
       const invoke = async () => (await call(AgentmailSendResultSchema, 'POST',
         `/inboxes/${enc(inboxId)}/messages/${enc(messageId)}/reply`, p)) as AgentmailSendResult
       if (isEmailChannelReply(inboxId, messageId) && !p.reply_all && p.to === undefined
