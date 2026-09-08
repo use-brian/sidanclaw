@@ -41,6 +41,7 @@
 
 import { getPool } from './client.js'
 import { notifyWorkspaceChange } from '../brain-stream/notify.js'
+import { retainWorkspaceAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 
 /**
  * Content tables deleted by `workspace_id`, in FK-safe order:
@@ -195,6 +196,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   // Settings + config + authored structure
   'workspace_tool_policy',
   'crm_privacy_policies',
+  'crm_address_suppression_tombstones',
   'crm_integration_credentials',
   'crm_integration_credential_grants',
   'workspace_knowledge_sources',
@@ -263,6 +265,7 @@ export async function flushWorkspaceData(
     if (owner.rowCount === 0) {
       throw new WorkspaceFlushNotOwnerError()
     }
+    await retainWorkspaceAddressSuppression(client,workspaceId)
 
     const optional = await client.query<{ name: string; installed: boolean }>(
       `SELECT name, to_regclass(format('public.%I', name)) IS NOT NULL AS installed

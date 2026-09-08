@@ -22,6 +22,7 @@ import {
 } from '@use-brian/core'
 import { getPool } from './client.js'
 import { readCrmPrivacyPolicy, saveCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { releaseCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 import { saveCrmEntitlementPlanRecord, saveCrmEventRecord } from './association-store.js'
 import type { PlanInput, EventInput } from '../association/domain.js'
 import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
@@ -85,6 +86,7 @@ export type IdempotencyClaim =
 export type CrmOperationsTransaction = {
   configureCatalog(command: CrmConfigCommand): ReturnType<typeof executeCrmConfigCommand>
   savePrivacyPolicy(command: Extract<CrmOperationsCommand, { kind: 'save_privacy_policy' }>): ReturnType<typeof saveCrmPrivacyPolicy>
+  releaseAddressSuppression(command: Extract<CrmOperationsCommand, { kind: 'release_address_suppression' }>): ReturnType<typeof releaseCrmAddressSuppression>
   authorizeIntegration(command: CrmOperationsCommand): Promise<void>
   saveEntitlementPlan(input: PlanInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
   saveEvent(input: EventInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
@@ -276,6 +278,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
   return {
     configureCatalog: (command) => executeCrmConfigCommand(client, context, command),
     savePrivacyPolicy: (command) => saveCrmPrivacyPolicy(client, context, command),
+    releaseAddressSuppression: (command) => releaseCrmAddressSuppression(client, context, command),
     authorizeIntegration: (command) => authorizeCrmIntegrationCommand(client, context, command),
     saveEntitlementPlan: (input) => saveCrmEntitlementPlanRecord(client, workspaceId, input),
     saveEvent: (input) => saveCrmEventRecord(client, workspaceId, input),

@@ -461,6 +461,12 @@ export function createCrmOperationsService(
           })
           return result(command.kind, saved.record, { created: saved.created, duplicate: !saved.changed })
         }
+        if (command.kind === 'release_address_suppression') {
+          const saved = await tx.releaseAddressSuppression(command)
+          if (saved.changed) await audit(tx, context.actor, { action: 'crm.address_suppression.released',subjectKind: 'address_suppression',
+            subjectId: recordId(saved.record,'suppression'),details: { evidenceKind: command.evidenceKind,evidenceId: command.evidenceId } })
+          return result(command.kind,saved.record,{ duplicate: !saved.changed })
+        }
         if (command.kind === 'save_privacy_policy') {
           const saved = await tx.savePrivacyPolicy(command)
           if (saved.created) await audit(tx, context.actor, {

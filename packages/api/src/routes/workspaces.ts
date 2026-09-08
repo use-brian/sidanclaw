@@ -37,7 +37,7 @@ import {
   type AppType,
   type AssistantCharter,
 } from '@use-brian/shared'
-import { MAX_INBOX_RETENTION_DAYS, MIN_INBOX_RETENTION_DAYS } from '@use-brian/core'
+import { MAX_INBOX_RETENTION_DAYS, MIN_INBOX_RETENTION_DAYS, CrmOperationsError } from '@use-brian/core'
 import { query, queryWithRLS } from '../db/client.js'
 import { findUserById } from '../db/users.js'
 import type { WorkspaceStore } from '../db/workspace-store.js'
@@ -845,6 +845,10 @@ export function workspaceRoutes({
     } catch (err) {
       if (err instanceof WorkspaceFlushNotOwnerError) {
         res.status(403).json({ error: 'Only the workspace owner can flush workspace data' })
+        return
+      }
+      if (err instanceof CrmOperationsError && err.code === 'conflict') {
+        res.status(409).json({ error: err.code, message: err.message, details: err.details })
         return
       }
       console.error('[workspaces] data flush failed:', err)

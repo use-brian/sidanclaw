@@ -94,6 +94,7 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
         id: 'suppression-1', channel: 'email', action: 'suppressed',
         occurredAt: new Date('2026-08-30T00:00:00Z'), createdAt: new Date('2026-08-30T00:00:00Z'),
       }] })
+      .mockResolvedValueOnce({ rows: [] }) // No retained address suppression.
     const verdict = await createDbCrmIntakeReadStore().checkSendability(
       WORKSPACE_ID, DEFINITION_ID, 'email', 'marketing',
     )

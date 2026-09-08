@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg'
 import { CrmOperationsError, type CrmOperationsCommand, type CrmOperationsContext } from '@use-brian/core'
 import { query } from '../db/client.js'
 
-type Policy = { intakeReplay: { retentionSeconds: number } | null }
+type Policy = { intakeReplay: { retentionSeconds: number } | null; addressSuppression?: { retentionSeconds: number } | null }
 type PolicyRecord = {
   id: string | null
   version: number
@@ -34,13 +34,17 @@ export async function saveCrmPrivacyPolicy(
   if (current.version !== command.expectedVersion) {
     throw new CrmOperationsError('conflict', 'Privacy policy changed. Reload it before approving.', { reason: 'stale_privacy_policy_version' })
   }
-  if (current.version > 0 && current.policy.intakeReplay?.retentionSeconds === command.intakeReplay?.retentionSeconds) {
+  const addressSuppression = command.addressSuppression === undefined ? current.policy.addressSuppression ?? null : command.addressSuppression
+  const policy: Policy = { intakeReplay: command.intakeReplay,
+    ...(command.addressSuppression !== undefined || Object.hasOwn(current.policy,'addressSuppression') ? { addressSuppression } : {}) }
+  if (current.version > 0 && current.policy.intakeReplay?.retentionSeconds === command.intakeReplay?.retentionSeconds
+    && current.policy.addressSuppression?.retentionSeconds === addressSuppression?.retentionSeconds) {
     return { record: current, created: false }
   }
   const saved = await client.query<PolicyRecord>(
     `INSERT INTO crm_privacy_policies(workspace_id,version,policy,approved_by_user_id)
      VALUES($1,$2,$3::jsonb,$4) RETURNING ${projection}`,
-    [context.workspaceId, current.version + 1, JSON.stringify({ intakeReplay: command.intakeReplay }), context.actor.userId])
+    [context.workspaceId, current.version + 1, JSON.stringify(policy), context.actor.userId])
   return { record: saved.rows[0]!, created: true }
 }
 

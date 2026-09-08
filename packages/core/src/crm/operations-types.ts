@@ -443,11 +443,21 @@ export const SaveCrmPrivacyPolicyCommandSchema = z.object({
   expectedVersion: z.number().int().min(0).max(2147483646),
   confirmed: z.literal(true),
   intakeReplay: CrmIntakeReplayPolicySchema,
+  addressSuppression: CrmIntakeReplayPolicySchema.optional(),
+}).strict()
+
+export const ReleaseCrmAddressSuppressionCommandSchema = z.object({
+  kind: z.literal('release_address_suppression'),
+  tombstoneId: CrmOperationsUuidSchema,
+  confirmed: z.literal(true),
+  evidenceKind: z.enum(['consent_event', 'workspace_file']),
+  evidenceId: CrmOperationsUuidSchema,
 }).strict()
 
 export const CrmOperationsCommandSchema = z.union([
   CrmConfigCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
+  ReleaseCrmAddressSuppressionCommandSchema,
   SaveCrmEntitlementPlanCommandSchema,
   SaveCrmEventCommandSchema,
   SaveCrmIntakeDefinitionCommandSchema,
@@ -575,13 +585,14 @@ export function commandRequiresConfigurationAuthority(command: CrmOperationsComm
     || command.kind === 'revoke_intake_credential'
     || command.kind === 'save_consent_purpose'
     || command.kind === 'save_privacy_policy'
+    || command.kind === 'release_address_suppression'
 }
 
 export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
-  if (command.kind === 'save_privacy_policy' && (context.actor.kind !== 'user'
+  if (['save_privacy_policy', 'release_address_suppression'].includes(command.kind) && (context.actor.kind !== 'user'
     || !['owner', 'admin'].includes(context.authority.role))) {
     throw new CrmOperationsError('not_authorized', 'Privacy policy approval requires a workspace owner or admin member.')
   }

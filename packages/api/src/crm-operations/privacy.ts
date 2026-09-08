@@ -13,6 +13,7 @@ import type { CrmPageQuery } from '@use-brian/core'
 import { queryCrmPage } from './pagination.js'
 import { getPool, query } from '../db/client.js'
 import { retireCrmIntakeReceipts } from './privacy-policy.js'
+import { retainCrmAddressSuppression } from './suppression-tombstones.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_definitions',
@@ -21,6 +22,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_credential_definitions',
   'crm_intake_idempotency',
   'crm_privacy_policies',
+  'crm_address_suppression_tombstones',
   'association_external_identities',
   'association_enquiries',
   'association_enquiry_notes',
@@ -68,6 +70,7 @@ EXPORT_PROJECTIONS.crm_import_sources = [
   'id', 'workspace_id', 'source_key', 'source_hash', 'credential_id',
   'integration_grants', 'created_at', 'octet_length(content_bytes) AS byte_count',
 ].join(',')
+EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
 
 export type CrmOperationsPrivacyExport = {
   schema: 'crm-operations-privacy-v1'
@@ -107,6 +110,7 @@ export async function redactCrmOperationsForContact(
     [workspaceId, contactId],
   )
   if (!person.rows[0]?.isPerson) return
+  await retainCrmAddressSuppression(client,workspaceId,contactId)
   // Match retention's enquiry -> receipt ordering. Holding a receipt before
   // its enquiry would deadlock against a concurrent retention transaction.
   await client.query(`SELECT id FROM association_enquiries WHERE workspace_id=$1 AND contact_id=$2 ORDER BY id FOR UPDATE`,

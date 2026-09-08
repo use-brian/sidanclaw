@@ -26,6 +26,7 @@ import {
   SaveCrmConsentPurposeCommandSchema,
   SaveCrmSegmentCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
+  ReleaseCrmAddressSuppressionCommandSchema,
   UpdateCrmSubmissionCommandSchema,
   UpdateCrmEntitlementCommandSchema,
   UpdateCrmParticipationCommandSchema,
@@ -47,6 +48,8 @@ import {
   pruneCrmOperationsRetention,
 } from '../crm-operations/privacy.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
+import { query } from '../db/client.js'
 import { CrmPipelinesQuerySchema, CrmRecordFieldsQuerySchema } from '../db/crm-config-catalog.js'
 
 const SaveDefinitionBody = SaveCrmIntakeDefinitionCommandSchema.omit({ kind: true }).strict()
@@ -872,6 +875,22 @@ export function crmOperationsRoutes(options: Options): Router {
     if (!ctx) return
     if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
     try { res.json(await readCrmPrivacyPolicy(ctx.workspaceId)) } catch (error) { writeError(res, error) }
+  })
+
+  router.get('/:workspaceId/operations/address-suppression', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
+    try { res.json(await listCrmAddressSuppression({ query },ctx.workspaceId,CrmPageQuerySchema.parse(req.query))) }
+    catch (error) { writeError(res,error) }
+  })
+  router.post('/:workspaceId/operations/address-suppression/:tombstoneId/release', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    try {
+      const command = ReleaseCrmAddressSuppressionCommandSchema.parse({ ...req.body,kind: 'release_address_suppression',tombstoneId: req.params.tombstoneId })
+      res.json(await options.service.execute(ctx,command))
+    } catch (error) { writeError(res,error) }
   })
 
   router.post('/:workspaceId/operations/privacy-policy', async (req, res) => {

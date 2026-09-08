@@ -6,6 +6,7 @@ import { flushWorkspaceData, WorkspaceFlushNotOwnerError } from '../workspace-fl
 
 const { assertLocalFixture } = await import(new URL('../../../../../scripts/crm/local-fixture.mjs', import.meta.url).href)
 await assertLocalFixture()
+process.env.CRM_SUPPRESSION_HMAC_KEYRING = JSON.stringify({ activeVersion: 'fixture',keys: { fixture: Buffer.alloc(32,7).toString('base64') } })
 const pool = getPool()
 const overlayNames = ['pending_classifications', 'brain_candidates', 'connector_actions', 'external_entities', 'distribution_events']
 const installed = (await pool.query<{ name: string }>(
@@ -20,7 +21,7 @@ async function seed() {
   await pool.query(`INSERT INTO workspaces(id,name,owner_user_id,is_personal) VALUES($1,'Flush fixture',$2,true)`, [workspaceId,userId])
   await pool.query(`INSERT INTO workspace_members(workspace_id,user_id,role) VALUES($1,$2,'owner')`, [workspaceId,userId])
   await pool.query(`INSERT INTO assistants(id,name,workspace_id,kind,owner_user_id) VALUES($1,'Fixture assistant',$2,'primary',$3)`, [assistantId,workspaceId,userId])
-  await pool.query(`INSERT INTO entities(id,workspace_id,kind,display_name,created_by_user_id,source) VALUES($1,$2,'person','Fixture person',$3,'manual')`, [contactId,workspaceId,userId])
+  await pool.query(`INSERT INTO entities(id,workspace_id,kind,display_name,canonical_id,created_by_user_id,source) VALUES($1,$2,'person','Fixture person','flush@example.com',$3,'manual')`, [contactId,workspaceId,userId])
   await pool.query(`INSERT INTO episodes(id,workspace_id,source_kind,source_ref,occurred_at,created_by_user_id,user_id)
     VALUES($1,$2,'chat','{}',now(),$3,$3)`, [episodeId,workspaceId,userId])
   const { id: memoryId } = await createMemory({ workspaceId,userId,assistantId,summary: 'Fixture memory',
@@ -30,7 +31,7 @@ async function seed() {
   await pool.query(`INSERT INTO scheduled_jobs(assistant_id,user_id,schedule,timezone,instructions,channel_type,channel_id,next_run_at)
     VALUES($1,$2,'{"type":"daily"}','UTC','Fixture job','cron','cron',now()+interval '1 day')`, [assistantId,userId])
   await pool.query(`INSERT INTO crm_privacy_policies(workspace_id,version,policy,approved_by_user_id)
-    VALUES($1,1,'{"intakeReplay":null}',$2)`, [workspaceId,userId])
+    VALUES($1,1,'{"intakeReplay":null,"addressSuppression":{"retentionSeconds":3600}}',$2)`, [workspaceId,userId])
   await pool.query(`INSERT INTO crm_suppression_events(workspace_id,contact_id,channel,action,reason_code,source,actor_kind)
     VALUES($1,$2,'email','suppressed','manual_do_not_contact','fixture','user')`, [workspaceId,contactId])
   if (installed.includes('pending_classifications')) await pool.query(
@@ -86,8 +87,9 @@ describe('[COMP:api/workspace-flush] Actual OSS and hosted flush boundaries', ()
   })
   it('rolls back prior deletions if a required OSS table is unavailable', async () => {
     const f = await seed(), before = await state(f)
-    // This test is guarded before connecting and runs alone in its disposable
-    // cluster. A required missing relation must never become a skipped delete.
+    // This guarded test mutates only its disposable cluster's schema. Run
+    // combined fixture files with --maxWorkers=1 to isolate the temporary rename.
+    // A required missing relation must never become a skipped delete.
     await pool.query('ALTER TABLE tasks RENAME TO fixture_unavailable_tasks')
     try {
       await expect(flushWorkspaceData(f.userId,f.workspaceId)).rejects.toMatchObject({ code: '42P01' })

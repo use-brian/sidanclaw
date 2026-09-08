@@ -16,6 +16,7 @@ export const SendabilityReasonSchema = z.enum([
   'contact_method_missing',
   'global_suppression',
   'channel_suppression',
+  'address_suppression',
   'consent_withdrawn',
   'consent_not_recorded',
   'purpose_archived',

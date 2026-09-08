@@ -17,6 +17,7 @@ import {
   type CrmOperationsReadPort,
 } from '@use-brian/core'
 import { query } from './client.js'
+import { readCrmAddressSuppressions } from '../crm-operations/suppression-tombstones.js'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { verifySecret } from './api-key-store.js'
 import { createDbCrmSegmentStore } from './crm-segment-store.js'
@@ -478,12 +479,15 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
         email: string | null
         phone: string | null
         providerIdentity: boolean
+        providerSubjects: string[]
       }>(
         `SELECT COALESCE(NULLIF(e.attributes->>'email',''), e.canonical_id) AS email,
                 NULLIF(e.attributes->>'phone','') AS phone,
                 EXISTS(SELECT 1 FROM association_external_identities i
                   WHERE i.workspace_id=e.workspace_id AND i.contact_id=e.id
-                    AND i.provider=$3) AS "providerIdentity"
+                    AND i.provider=$3) AS "providerIdentity",
+                ARRAY(SELECT i.provider_subject FROM association_external_identities i
+                  WHERE i.workspace_id=e.workspace_id AND i.contact_id=e.id AND i.provider=$3) AS "providerSubjects"
            FROM entities e
           WHERE e.workspace_id=$1 AND e.id=$2 AND e.kind='person'
             AND e.valid_to IS NULL AND e.retracted_at IS NULL`,
@@ -514,7 +518,7 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
       const hasContactMethod = channel === 'email' ? Boolean(contactRow.email)
         : channel === 'sms' || channel === 'phone' || channel === 'whatsapp'
           ? Boolean(contactRow.phone) : contactRow.providerIdentity
-      return evaluateCrmSendability({
+      const verdict = evaluateCrmSendability({
         channel,
         hasContactMethod,
         purpose: {
@@ -525,6 +529,12 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
         consentEvents: consent.rows,
         suppressionEvents: suppressions.rows,
       })
+      const destinations = channel === 'email' ? [contactRow.email] : ['phone','sms','whatsapp'].includes(channel)
+        ? [contactRow.phone] : contactRow.providerSubjects ?? []
+      const retained = (await Promise.all(destinations.filter((value): value is string => Boolean(value))
+        .map((address) => readCrmAddressSuppressions({ query },workspaceId,channel,address,purposeKey)))).flat()
+      if (retained.length) { verdict.verdict = 'blocked'; verdict.reasons.push('address_suppression'); verdict.effectiveSuppressionEventIds.push(...retained.map((row) => row.id)) }
+      return verdict
     },
   }
 }
