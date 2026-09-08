@@ -572,7 +572,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
       const result = await pool.query<DbRow>(
         `SELECT ${CONSENT_SELECT} FROM association_consent_events
           WHERE workspace_id = $1 AND contact_id = $2
-          ORDER BY occurred_at DESC, id DESC`,
+          ORDER BY occurred_at DESC, created_at DESC, id DESC`,
         [workspaceId, contactId],
       )
       const effective: Record<string, string> = {}

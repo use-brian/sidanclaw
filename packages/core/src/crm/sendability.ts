@@ -19,6 +19,7 @@ export const SendabilityReasonSchema = z.enum([
   'consent_withdrawn',
   'consent_not_recorded',
   'purpose_archived',
+  'purpose_channel_inapplicable',
 ])
 export type SendabilityReason = z.infer<typeof SendabilityReasonSchema>
 
@@ -50,24 +51,39 @@ export type SendabilityInput = {
   purpose: {
     archived: boolean
     requiresConsent: boolean
+    applicableChannels?: readonly CrmDeliveryChannel[]
   }
   consentEvents: readonly ConsentEvidence[]
   suppressionEvents: readonly SuppressionEvidence[]
 }
 
-function eventTime(event: { occurredAt: string | Date; createdAt?: string | Date }): number {
-  const occurred = new Date(event.occurredAt).getTime()
-  const created = event.createdAt ? new Date(event.createdAt).getTime() : occurred
-  return Math.max(occurred, created)
+function instant(value: string | Date): bigint {
+  const text = value instanceof Date ? value.toISOString() : value
+  const millis = Date.parse(text)
+  const fraction = /\.(\d+)/.exec(text)?.[1] ?? ''
+  if (!z.string().datetime({ offset: true }).safeParse(text).success
+    || !Number.isFinite(millis) || fraction.length > 6) {
+    throw new RangeError('Invalid CRM evidence timestamp.')
+  }
+  return BigInt(millis) * 1000n + BigInt(fraction.padEnd(6, '0').slice(3))
 }
 
 function latest<T extends { id: string; occurredAt: string | Date; createdAt?: string | Date }>(
   events: readonly T[],
 ): T | undefined {
-  return [...events].sort((left, right) => {
-    const time = eventTime(right) - eventTime(left)
-    return time !== 0 ? time : right.id.localeCompare(left.id)
-  })[0]
+  let winner: T | undefined
+  let occurred = 0n, recorded = 0n
+  for (const event of events) {
+    const at = instant(event.occurredAt)
+    const received = instant(event.createdAt ?? event.occurredAt)
+    if (!winner || at > occurred || (at === occurred && (received > recorded
+      || (received === recorded && event.id > winner.id)))) {
+      winner = event
+      occurred = at
+      recorded = received
+    }
+  }
+  return winner
 }
 
 export function evaluateCrmSendability(input: SendabilityInput): SendabilityVerdict {
@@ -85,6 +101,8 @@ export function evaluateCrmSendability(input: SendabilityInput): SendabilityVerd
     effectiveSuppressions.push(channel.id)
   }
   if (input.purpose.archived) reasons.push('purpose_archived')
+  if (input.purpose.applicableChannels?.length
+    && !input.purpose.applicableChannels.includes(input.channel)) reasons.push('purpose_channel_inapplicable')
   if (!input.hasContactMethod) reasons.push('contact_method_missing')
 
   const consent = latest(input.consentEvents)
@@ -97,7 +115,8 @@ export function evaluateCrmSendability(input: SendabilityInput): SendabilityVerd
     reason === 'global_suppression'
       || reason === 'channel_suppression'
       || reason === 'consent_withdrawn'
-      || reason === 'purpose_archived')
+      || reason === 'purpose_archived'
+      || reason === 'purpose_channel_inapplicable')
   const unknown = reasons.some((reason) =>
     reason === 'contact_method_missing' || reason === 'consent_not_recorded')
 

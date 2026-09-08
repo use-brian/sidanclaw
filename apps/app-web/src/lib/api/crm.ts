@@ -404,7 +404,7 @@ export type CrmCompliance = {
 
 export type CrmSendabilityVerdict = {
   verdict: "allowed" | "blocked" | "unknown";
-  reasons: Array<"contact_method_missing" | "global_suppression" | "channel_suppression" | "consent_withdrawn" | "consent_not_recorded" | "purpose_archived">;
+  reasons: Array<"contact_method_missing" | "global_suppression" | "channel_suppression" | "consent_withdrawn" | "consent_not_recorded" | "purpose_archived" | "purpose_channel_inapplicable">;
   effectiveConsentEventId?: string;
   effectiveSuppressionEventIds: string[];
 };

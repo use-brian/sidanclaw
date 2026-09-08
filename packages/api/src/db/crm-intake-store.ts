@@ -437,8 +437,10 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
         id: string
         archivedAt: Date | null
         requiresConsent: boolean
+        applicableChannels: CrmDeliveryChannel[]
       }>(
-        `SELECT id, archived_at AS "archivedAt", requires_consent AS "requiresConsent"
+        `SELECT id, archived_at AS "archivedAt", requires_consent AS "requiresConsent",
+                applicable_channels AS "applicableChannels"
            FROM crm_consent_purposes WHERE workspace_id=$1 AND purpose_key=$2`,
         [workspaceId, purposeKey],
       )
@@ -473,16 +475,22 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
       const contactRow = contact.rows[0]
       if (!contactRow) throw new CrmOperationsError('not_found', 'CRM contact was not found.')
       const [consent, suppressions] = await Promise.all([
-        query<{ id: string; action: 'granted' | 'withdrawn'; occurredAt: Date; createdAt: Date }>(
-          `SELECT id, action, occurred_at AS "occurredAt", created_at AS "createdAt"
+        query<{ id: string; action: 'granted' | 'withdrawn'; occurredAt: string; createdAt: string }>(
+          `SELECT id, action,
+                  to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt",
+                  to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt"
              FROM association_consent_events
-            WHERE workspace_id=$1 AND contact_id=$2 AND purpose=$3`,
+            WHERE workspace_id=$1 AND contact_id=$2 AND purpose=$3
+            ORDER BY occurred_at DESC,created_at DESC,id DESC LIMIT 1`,
           [workspaceId, contactId, purposeKey],
         ),
-        query<{ id: string; channel: 'all' | CrmDeliveryChannel; action: 'suppressed' | 'released'; occurredAt: Date; createdAt: Date }>(
-          `SELECT id, channel, action, occurred_at AS "occurredAt", created_at AS "createdAt"
+        query<{ id: string; channel: 'all' | CrmDeliveryChannel; action: 'suppressed' | 'released'; occurredAt: string; createdAt: string }>(
+          `SELECT DISTINCT ON (channel) id, channel, action,
+                  to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "occurredAt",
+                  to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "createdAt"
              FROM crm_suppression_events
-            WHERE workspace_id=$1 AND contact_id=$2 AND channel IN ('all',$3)`,
+            WHERE workspace_id=$1 AND contact_id=$2 AND channel IN ('all',$3)
+            ORDER BY channel,occurred_at DESC,created_at DESC,id DESC`,
           [workspaceId, contactId, channel],
         ),
       ])
@@ -495,6 +503,7 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
         purpose: {
           archived: Boolean(purpose.rows[0].archivedAt),
           requiresConsent: purpose.rows[0].requiresConsent,
+          applicableChannels: purpose.rows[0].applicableChannels,
         },
         consentEvents: consent.rows,
         suppressionEvents: suppressions.rows,
