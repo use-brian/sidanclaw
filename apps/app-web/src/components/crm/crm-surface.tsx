@@ -1020,7 +1020,6 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
           controls stay in the right slot ([COMP:app-web/operator-topbar]). */}
       <OperatorTopbar
         app="crm"
-        appChipClassName="hidden sm:flex sm:w-[148px] lg:w-[200px]"
         centerVisibility="when-sidebar-unavailable"
         center={
           <div

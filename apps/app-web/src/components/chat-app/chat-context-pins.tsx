@@ -634,6 +634,11 @@ export function ChatContextPins({
       className={cn(
         "relative flex h-full max-w-full shrink-0 flex-col overflow-hidden border-l border-border bg-background",
         width === null && "w-full sm:w-[360px] lg:w-[400px]",
+        // Below `sm` the bench is a full-pane OVERLAY, never a flex sibling:
+        // as a sibling its `w-full` took the whole row and collapsed the
+        // transcript and composer to 0px (responsive contract M5). The
+        // remembered desktop width is inline, so `!w-full` has to out-rank it.
+        "max-sm:absolute max-sm:inset-0 max-sm:z-20 max-sm:!w-full max-sm:border-l-0",
         !resizing && "transition-[width] duration-200 ease-out",
         resizing && "select-none",
       )}
@@ -678,7 +683,9 @@ export function ChatContextPins({
           aria-controls={WORK_BENCH_CONTENT_ID}
           aria-label={chatT.workBenchCollapse}
           title={chatT.workBenchCollapse}
-          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          // 44px on a phone (M3): this is the only way back to the transcript
+          // while the bench overlays it.
+          className="grid size-11 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:size-7"
         >
           <PanelRightClose className="size-4" aria-hidden />
         </button>

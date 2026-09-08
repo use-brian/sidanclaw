@@ -25,7 +25,13 @@
  * `doc-topbar.tsx`, whose class recipes this file copies verbatim.
  *
  * Mobile: the collapse toggle hides (the chrome's fixed hamburger drives the
- * drawer); a leading spacer keeps the row clear of it.
+ * drawer); a leading spacer keeps the row clear of it. The app chip is
+ * `hidden sm:flex sm:w-[148px] lg:w-[200px]` BY DEFAULT (responsive contract
+ * M8): flex shrink is proportional to basis, so a 200px chip beside a
+ * `flex-1 min-w-0` center slot took every pixel of negative space at 390px
+ * and rendered the Chat surface's Personal / Workspace toggle 0px wide. A
+ * surface may pass `appChipClassName` to tune the chip, but never to re-widen
+ * it below `sm` (graded: `invariants/topbar-chip-gate`).
  *
  * Desktop-shell (Electron) parity mirrors brain/studio-topbar: the bar is an
  * OS window-drag handle (`data-doc-chrome`), and it SELF-sets
@@ -78,8 +84,9 @@ export function OperatorTopbar({
    * manifest names an icon this build's lucide set does not carry.
    */
   customApp?: { name: string; icon: string | null };
-  /** Optional responsive layout override for surfaces whose center controls
-   *  must stay directly visible on narrow screens. */
+  /** Optional layout override for the app chip. The default already hides
+   *  the chip below `sm` so the center slot keeps its width on a phone; an
+   *  override must keep that `hidden sm:` gate (M8). */
   appChipClassName?: string;
   /** Cluster after the tab chip (CRM's section switch). Scrolls instead of
    *  painting over the right cluster when the bar is cramped. */
@@ -157,7 +164,10 @@ export function OperatorTopbar({
       <div className="flex min-w-0 flex-1 items-end gap-1 self-stretch">
         <div
           className={cn(
-            "flex h-9 w-[200px] min-w-0 items-center gap-1.5 rounded-t-lg pl-3 pr-3 text-sm",
+            // Hidden below `sm` (M8): the phone's 40px hamburger spacer plus
+            // history arrows already name where you are, and the center slot
+            // needs the width more than the chip does.
+            "hidden h-9 min-w-0 items-center gap-1.5 rounded-t-lg pl-3 pr-3 text-sm sm:flex sm:w-[148px] lg:w-[200px]",
             "relative z-10 -mb-px border border-b-0 border-sidebar-border bg-background font-medium text-foreground",
             appChipClassName,
           )}

@@ -156,6 +156,7 @@ import { describeToolFromInput } from "@/lib/tool-narration";
 import { authFetch } from "@/lib/auth-fetch";
 import { useT, useLocale, format } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   listWorkspaceAssistants,
   type WorkspaceAssistantSummary,
@@ -1271,8 +1272,15 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
    *  refetches through its own loader (signals, never data). */
   const [pinsEpoch, setPinsEpoch] = useState(0);
   /** The room's working frame is a persistent right rail. Expanded is the
-   *  remembered resizable drawer; collapsed is one icon-only column. */
+   *  remembered resizable drawer; collapsed is one icon-only column. Seeded
+   *  expanded (the desktop default, and the SSR-safe value); the mount effect
+   *  below collapses it on a phone, where an expanded bench is a full-pane
+   *  overlay that would otherwise open OVER the transcript the user came for
+   *  (responsive contract M1 / M5). */
   const [workBenchExpanded, setWorkBenchExpanded] = useState(true);
+  useEffect(() => {
+    if (isPhoneViewport()) setWorkBenchExpanded(false);
+  }, []);
   const isSharedOpen = !!activeShared;
 
   const resetRemoteTurn = useCallback(() => {
@@ -3936,7 +3944,11 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           <div
             role="tablist"
             aria-label={t.viewSwitchAria}
-            className="flex items-center gap-0.5 rounded-lg bg-sidebar-accent/60 p-0.5"
+            // `shrink-0`: the toggle is the only way to reach workspace rooms
+            // on a phone, so it keeps its intrinsic width and the center slot
+            // scrolls instead (M8). The topbar's chip is already hidden below
+            // `sm` for the same reason.
+            className="flex shrink-0 items-center gap-0.5 rounded-lg bg-sidebar-accent/60 p-0.5"
           >
             <button
               type="button"

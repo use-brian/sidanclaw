@@ -121,13 +121,26 @@ describe("[COMP:app-web/operator-topbar] Operator top bar chrome", () => {
     expect(collapsed).toContain("CRM-NAV");
   });
 
-  it("accepts a surface-owned responsive app-chip width", () => {
+  it("hides the app chip below `sm` by default so the center slot keeps its width (M8)", () => {
+    // Regression for the 390px Chat surface: a 200px chip beside a `flex-1
+    // min-w-0` center slot absorbed every pixel of negative space and the
+    // Personal / Workspace toggle rendered 0px wide. The chip now yields
+    // below `sm` in the PRIMITIVE, so no surface has to remember to pass an
+    // override (graded: invariants/topbar-chip-gate).
+    const html = wrap(<OperatorTopbar app="chat" center={<span>CENTER</span>} />);
+    const chip = /class="([^"]*)"[^>]*>\s*<span class="grid size-4/.exec(html)?.[1] ?? "";
+    expect(chip).toContain("hidden");
+    expect(chip).toContain("sm:flex");
+    expect(chip).toContain("sm:w-[148px]");
+    expect(chip).toContain("lg:w-[200px]");
+    expect(chip).not.toMatch(/(^|\s)w-\[200px\]/);
+  });
+
+  it("still composes a surface-owned app-chip override on top of the default", () => {
     const html = wrap(
-      <OperatorTopbar
-        app="browsers"
-        appChipClassName="hidden sm:flex sm:w-[200px]"
-      />,
+      <OperatorTopbar app="browsers" appChipClassName="sm:w-[200px]" />,
     );
-    expect(html).toContain("hidden sm:flex sm:w-[200px]");
+    expect(html).toContain("sm:w-[200px]");
+    expect(html).toContain("hidden");
   });
 });
