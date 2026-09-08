@@ -75,7 +75,7 @@ async function responseJson(response, maxBytes) {
   } finally { await reader.cancel().catch(() => {}) }
 }
 
-export function createManifestClient({ apiUrl, workspaceId, mode, token, fetchImpl = fetch, timeoutMs = 30_000, pageSize = 100 }) {
+export function createManifestClient({ apiUrl, workspaceId, mode, token, fetchImpl = fetch, timeoutMs = 30_000, pageSize = 100, signal }) {
   const apiOrigin = origin(apiUrl)
   if (!CrmOperationsUuidSchema.safeParse(workspaceId).success) fail('invalid_workspace')
   if (!['member', 'integration'].includes(mode)) fail('invalid_auth_mode')
@@ -91,7 +91,8 @@ export function createManifestClient({ apiUrl, workspaceId, mode, token, fetchIm
     for (const [key, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(key, String(value))
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      const response = await fetchImpl(url, { method, redirect: 'manual', signal: controller.signal,
+      signal?.throwIfAborted()
+      const response = await fetchImpl(url, { method, redirect: 'manual', signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
         headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       })

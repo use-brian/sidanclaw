@@ -41,3 +41,5 @@ export * from './operations-tools.js'
 export * from './pagination.js'
 export * from './sendability.js'
 export * from './segments.js'
+
+export * from './segment-catalog.js'
