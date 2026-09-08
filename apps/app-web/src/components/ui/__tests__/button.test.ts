@@ -28,6 +28,17 @@ describe("[COMP:app-web/button] Button", () => {
     expect(buttonVariants({ variant: "link" })).toContain("text-primary");
   });
 
+  it("gives text buttons a 44px floor below sm so dialog actions inherit it (M3)", () => {
+    // Cancel and a destructive Confirm at 28px, 8px apart, at the bottom of
+    // every destructive flow is the shape the responsive review flagged; the
+    // three dialog primitives all render `size="sm"`, so the floor lives here.
+    for (const size of ["sm", "default", "lg"] as const) {
+      expect(buttonVariants({ size })).toContain("max-sm:min-h-11");
+    }
+    // Icon buttons are sized by their callers and stay compact in dense rows.
+    expect(buttonVariants({ size: "icon-sm" })).not.toContain("max-sm:min-h-11");
+  });
+
   it("reserves primary-colour fills for compact semantic indicators", () => {
     const legacyPairs = tsxFiles(SRC_ROOT)
       .flatMap((file) =>

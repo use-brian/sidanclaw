@@ -59,8 +59,9 @@ import { APP_ICON } from "@/components/doc/operator-app-bar";
 import { type OperatorAppKey } from "@/lib/operator-apps";
 
 /** doc-topbar's icon-button recipe (sidebar palette). */
+// 44px on a phone (responsive contract M3), the doc-topbar size from `md`.
 const iconBtnCls =
-  "inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-35";
+  "inline-flex size-11 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-35 md:size-7";
 
 export function OperatorTopbar({
   app,

@@ -2545,6 +2545,12 @@ export const zhCN: Dictionary = {
     expiresInDays: "{days} 天后到期",
     expiresToday: "今天到期",
     revoke: "撤销",
+    removeMemberConfirmTitle: "移除这位成员？",
+    removeMemberConfirmBody: "{name} 将立即失去此工作区的访问权。之后可以再次邀请。",
+    removeMemberConfirm: "移除成员",
+    revokeInviteConfirmTitle: "撤销这条邀请？",
+    revokeInviteConfirmBody: "发给 {email} 的链接将失效。之后可以重新发送邀请。",
+    revokeInviteConfirm: "撤销邀请",
     resend: "重新发送",
   },
   workspaceLlmKey: {

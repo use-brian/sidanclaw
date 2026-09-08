@@ -138,7 +138,7 @@ export function DocTopBar({
         disabled={!canBack}
         aria-label={t.topbarBackAria}
         title={t.topbarBackAria}
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-35"
+        className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-35 md:size-7"
       >
         <ChevronLeft className="size-4" aria-hidden />
       </button>
@@ -148,7 +148,7 @@ export function DocTopBar({
         disabled={!canForward}
         aria-label={t.topbarForwardAria}
         title={t.topbarForwardAria}
-        className="mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-35"
+        className="mr-1 inline-flex size-11 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-35 md:size-7"
       >
         <ChevronRight className="size-4" aria-hidden />
       </button>
@@ -176,7 +176,7 @@ export function DocTopBar({
           onClick={onNewTab}
           aria-label={t.topbarNewTabAria}
           title={t.topbarNewTabAria}
-          className="ml-0.5 inline-flex size-7 shrink-0 items-center justify-center self-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="ml-0.5 inline-flex size-11 shrink-0 items-center justify-center self-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:size-7"
         >
           <Plus className="size-4" aria-hidden />
         </button>

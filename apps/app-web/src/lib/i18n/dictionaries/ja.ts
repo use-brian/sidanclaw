@@ -2615,6 +2615,12 @@ export const ja: Dictionary = {
     expiresInDays: "{days} 日後に期限切れ",
     expiresToday: "本日期限切れ",
     revoke: "取り消す",
+    removeMemberConfirmTitle: "このメンバーを削除しますか？",
+    removeMemberConfirmBody: "{name} はすぐにこのワークスペースにアクセスできなくなります。後で再度招待できます。",
+    removeMemberConfirm: "メンバーを削除",
+    revokeInviteConfirmTitle: "この招待を取り消しますか？",
+    revokeInviteConfirmBody: "{email} に送ったリンクは無効になります。後で新しい招待を送れます。",
+    revokeInviteConfirm: "招待を取り消す",
     resend: "再送信",
   },
   workspaceLlmKey: {

@@ -44,6 +44,7 @@ import { authFetch } from "@/lib/auth-fetch";
 import { primaryAuthUrl, webAppUrl } from "@/lib/primary-auth";
 import { getUserInfo } from "@/lib/user";
 import { signOutActiveAccount } from "@/lib/account-logout";
+import { requestSidebarClose } from "@/lib/sidebar-close";
 import { deploymentCapabilities } from "@/lib/edition";
 import { updateWorkspacePickerPreferences } from "@/lib/api/workspaces";
 import {
@@ -159,6 +160,9 @@ export function WorkspaceSwitcher() {
 
   function openSettings(section: SettingsSection) {
     setOpen(false);
+    // The modal covers the page, but the drawer it was launched from would
+    // still be open behind it when the modal closes (responsive contract M7).
+    requestSidebarClose();
     setSettingsSection(section);
     setSettingsOpen(true);
   }
@@ -172,6 +176,7 @@ export function WorkspaceSwitcher() {
       const section = (e as CustomEvent<OpenSettingsDetail>).detail?.section;
       if (!section) return;
       setOpen(false);
+      requestSidebarClose();
       setSettingsSection(section);
       setSettingsOpen(true);
     }
@@ -407,7 +412,9 @@ export function WorkspaceSwitcher() {
         aria-label={format(t.switcherAriaLabel, { name: ctx.name })}
         className={cn(
           "inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md",
-          "px-1.5 py-1 text-sm hover:bg-muted transition-colors",
+          // 44px on a phone (responsive contract M3): the second tap of every
+          // admin flow, inside the drawer head.
+          "min-h-11 px-1.5 py-1 text-sm hover:bg-muted transition-colors sm:min-h-0",
         )}
       >
         <TeamAvatar
@@ -454,7 +461,9 @@ export function WorkspaceSwitcher() {
           triggerRef.current?.closest("[data-doc-sidebar-head]") ??
           triggerRef.current
         }
-        className="w-80 gap-3 p-3"
+        // Never wider than the phone (responsive contract M5); the popover
+        // primitive clamps the height.
+        className="w-[min(20rem,calc(100vw-1rem))] gap-3 p-3"
       >
         {creating ? (
           <CreateWorkspacePanel
@@ -485,7 +494,7 @@ export function WorkspaceSwitcher() {
               className={cn(
                 "flex-1 inline-flex items-center justify-center gap-1.5",
                 "rounded-md border border-border bg-card hover:bg-muted",
-                "px-2 py-1.5 text-xs transition-colors",
+                "min-h-11 px-2 py-1.5 text-xs transition-colors sm:min-h-0",
               )}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -501,7 +510,7 @@ export function WorkspaceSwitcher() {
               className={cn(
                 "flex-1 inline-flex items-center justify-center gap-1.5",
                 "rounded-md border border-border bg-card hover:bg-muted",
-                "px-2 py-1.5 text-xs transition-colors",
+                "min-h-11 px-2 py-1.5 text-xs transition-colors sm:min-h-0",
               )}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -564,7 +573,7 @@ export function WorkspaceSwitcher() {
                 value={workspaceQuery}
                 onChange={(event) => setWorkspaceQuery(event.target.value)}
                 placeholder={t.searchPlaceholder}
-                className="h-8 w-full rounded-md border border-border bg-background pl-8 pr-2 text-xs outline-none placeholder:text-muted-foreground"
+                className="h-11 w-full rounded-md border border-border bg-background pl-8 pr-2 text-[16px] outline-none placeholder:text-muted-foreground sm:h-8 md:text-xs"
               />
             </label>
           ) : null}
@@ -690,7 +699,7 @@ function AccountRow({
           : format(t.switchAccountAria, { email: account.email })
       }
       className={cn(
-        "w-full inline-flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors min-w-0",
+        "w-full inline-flex items-center gap-2 rounded px-2 py-1.5 text-left transition-colors min-w-0 min-h-11 sm:min-h-0",
         isActive ? "bg-muted/60 cursor-default" : "hover:bg-muted cursor-pointer",
       )}
     >
@@ -744,7 +753,7 @@ function WorkspaceRow({
       role="menuitem"
       onClick={onSelect}
       className={cn(
-        "w-full inline-flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors text-left",
+        "w-full inline-flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors text-left min-h-11 sm:min-h-0",
         isActive ? "bg-muted" : "hover:bg-muted",
       )}
       aria-current={isActive ? "true" : undefined}

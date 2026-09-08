@@ -46,6 +46,7 @@ import { listCustomPageTemplates } from "@/lib/api/views";
 import { buildBlueprintPickerItems } from "@/lib/blueprints";
 import type { CustomPageTemplateSummary } from "@use-brian/doc-model";
 import { getUserInfo } from "@/lib/user";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   useWorkspaceContext,
   emitWorkspaceIconChanged,
@@ -1303,8 +1304,18 @@ export function WorkspaceMembersSection() {
     }
   }
 
-  async function revokeInvite(invitationId: string) {
+  async function revokeInvite(invitationId: string, email: string) {
     if (!data) return;
+    // A 44px Revoke beside Resend is one mis-tap from a destructive write on a
+    // phone; the teamspace modal already confirms the same action.
+    const ok = await confirmDialog({
+      title: t.workspaceDetailInline.revokeInviteConfirmTitle,
+      description: format(t.workspaceDetailInline.revokeInviteConfirmBody, { email }),
+      confirmLabel: t.workspaceDetailInline.revokeInviteConfirm,
+      cancelLabel: t.workspaceDetailInline.cancel,
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
       await authFetch(`${API_URL}/api/workspaces/${data.id}/invitations/${invitationId}`, {
         method: "DELETE",
@@ -1339,8 +1350,16 @@ export function WorkspaceMembersSection() {
     }
   }
 
-  async function removeMember(userId: string) {
+  async function removeMember(userId: string, name: string) {
     if (!data) return;
+    const ok = await confirmDialog({
+      title: t.workspaceDetailInline.removeMemberConfirmTitle,
+      description: format(t.workspaceDetailInline.removeMemberConfirmBody, { name }),
+      confirmLabel: t.workspaceDetailInline.removeMemberConfirm,
+      cancelLabel: t.workspaceDetailInline.cancel,
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
       await authFetch(`${API_URL}/api/workspaces/${data.id}/members/${userId}`, {
         method: "DELETE",
@@ -1373,8 +1392,11 @@ export function WorkspaceMembersSection() {
             }}
             placeholder={t.workspaceDetailInline.inviteEmailsPlaceholder}
             rows={2}
-            autoFocus
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
+            // No autofocus on a phone (responsive contract M4): inert on iOS,
+            // and on Android it pops the keyboard over the section picker
+            // before the user has read the form.
+            autoFocus={!isPhoneViewport()}
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
           />
           <div className="flex items-center gap-2">
             <Select
@@ -1396,7 +1418,7 @@ export function WorkspaceMembersSection() {
             placeholder={t.workspaceDetailInline.inviteMessagePlaceholder}
             rows={2}
             maxLength={1000}
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
           />
           <button
             onClick={sendInvites}
@@ -1467,13 +1489,13 @@ export function WorkspaceMembersSection() {
                   <div className="flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => resendInvite(inv.email, inv.role)}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                      className="min-h-11 px-2 text-[11px] text-muted-foreground hover:text-foreground sm:min-h-0 sm:px-0"
                     >
                       {t.workspaceDetailInline.resend}
                     </button>
                     <button
-                      onClick={() => revokeInvite(inv.id)}
-                      className="text-[11px] text-red-400 hover:text-red-300"
+                      onClick={() => revokeInvite(inv.id, inv.email)}
+                      className="min-h-11 px-2 text-[11px] text-red-400 hover:text-red-300 sm:min-h-0 sm:px-0"
                     >
                       {t.workspaceDetailInline.revoke}
                     </button>
@@ -1520,7 +1542,7 @@ export function WorkspaceMembersSection() {
                   <>
                     <button
                       onClick={() => changeRole(m.userId, m.role === "admin" ? "member" : "admin")}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                      className="min-h-11 px-2 text-[11px] text-muted-foreground hover:text-foreground sm:min-h-0 sm:px-0"
                       title={
                         m.role === "admin"
                           ? t.workspaceDetailInline.demoteToMember
@@ -1532,8 +1554,8 @@ export function WorkspaceMembersSection() {
                         : t.workspaceDetailInline.promote}
                     </button>
                     <button
-                      onClick={() => removeMember(m.userId)}
-                      className="text-[11px] text-red-400 hover:text-red-300"
+                      onClick={() => removeMember(m.userId, m.userName ?? m.email ?? "")}
+                      className="min-h-11 px-2 text-[11px] text-red-400 hover:text-red-300 sm:min-h-0 sm:px-0"
                     >
                       {t.workspaceDetailInline.remove}
                     </button>

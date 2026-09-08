@@ -2595,6 +2595,12 @@ export const zh: Dictionary = {
     expiresInDays: "{days} 天後到期",
     expiresToday: "今天到期",
     revoke: "撤銷",
+    removeMemberConfirmTitle: "移除這位成員？",
+    removeMemberConfirmBody: "{name} 將立即失去此工作區的存取權。之後可以再次邀請。",
+    removeMemberConfirm: "移除成員",
+    revokeInviteConfirmTitle: "撤銷這則邀請？",
+    revokeInviteConfirmBody: "寄給 {email} 的連結將失效。之後可以重新發送邀請。",
+    revokeInviteConfirm: "撤銷邀請",
     resend: "重新傳送",
   },
   workspaceLlmKey: {

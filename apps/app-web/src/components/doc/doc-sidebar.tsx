@@ -75,6 +75,7 @@ import {
   Search,
   SlidersHorizontal,
   Trash2,
+  UserPlus,
   Users,
 } from "lucide-react";
 import type { WorkspaceSurface } from "@/lib/doc-page-url";
@@ -98,6 +99,7 @@ import { useCustomThemes } from "@/lib/custom-themes";
 import { CreateThemeDialog } from "@/components/doc/create-theme-dialog";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { openWorkspaceSettings } from "@/components/settings-modal/settings-modal";
+import { requestSidebarClose } from "@/lib/sidebar-close";
 import type { DocTheme } from "@/lib/api/doc-themes";
 import {
   Select,
@@ -244,15 +246,25 @@ function collapseKey(workspaceId: string): string {
  * two pills can't collide and truncate. `transition-all` eases the bg/grow.
  */
 function navItemCls(active: boolean, labeled: boolean): string {
-  const base =
-    "inline-flex h-7 shrink-0 items-center rounded-md text-sidebar-foreground/65 transition-all";
+  // Below `md` the row is a vertical, labelled list of 44px rows (responsive
+  // contract M3): a horizontal strip of 28px unlabelled icons is a desktop
+  // affordance, and tooltips never show on touch. The `md:` half is the
+  // Notion-style icon toolbar unchanged.
+  const phone =
+    "max-md:h-11 max-md:w-full max-md:justify-start max-md:gap-2.5 max-md:px-3 max-md:text-[13px]";
+  const base = `inline-flex h-7 shrink-0 items-center rounded-md text-sidebar-foreground/65 transition-all ${phone}`;
   if (active && labeled) {
     return `${base} doc-nav-active gap-1.5 px-2 text-[13px] font-medium text-sidebar-accent-foreground`;
   }
   if (active) {
-    return `${base} w-7 justify-center doc-nav-active text-sidebar-accent-foreground`;
+    return `${base} md:w-7 justify-center doc-nav-active text-sidebar-accent-foreground`;
   }
-  return `${base} w-7 justify-center hover:bg-sidebar-accent hover:text-sidebar-accent-foreground`;
+  return `${base} md:w-7 justify-center hover:bg-sidebar-accent hover:text-sidebar-accent-foreground`;
+}
+
+/** The phone-only label beside a nav icon (the pill span carries it on `md+`). */
+function PhoneNavLabel({ children }: { children: React.ReactNode }) {
+  return <span className="whitespace-nowrap md:hidden">{children}</span>;
 }
 
 export function DocSidebar(props: Props) {
@@ -614,8 +626,29 @@ export function DocSidebar(props: Props) {
           head: it drops below the macOS traffic lights and is an OS window-drag
           handle (the switcher button itself opts back out) — see the
           `.is-canvas-desktop` block in globals.css. */}
-      <div data-doc-chrome data-doc-sidebar-head className="flex items-center px-2 pt-2.5 pb-1">
-        <WorkspaceSwitcher />
+      <div data-doc-chrome data-doc-sidebar-head className="flex items-center gap-1 px-2 pt-2.5 pb-1">
+        <div className="min-w-0 flex-1">
+          <WorkspaceSwitcher />
+        </div>
+        {/* Invite members, first-class in the drawer head on a phone
+            (responsive contract M1; plan §6 decision 1): hamburger, Invite,
+            form = 3 taps, the same as desktop, instead of going through the
+            switcher popover. Opens the same Members section the popover's
+            button opens and closes the drawer (M7). Hidden from `md`, where
+            the popover button is one click away. */}
+        <button
+          type="button"
+          onClick={() => {
+            openWorkspaceSettings("ws-members");
+            requestSidebarClose();
+          }}
+          aria-label={copy.workspaceSwitcher.inviteMembers}
+          title={copy.workspaceSwitcher.inviteMembers}
+          data-sidebar-invite
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:hidden"
+        >
+          <UserPlus className="size-[18px]" aria-hidden />
+        </button>
       </div>
 
       {/* Top nav — horizontal icon toolbar (Notion-style). Every item is an icon
@@ -631,7 +664,7 @@ export function DocSidebar(props: Props) {
           OS window-drag handle, so the gaps between icons and the empty space to
           the right of Search drag the window; the icon links/buttons opt back out
           via the `[data-doc-chrome] :is(a, button, …)` rule in globals.css. */}
-      <nav data-doc-chrome className="flex flex-row items-center gap-0.5 px-2 pt-1 pb-1.5">
+      <nav data-doc-chrome className="flex flex-col items-stretch gap-0.5 px-2 pt-1 pb-1.5 md:flex-row md:items-center">
         {/* Home — first of the ⌘/Ctrl+1/2/3/4 surface shortcuts (wired in
             WorkspaceChrome). The chip label is browser-dependent
             (`surfaceShortcutLabel`): ⌘n on mac, ⌃n on mac Firefox (which
@@ -645,8 +678,9 @@ export function DocSidebar(props: Props) {
           >
             <Home className="size-[17px] shrink-0" />
             {homePill ? (
-              <span className="whitespace-nowrap">{t.iconHome}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconHome}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconHome}</PhoneNavLabel>
           </Link>
         </Tooltip>
 
@@ -662,8 +696,9 @@ export function DocSidebar(props: Props) {
           >
             <Brain className="size-[17px] shrink-0" />
             {surfacePill("brain") ? (
-              <span className="whitespace-nowrap">{t.iconBrain}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconBrain}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconBrain}</PhoneNavLabel>
           </Link>
         </Tooltip>
         <Tooltip label={t.iconStudio} shortcut={surfaceShortcutLabel(3)}>
@@ -675,8 +710,9 @@ export function DocSidebar(props: Props) {
           >
             <SlidersHorizontal className="size-[17px] shrink-0" />
             {surfacePill("studio") ? (
-              <span className="whitespace-nowrap">{t.iconStudio}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconStudio}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconStudio}</PhoneNavLabel>
             {props.studioNudge ? (
               <span
                 aria-label={t.studioSetupNudgeAria}
@@ -694,8 +730,9 @@ export function DocSidebar(props: Props) {
           >
             <GitBranch className="size-[17px] shrink-0" />
             {surfacePill("workflow") ? (
-              <span className="whitespace-nowrap">{t.iconWorkflow}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconWorkflow}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconWorkflow}</PhoneNavLabel>
           </Link>
         </Tooltip>
         {/* Live — a top-level workspace surface in the former Inbox slot. Its
@@ -710,8 +747,9 @@ export function DocSidebar(props: Props) {
           >
             <Activity className="size-[17px] shrink-0" />
             {surfacePill("live") ? (
-              <span className="whitespace-nowrap">{liveTitle}</span>
+              <span className="whitespace-nowrap max-md:hidden">{liveTitle}</span>
             ) : null}
+            <PhoneNavLabel>{liveTitle}</PhoneNavLabel>
             <LiveActiveBadge
               count={liveActiveCount}
               label={liveActiveLabel}
@@ -744,8 +782,9 @@ export function DocSidebar(props: Props) {
             >
               <Search className="size-[17px] shrink-0" />
               {searchPill ? (
-                <span className="whitespace-nowrap">{t.iconSearch}</span>
+                <span className="whitespace-nowrap max-md:hidden">{t.iconSearch}</span>
               ) : null}
+              <PhoneNavLabel>{t.iconSearch}</PhoneNavLabel>
             </button>
           </Tooltip>
         )}

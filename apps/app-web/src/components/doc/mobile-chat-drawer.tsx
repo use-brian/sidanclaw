@@ -230,7 +230,8 @@ export function MobileChatDrawer({
         aria-expanded={open}
         aria-controls={panelId}
         className={cn(
-          "fixed bottom-4 right-4 z-30",
+          // Safe-area inset (responsive contract M6): the FAB must clear the home indicator.
+          "fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-30",
           "inline-flex h-14 w-14 items-center justify-center rounded-full shadow-lg",
           "transition-[opacity,transform] duration-150 ease-out hover:scale-105",
           open
@@ -311,7 +312,7 @@ export function MobileChatDrawer({
               type="button"
               onClick={close}
               aria-label={t.mobileChatClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex size-11 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <X className="size-4" aria-hidden />
             </button>

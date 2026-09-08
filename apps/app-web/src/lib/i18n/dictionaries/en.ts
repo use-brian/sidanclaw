@@ -2824,6 +2824,12 @@ export const en = {
     expiresInDays: "Expires in {days} days",
     expiresToday: "Expires today",
     revoke: "Revoke",
+    removeMemberConfirmTitle: "Remove this member?",
+    removeMemberConfirmBody: "{name} loses access to this workspace right away. You can invite them again later.",
+    removeMemberConfirm: "Remove member",
+    revokeInviteConfirmTitle: "Revoke this invitation?",
+    revokeInviteConfirmBody: "The link sent to {email} stops working. You can send a new invitation later.",
+    revokeInviteConfirm: "Revoke invitation",
     resend: "Resend",
   },
   // ── Workspace LLM provider key (BYO Gemini) ──────────────────

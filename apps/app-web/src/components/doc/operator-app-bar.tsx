@@ -151,7 +151,7 @@ export function OperatorAppBar({
       aria-label={t.aria}
       // `pl-4`: indented under the Home pill — the strip reads as Home's
       // children, not a second toolbar.
-      className="flex flex-row items-center gap-0.5 pl-4 pr-2 pb-1.5"
+      className="flex flex-row flex-wrap items-center gap-0.5 pl-4 pr-2 pb-1.5"
     >
       {apps.map((key) => {
         // A custom app's icon and label are WORKSPACE DATA (its manifest), not
@@ -179,7 +179,8 @@ export function OperatorAppBar({
               aria-current={isActive ? "page" : undefined}
               onClick={() => writeOperatorApp(workspaceId, key)}
               className={cn(
-                "group flex size-7 shrink-0 items-center justify-center rounded-md transition-colors",
+                // 44px on a phone (responsive contract M3); the strip wraps there.
+                "group flex size-11 shrink-0 items-center justify-center rounded-md transition-colors md:size-7",
                 isActive ? "doc-nav-active" : "hover:bg-sidebar-accent",
               )}
             >

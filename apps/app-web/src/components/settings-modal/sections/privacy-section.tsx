@@ -13,6 +13,14 @@ import { format } from "@/lib/i18n/format";
 import { isOssEdition } from "@/lib/edition";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
   downloadSupportDiagnosticCapsule,
   getSupportDiagnosticStatus,
   previewSupportDiagnosticCapsule,
@@ -158,27 +166,41 @@ function SupportDiagnosticsCard() {
 
       {!active && (
         <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-4">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium">{t.supportDuration}</span>
-            <select
-              value={durationHours}
-              onChange={(event) =>
-                setDurationHours(Number(event.target.value) as 1 | 24 | 168)
-              }
-              className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+          {/* Project primitives, never native controls (responsive contract
+              M10): an OS picker sheet ignores the theme and the i18n cookie. */}
+          <div className="space-y-1.5">
+            <span className="block text-xs font-medium">{t.supportDuration}</span>
+            <Select
+              value={String(durationHours)}
+              onValueChange={(value) => {
+                if (typeof value === "string") {
+                  setDurationHours(Number(value) as 1 | 24 | 168);
+                }
+              }}
             >
-              <option value={1}>{t.supportDurationOneHour}</option>
-              <option value={24}>{t.supportDurationOneDay}</option>
-              <option value={168}>{t.supportDurationOneWeek}</option>
-            </select>
-          </label>
+              <SelectTrigger aria-label={t.supportDuration} className="min-h-11 w-full sm:min-h-0">
+                <SelectValue>
+                  {durationHours === 1
+                    ? t.supportDurationOneHour
+                    : durationHours === 24
+                      ? t.supportDurationOneDay
+                      : t.supportDurationOneWeek}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectItem value="1" className="min-h-11 sm:min-h-0">{t.supportDurationOneHour}</SelectItem>
+                <SelectItem value="24" className="min-h-11 sm:min-h-0">{t.supportDurationOneDay}</SelectItem>
+                <SelectItem value="168" className="min-h-11 sm:min-h-0">{t.supportDurationOneWeek}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-          <label className="flex items-start gap-3">
-            <input
-              type="checkbox"
+          <label className="flex min-h-11 items-start gap-3 sm:min-h-0">
+            <Checkbox
               checked={includeContent}
-              onChange={(event) => setIncludeContent(event.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-border"
+              onCheckedChange={setIncludeContent}
+              aria-label={t.supportIncludeContent}
+              className="mt-0.5"
             />
             <span>
               <span className="block text-xs font-medium">

@@ -2606,7 +2606,7 @@ html[data-vt-back="true"]::view-transition-new(root) {
    opened from this floating hamburger). Shift it right to clear the lights, and
    keep it clickable rather than a drag handle. */
 .is-canvas-desktop [data-doc-mobile-menu] {
-  left: calc(0.5rem + var(--doc-titlebar-lights));
+  left: calc(0.25rem + var(--doc-titlebar-lights));
   -webkit-app-region: no-drag;
 }
 

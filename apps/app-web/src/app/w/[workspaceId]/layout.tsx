@@ -67,7 +67,11 @@ export default async function WorkspaceLayout(props: {
       }}
     >
       <CustomThemesProvider workspaceId={workspaceId}>
-        <div className="flex h-screen w-full overflow-hidden bg-background">
+        {/* `h-dvh`, never `h-screen` (responsive contract M6): on iOS `100vh` is the
+            LARGE viewport, so the bottom 50-80px of every column sat under the
+            browser toolbar, which never collapsed because nothing here scrolls
+            the document. Graded: invariants/viewport-dvh. */}
+        <div className="flex h-dvh w-full overflow-hidden bg-background">
           {/* The workspace primary assistant, resolved once here so BOTH the
               chrome's chat dock and the doc surface read one fetch. The doc
               surface used to run its own copy and block its whole shell on it

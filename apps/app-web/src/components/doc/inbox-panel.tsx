@@ -197,7 +197,7 @@ export function InboxPanel({
             type="button"
             aria-label={t.inboxCloseAria}
             onClick={onClose}
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:size-7"
           >
             <X className="size-4" />
           </button>
