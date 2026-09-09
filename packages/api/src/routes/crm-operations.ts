@@ -26,6 +26,8 @@ import {
   SaveCrmConsentPurposeCommandSchema,
   SaveCrmSegmentCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
+  PreviewCrmImportFileCleanupCommandSchema,
+  ExecuteCrmImportFileCleanupCommandSchema,
   PreviewCrmRetentionCommandSchema,
   ExecuteCrmRetentionCommandSchema,
   PreviewCrmContactErasureCommandSchema,
@@ -57,6 +59,7 @@ import {
 } from '../crm-operations/privacy.js'
 import { sendCrmPrivacyExport } from '../crm-operations/privacy-export.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { createCrmImportFileCleanupService } from '../crm-operations/import-file-cleanup-service.js'
 import { listCrmRetentionRuns } from '../crm-operations/retention-service.js'
 import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 import { readCrmManagedMailboxPolicy, readCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
@@ -1011,6 +1014,28 @@ export function crmOperationsRoutes(options: Options): Router {
       res.setHeader('Cache-Control','no-store')
       res.json({...erased.record,duplicate:erased.duplicate})
     }catch(error){writeError(res,error)}
+  })
+
+  router.post('/:workspaceId/operations/privacy/file-cleanup-preview',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=PreviewCrmImportFileCleanupCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'preview_import_file_cleanup',...body})
+      res.setHeader('Cache-Control','no-store');res.json(result.record)
+    }catch(error){writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/privacy/file-cleanup-execute',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=ExecuteCrmImportFileCleanupCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'execute_import_file_cleanup',...body})
+      res.setHeader('Cache-Control','no-store');res.json({...result.record,duplicate:result.duplicate})
+    }catch(error){writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/privacy/file-cleanups/:id',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {res.setHeader('Cache-Control','no-store');res.json(await createCrmImportFileCleanupService().read(ctx,z.string().uuid().parse(req.params.id)))}
+    catch(error){writeError(res,error)}
   })
 
   router.post('/:workspaceId/operations/retention/dry-run',async(req,res)=>{

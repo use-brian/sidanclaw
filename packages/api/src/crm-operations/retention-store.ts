@@ -75,6 +75,9 @@ export async function inspectCrmRetention(client:PoolClient,workspaceId:string,b
       FROM crm_import_sources s WHERE s.workspace_id=$1 AND s.privacy_erased AND s.replay_expires_at<=$2
       ORDER BY s.id LIMIT 501`,[workspaceId,capturedAt,sourceHolds,plan.targets.imports ?? []])
   }
+  await select('fileCleanups','crm_import_file_cleanups','delete',`SELECT id,xmin::text version,false retained
+    FROM crm_import_file_cleanups WHERE workspace_id=$1 AND ((status='completed' AND replay_expires_at<=$2)
+      OR (status IN('ready','blocked') AND expires_at<=$2)) ORDER BY id LIMIT 501`,[workspaceId,capturedAt])
   const delivery=cutoff('deliveryReceipts',policy?.deliveryReceiptsSeconds)
   if(delivery) {
     await select('deliveries','crm_delivery_receipts','redact',`SELECT r.delivery_id id,r.xmin::text version,
@@ -161,6 +164,7 @@ export async function applyCrmRetention(client:PoolClient,workspaceId:string,pla
     if(assignments.length)await apply('open',`UPDATE association_enquiries SET ${assignments.join(',')}
       WHERE workspace_id=$1 AND id=ANY($2::uuid[])`,assignments.some(a=>a.includes('$3'))?[REDACTED]:[])
   }
+  await apply('fileCleanups','DELETE FROM crm_import_file_cleanups WHERE workspace_id=$1 AND id=ANY($2::uuid[])')
   await apply('imports','DELETE FROM crm_import_jobs WHERE workspace_id=$1 AND id=ANY($2::uuid[])')
   await apply('sources','DELETE FROM crm_import_sources WHERE workspace_id=$1 AND id=ANY($2::uuid[])')
   await apply('deliveries',`UPDATE crm_delivery_receipts SET envelope=NULL,provider_receipt=NULL,

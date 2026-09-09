@@ -45,3 +45,4 @@ export * from './segments.js'
 export * from './segment-catalog.js'
 
 export * from './retention-types.js'
+export * from './file-cleanup-types.js'

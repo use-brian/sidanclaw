@@ -29,6 +29,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_privacy_policies',
   'crm_privacy_previews',
   'crm_retention_runs',
+  'crm_import_file_cleanups',
   'crm_address_suppression_tombstones',
   'crm_managed_mailbox_policies',
   'crm_mailbox_integration_grants',
@@ -83,6 +84,7 @@ EXPORT_PROJECTIONS.crm_import_sources = [
 ].join(',')
 EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
 
+EXPORT_PROJECTIONS.crm_import_file_cleanups='id,workspace_id,owner_user_id,file_id,before_at,policy_version,summary,status,attempts,next_attempt_at,leased_until,error_code,created_at,expires_at,queued_at,completed_at,replay_expires_at'
 EXPORT_PROJECTIONS.crm_retention_runs='id,workspace_id,owner_user_id,policy_version,mode,before_at,captured_at,expires_at,summary,status,receipt,error_code,completed_at,created_at'
 
 EXPORT_PROJECTIONS.crm_privacy_previews='id,workspace_id,owner_user_id,subject_id,policy_version,domain_summary,blockers,status,created_at,expires_at,consumed_at,receipt'

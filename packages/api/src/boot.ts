@@ -227,6 +227,7 @@ import { crmOperationsRoutes } from './routes/crm-operations.js'
 import { createCrmOperationsService } from './crm-operations/service.js'
 import { createCrmProductionImportService } from './crm-operations/import-service.js'
 import { createCrmImportSources } from './db/crm-import-sources.js'
+import { createCrmImportFileCleanupWorker } from './crm-operations/import-file-cleanup-worker.js'
 import { createCrmRetentionWorker } from './crm-operations/retention-worker.js'
 import {
   crmWorkflowAdmission,
@@ -6776,6 +6777,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   if (runWorkers) crmDomainEventWorker.start()
   const crmRetentionWorker = createCrmRetentionWorker({ onError: () => console.warn('[crm-retention] Retention run failed; inspect the workspace run report.') })
   if (runWorkers) crmRetentionWorker.start()
+  const crmFileCleanupWorker = filesResolver ? createCrmImportFileCleanupWorker({resolver:filesResolver,onError:()=>console.warn('[crm-file-cleanup] Cleanup failed; inspect the workspace receipt.')}) : null
+  if (runWorkers) crmFileCleanupWorker?.start()
 
   // ════════════════════════════════════════════════════════════════
   // Open background workers
@@ -8383,6 +8386,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     runQueueWorker.stop()
     crmDomainEventWorker.stop()
     crmRetentionWorker.stop()
+    crmFileCleanupWorker?.stop()
     knowledgeSyncWorker.stop()
     mailboxSyncWorker.stop()
     // Log out every IDLE socket - a SIGTERM must not leave a mailbox connection

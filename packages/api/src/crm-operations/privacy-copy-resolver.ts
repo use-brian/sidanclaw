@@ -57,6 +57,8 @@ export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: s
 /** Preview and canonical purge both refuse shared or ambiguous copy ownership. */
 export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspaceId: string, contactId: string): Promise<CrmPrivacyBlocker[]> {
   const blockers: CrmPrivacyBlocker[] = []
+  const pendingFiles=await client.query<{count:number}>("SELECT count(*)::int count FROM crm_import_file_cleanups WHERE workspace_id=$1 AND status IN('queued','leased','failed')",[workspaceId])
+  if(pendingFiles.rows[0]?.count)blockers.push({domain:'crm_import_file_cleanups',reason:'source_file_cleanup_pending',count:pendingFiles.rows[0].count})
   const holds=(await readCrmPrivacyPolicy(workspaceId,client)).policy.retention?.holds ?? []
   if(holds.some(h=>h.domain==='contact' && h.id===contactId.toLowerCase()))blockers.push({domain:'entities',reason:'retention_hold',count:1})
   for(const [kind,domain] of [['submission','association_enquiries'],['order','association_orders'],['file','workspace_files']] as const) {

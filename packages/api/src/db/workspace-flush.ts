@@ -202,6 +202,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'workspace_tool_policy',
   'crm_privacy_policies',
   'crm_address_suppression_tombstones',
+  'crm_import_file_cleanups', // Preserve pending blob deletion across a workspace reset.
   'crm_managed_mailbox_policies',
   'crm_mailbox_integration_grants',
   'crm_delivery_receipts',
