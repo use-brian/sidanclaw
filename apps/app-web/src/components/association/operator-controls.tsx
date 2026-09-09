@@ -52,11 +52,11 @@ export function AssociationListState({data,error,refresh,previous,next,children}
 export function useAssociationAction(workspaceId:string) {
   const t=useT().associationPage,lock=useRef(false);
   const [pending,setPending]=useState(false),[outcome,setOutcome]=useState<"saved"|"failed"|null>(null);
-  async function run(label:string,job:()=>Promise<unknown>) {
+  async function run(label:string,job:()=>Promise<unknown>,review?:{description:string}) {
     if(lock.current)return false;
     lock.current=true;setPending(true);setOutcome(null);
     try {
-      if(!await confirmDialog({title:label,description:t.manage.confirm,confirmLabel:label,cancelLabel:t.cancel}))return false;
+      if(!await confirmDialog({title:label,description:review?.description ?? t.manage.confirm,confirmLabel:label,cancelLabel:t.cancel}))return false;
       await job();setOutcome("saved");requestBrainRefresh(workspaceId);
       markSurfaceCacheStale(`crm:${workspaceId}:`);markSurfaceCacheStale(`association-orders:${workspaceId}`);markSurfaceCacheStale(`association-module:${workspaceId}`);
       return true;

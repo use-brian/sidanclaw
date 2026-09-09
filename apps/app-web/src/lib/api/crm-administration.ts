@@ -40,3 +40,36 @@ export function getCrmMailboxPolicy(workspaceId:string,instanceId:string){return
 export function saveCrmMailboxPolicy(workspaceId:string,instanceId:string,input:Omit<CrmManagedMailboxPolicy,"connectorInstanceId"|"version">&{expectedVersion:number;confirmed:true}){return request<{record:CrmManagedMailboxPolicy}>(workspaceId,`mailbox-policies/${encodeURIComponent(instanceId)}`,input);}
 export function getCrmMailboxGrant(workspaceId:string,instanceId:string,credentialId:string){return request<{grant:CrmMailboxIntegrationGrant|null}>(workspaceId,`mailbox-policies/${encodeURIComponent(instanceId)}/integration-grants/${encodeURIComponent(credentialId)}`);}
 export function saveCrmMailboxGrant(workspaceId:string,instanceId:string,credentialId:string,input:{expectedVersion:number;confirmed:true;enabled:boolean}){return request<{record:CrmMailboxIntegrationGrant}>(workspaceId,`mailbox-policies/${encodeURIComponent(instanceId)}/integration-grants/${encodeURIComponent(credentialId)}`,input);}
+
+export type CrmRetentionSettings={scheduled:boolean;intervalSeconds:number;resolvedSubmissionsSeconds:number|null;openSubmissions:{afterSeconds:number;fields:Array<"subject"|"message"|"metadata"|"notes">}|null;importReceiptsSeconds:number|null;deliveryReceiptsSeconds:number|null;auditSeconds:number|null;financialRecordsSeconds:number|null;holds:Array<{domain:"contact"|"submission"|"order"|"file";id:string}>};
+export type CrmPrivacySettings={intakeReplay:{retentionSeconds:number}|null;addressSuppression?:{retentionSeconds:number}|null;retention?:CrmRetentionSettings|null;importSourceErasure?:{receiptRetentionSeconds:number;heldSourceIds:string[]}|null};
+export type CrmPrivacyPolicySnapshot={version:number;policy:CrmPrivacySettings;approvedByUserId:string|null;createdAt:string|null};
+export async function getCrmFullPrivacyPolicy(workspaceId:string){const value=await request<CrmPrivacyPolicySnapshot>(workspaceId,"privacy-policy");if(!Number.isInteger(value?.version)||value.version<0||!value.policy||!Object.hasOwn(value.policy,"intakeReplay"))throw new AssociationApiError("invalid_response",502);return value;}
+export function saveCrmFullPrivacyPolicy(workspaceId:string,input:CrmPrivacySettings&{expectedVersion:number;confirmed:true}){return request<{record:CrmPrivacyPolicySnapshot}>(workspaceId,"privacy-policy",input);}
+export type CrmPrivacyPreview={id:string;previewHash:string;expiresAt:string;policyVersion:number;status:"ready"|"blocked";domains:Array<{domain:string;action:"delete"|"redact"|"retire"|"retain"|"blocked";count:number}>;blockers:Array<{domain:string;reason:string;count:number}>;scopeLimits?:string[];retainedCopies?:string[];cutoffs?:Record<string,string|null>;hasMore?:boolean;contactId?:string;fileId?:string};
+export type CrmPrivacyPreviewRequest={kind:"erasure";contactId:string}|{kind:"retention";before:string}|{kind:"fileCleanup";fileId:string;before:string};
+export async function previewCrmPrivacy(workspaceId:string,input:CrmPrivacyPreviewRequest):Promise<CrmPrivacyPreview>{
+  const {kind,...body}=input;
+  const preview=await request<CrmPrivacyPreview>(workspaceId,kind==="erasure"?"privacy/erasure-preview":kind==="retention"?"retention/dry-run":"privacy/file-cleanup-preview",body);
+  if(!preview?.id||!/^[a-f0-9]{64}$/.test(preview.previewHash)||!Number.isFinite(Date.parse(preview.expiresAt))||!["ready","blocked"].includes(preview.status)||!Array.isArray(preview.domains)||!Array.isArray(preview.blockers))throw new AssociationApiError("invalid_response",502);
+  if(input.kind==="erasure"&&preview.contactId!==input.contactId || input.kind==="fileCleanup"&&preview.fileId!==input.fileId)throw new AssociationApiError("invalid_response",502);
+  return preview;
+}
+export function executeCrmPrivacy(workspaceId:string,input:CrmPrivacyPreviewRequest,preview:CrmPrivacyPreview){
+  const body={previewId:preview.id,previewHash:preview.previewHash,confirmed:true,...(input.kind==="erasure"?{contactId:input.contactId}:{})};
+  return request<Record<string,unknown>>(workspaceId,input.kind==="erasure"?"privacy/erase":input.kind==="retention"?"retention/execute":"privacy/file-cleanup-execute",body);
+}
+export function getCrmFileCleanupReceipt(workspaceId:string,previewId:string){return request<Record<string,unknown>>(workspaceId,`privacy/file-cleanups/${encodeURIComponent(previewId)}`);}
+export async function downloadCrmFullPrivacy(workspaceId:string,contactId?:string):Promise<Blob>{
+  const path=contactId?`contacts/${encodeURIComponent(contactId)}/privacy-export`:"privacy-export";
+  const response=await authFetch(`${API_URL}/api/crm/${encodeURIComponent(workspaceId)}/operations/${path}?format=crm-privacy-v2`);
+  if(!response.ok)throw new AssociationApiError("privacy_export_failed",response.status);
+  const text=await response.text();const lines=text.split("\n");if(lines.at(-1)==="")lines.pop();
+  if(lines.length<2)throw new AssociationApiError("privacy_export_incomplete",502);
+  const header=JSON.parse(lines[0]!),manifest=JSON.parse(lines.at(-1)!);const records=lines.slice(1,-1);
+  if(header.type!=="header"||header.schema!=="crm-privacy-v2"||header.workspaceId!==workspaceId||header.scope!==(contactId?"contact":"workspace")||(header.contactId ?? null)!==(contactId ?? null)||manifest.type!=="manifest"||manifest.schema!=="crm-privacy-v2"||manifest.exportId!==header.exportId||manifest.complete!==true||manifest.totalRecords!==records.length||records.some(line=>JSON.parse(line).type!=="record"))throw new AssociationApiError("privacy_export_incomplete",502);
+  const digest=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(records.length?records.join("\n")+"\n":""));
+  const hash=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,"0")).join("");
+  if(hash!==manifest.sha256)throw new AssociationApiError("privacy_export_checksum",502);
+  return new Blob([text],{type:"application/x-ndjson"});
+}
