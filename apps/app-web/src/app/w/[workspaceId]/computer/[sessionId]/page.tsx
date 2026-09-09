@@ -1019,7 +1019,7 @@ export default function ComputerTakeoverPage(props: {
         role="application"
         aria-label={t.computer.liveViewTitle}
         onWheel={forwardWheel}
-        className="relative flex-1 overflow-hidden rounded-lg border border-border bg-muted/30 focus-within:ring-2 focus-within:ring-ring"
+        className="relative flex-1 overflow-hidden rounded-lg border border-border bg-muted/30 focus-within:border-ring [&_:focus-visible]:shadow-none"
       >
         {/* The typing proxy: visually hidden, never display:none (a hidden
             input cannot take focus, and iOS raises its keyboard only for a
