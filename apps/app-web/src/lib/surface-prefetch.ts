@@ -485,6 +485,19 @@ export function recordingsCacheKey(
   return `recordings:${workspaceId}${viewerSuffix()}:${status}:${query.trim()}`;
 }
 
+/**
+ * One recording's metadata, shared by the brief-page chrome and the standalone
+ * detail route. The recording id is globally unique, but the workspace and
+ * viewer stay in the key so an account switch can never paint a row that was
+ * visible under another caller's clearance.
+ */
+export function recordingDetailCacheKey(
+  workspaceId: string,
+  recordingId: string,
+): string {
+  return `recording:${workspaceId}${viewerSuffix()}:${recordingId}`;
+}
+
 // ── Brain detail routes ───────────────────────────────────────────────────────
 // `/brain/[entityId]`, `/brain/entry/[kind]/[id]`, `/brain/skills/[rowId]`,
 // `/brain/blueprints/[templateId]`. Memory tier over the row each route fetches

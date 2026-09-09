@@ -5,6 +5,12 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { en } from "@/lib/i18n/dictionaries/en";
 import { dispatchRecordingParticipantsUpdated } from "@/lib/recordings/recording-events";
+import {
+  loadSurfaceCache,
+  markSurfaceCacheStale,
+  resetSurfaceCache,
+} from "@/lib/surface-cache";
+import { recordingDetailCacheKey } from "@/lib/surface-prefetch";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const getRecording = vi.fn();
@@ -67,6 +73,7 @@ async function poll() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  resetSurfaceCache();
   getRecording.mockReset().mockResolvedValue(REC);
   recordingId = "rec-1";
   search = "";
@@ -81,6 +88,20 @@ afterEach(() => {
 });
 
 describe("[COMP:app-web/recording-detail] recording detail route", () => {
+  it("keeps a warmed recording painted while a stale revalidation is pending", async () => {
+    const key = recordingDetailCacheKey("ws-1", "rec-1");
+    await loadSurfaceCache(key, async () => REC);
+    markSurfaceCacheStale(key);
+    getRecording.mockReturnValue(new Promise(() => {}));
+
+    await render();
+
+    expect(container.querySelector("h1")?.textContent).toBe("Team call");
+    expect(container.querySelector('[data-testid="player"]')).toBeTruthy();
+    expect(container.textContent).not.toContain(en.recordings.panelLoading);
+    expect(getRecording).toHaveBeenCalledTimes(1);
+  });
+
   it("opens the transcript and participant names without a self-link", async () => {
     await render();
     expect(container.querySelector('[data-testid="player"]')).toBeTruthy();

@@ -151,7 +151,7 @@ type RecordingChromeProps = {
 };
 
 export function RecordingChrome(props: RecordingChromeProps) {
-  const { summary } = useRecordingSummary(props.recordingId);
+  const { summary } = useRecordingSummary(props.workspaceId, props.recordingId);
   return <RecordingChromeContent key={props.recordingId} {...props} summary={summary} />;
 }
 

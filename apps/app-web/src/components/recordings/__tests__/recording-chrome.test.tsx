@@ -42,6 +42,7 @@ vi.mock("@/lib/i18n/client", () => ({
 
 import { RecordingChrome } from "../recording-chrome";
 import { dispatchRecordingParticipantsUpdated } from "@/lib/recordings/recording-events";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 
 const SUMMARY = {
   recordingId: "rec-1",
@@ -65,6 +66,7 @@ describe("[COMP:app-web/recording-chrome] participant refresh", () => {
   let container: HTMLDivElement | null = null;
 
   beforeEach(() => {
+    resetSurfaceCache();
     getRecording.mockReset().mockResolvedValue(SUMMARY);
   });
 

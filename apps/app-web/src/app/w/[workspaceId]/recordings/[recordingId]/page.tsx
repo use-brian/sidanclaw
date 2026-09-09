@@ -34,7 +34,10 @@ export default function RecordingDetailPage() {
   const params = useParams<{ workspaceId: string; recordingId: string }>();
   const searchParams = useSearchParams();
   const pageId = searchParams.get("page");
-  const { summary: rec, error } = useRecordingSummary(params.recordingId);
+  const { summary: rec, error } = useRecordingSummary(
+    params.workspaceId,
+    params.recordingId,
+  );
   const title = rec?.title ?? rec?.fileName ?? "";
   const canPlay = rec?.status === "processed" || (rec?.durationMs ?? 0) > 0;
 
