@@ -230,6 +230,7 @@ import { createCrmImportSources } from './db/crm-import-sources.js'
 import { createCrmImportFileCleanupWorker } from './crm-operations/import-file-cleanup-worker.js'
 import { createCrmEntitlementWorker } from './crm-operations/entitlement-worker.js'
 import { createAssociationLifecycleWorker } from './association/lifecycle-worker.js'
+import { createProviderInboxWorker } from './association/provider-inbox-worker.js'
 import { createCrmRetentionWorker } from './crm-operations/retention-worker.js'
 import {
   crmWorkflowAdmission,
@@ -6783,6 +6784,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   if(runWorkers) crmEntitlementWorker.start()
   const associationLifecycleWorker=createAssociationLifecycleWorker({onError:()=>console.warn('[association-lifecycle] A lifecycle operation failed; a later scan will retry.')})
   if(runWorkers) associationLifecycleWorker.start()
+  const providerInboxWorker = createProviderInboxWorker({ onError: () => console.warn('[provider-inbox] A receipt did not apply; inspect its retry or reconciliation state.') })
+  if (runWorkers) providerInboxWorker.start()
   const crmFileCleanupWorker = filesResolver ? createCrmImportFileCleanupWorker({resolver:filesResolver,onError:()=>console.warn('[crm-file-cleanup] Cleanup failed; inspect the workspace receipt.')}) : null
   if (runWorkers) crmFileCleanupWorker?.start()
 
@@ -8394,6 +8397,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     crmRetentionWorker.stop()
     crmEntitlementWorker.stop()
     associationLifecycleWorker.stop()
+    providerInboxWorker.stop()
     crmFileCleanupWorker?.stop()
     knowledgeSyncWorker.stop()
     mailboxSyncWorker.stop()

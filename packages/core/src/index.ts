@@ -136,5 +136,6 @@ export {
 
 export * from './association/domain.js'
 export * from './association/operations.js'
+export { ProviderInboxEnvelopeSchema, ProviderEntitlementEventSchema, ProviderReceiptStateSchema, type ProviderInboxEnvelope, type ProviderEntitlementEvent, type ProviderReceiptState } from './association/provider-inbox.js'
 
 export { AssociationWaitlistOfferInputSchema, associationWaitlistDefinition, associationWaitlistReferences, type AssociationWaitlistOfferInput } from './association/waitlist.js'

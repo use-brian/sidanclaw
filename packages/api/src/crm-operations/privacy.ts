@@ -49,6 +49,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'association_registrations',
   'association_inventory_boundaries',
   'association_waitlist_offers',
+  'association_integration_events',
   'association_audit_log',
   'workspace_audit_log',
   'workspace_modules',
@@ -85,6 +86,7 @@ EXPORT_PROJECTIONS.crm_import_sources = [
   'integration_grants', 'created_at', 'octet_length(content_bytes) AS byte_count',
 ].join(',')
 EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
+EXPORT_PROJECTIONS.association_integration_events = 'id,workspace_id,provider,provider_event_id,provider_reference,occurred_at,target_kind,order_id,entitlement_id,contact_id,plan_id,state,attempts,cycle_attempts,next_attempt_at,last_error_code,created_at,updated_at,applied_at'
 
 EXPORT_PROJECTIONS.crm_import_file_cleanups='id,workspace_id,owner_user_id,file_id,before_at,policy_version,summary,status,attempts,next_attempt_at,leased_until,error_code,created_at,expires_at,queued_at,completed_at,replay_expires_at'
 EXPORT_PROJECTIONS.crm_retention_runs='id,workspace_id,owner_user_id,policy_version,mode,before_at,captured_at,expires_at,summary,status,receipt,error_code,completed_at,created_at'

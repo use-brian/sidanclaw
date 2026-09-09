@@ -116,6 +116,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'crm_intake_idempotency',
   'crm_delivery_receipt_contacts',
   'association_waitlist_offers',
+  'association_integration_events',
   'entities',
   'memories',
   'consolidation_logs',

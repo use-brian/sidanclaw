@@ -16,6 +16,8 @@ function fixture() {
     listWaitlist: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     offerWaitlistPlace: vi.fn().mockResolvedValue({ record: { orderId }, created: true }),
     bindOrderProvider: vi.fn().mockResolvedValue({ record: { orderId }, created: true }),
+    reconcileProviderEntitlement: vi.fn().mockResolvedValue({ record: { id: orderId }, created: true, receipt: { state: 'applied' } }),
+    listProviderReceipts: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'manual', eventId }),
     updateRegistration: vi.fn(), reconcileProviderEvent: vi.fn().mockResolvedValue({ record: { id: orderId }, created: true }),
     expireDueOrder: vi.fn(),
@@ -33,6 +35,17 @@ function integration(): AssociationContext {
 }
 
 describe('[COMP:crm/association-service] Canonical authority and adapters', () => {
+  it('intersects receipt read scope with entitlement plan ceilings and never upgrades members to payment authority', async () => {
+    const f = fixture(), context = integration(), planId = randomUUID()
+    await f.service.execute(context, command({ kind: 'list_provider_receipts' }))
+    expect(f.store.listProviderReceipts).toHaveBeenLastCalledWith(workspaceId, expect.objectContaining({ allowedEventIds: [eventId], allowedPlanIds: [] }))
+    context.authority.integration!.grants.push({ operation: 'crm.entitlements.read', selectors: { planIds: [planId] } })
+    await f.service.execute(context, command({ kind: 'list_provider_receipts', state: 'needs_reconciliation' }))
+    expect(f.store.listProviderReceipts).toHaveBeenLastCalledWith(workspaceId, expect.objectContaining({ state: 'needs_reconciliation', allowedEventIds: [eventId], allowedPlanIds: [planId] }))
+    const event = { provider: 'fixture', providerReference: 'fictional-subscription', providerPeriodId: 'period-1', eventId: 'event-1', occurredAt: '2026-09-09T00:00:00Z', command: { kind: 'update_entitlement', entitlementId: orderId, status: 'cancelled' } }
+    await expect(f.service.execute({ ...member, authority: { ...member.authority, canReconcileProvider: true } }, command({ kind: 'reconcile_provider_entitlement', event }))).rejects.toMatchObject({ code: 'not_authorized' })
+    expect(f.store.reconcileProviderEntitlement).not.toHaveBeenCalled()
+  })
   it('intersects waitlist event and definition read authority before pagination', async () => {
     const f = fixture(), context = integration(), definitionId = randomUUID()
     await expect(f.service.execute(context, command({ kind: 'list_waitlist' }))).rejects.toMatchObject({ code: 'integration_scope_denied' })

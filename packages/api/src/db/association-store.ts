@@ -10,6 +10,9 @@
  */
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
+import { receiveProviderInbox, type ProviderInboxHandlers, type ProviderInboxRow } from '../association/provider-inbox.js'
+import { createProviderEntitlementInbox } from '../association/provider-entitlements.js'
+import type { ProviderEntitlementEvent, ProviderReceiptState } from '@use-brian/core'
 import { AssociationProviderBindingInputSchema, AssociationProviderEventInputSchema, crmOperationsSha256, type AssociationProviderBindingInput } from '@use-brian/core'
 import { requireAssociationProviderActor, requireBoundProviderOrder, requireProviderOrderMoney, type ProviderOrderIdentity } from '../association/provider.js'
 import { CrmOperationsError, CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
@@ -49,7 +52,7 @@ import {
 
 export type AssociationRecord = Record<string, unknown>
 export type AssociationPage = { items: AssociationRecord[]; nextCursor: string | null }
-export type MutationResult = { record: AssociationRecord; created: boolean }
+export type MutationResult = { record: AssociationRecord; created: boolean; receipt?: Record<string, unknown> }
 
 export type AssociationListInput = Omit<CrmPageQuery, 'cursor'> & {
   limit: number
@@ -84,6 +87,9 @@ export type AssociationStore = {
   cancelOrder(workspaceId: string, id: string, actor: AssociationActor): Promise<MutationResult>
   confirmFreeOrder(workspaceId: string, id: string, actor: AssociationActor): Promise<MutationResult>
   bindOrderProvider(workspaceId: string, orderId: string, input: AssociationProviderBindingInput, actor: AssociationActor): Promise<MutationResult>
+  retryProviderEventReceipt(workspaceId: string, receiptId: string): Promise<MutationResult>
+  reconcileProviderEntitlement(workspaceId: string, input: ProviderEntitlementEvent, actor: AssociationActor): Promise<MutationResult>
+  listProviderReceipts(workspaceId: string, input: AssociationListInput & { orderId?: string; entitlementId?: string; state?: ProviderReceiptState; allowedEventIds?: readonly string[]; allowedPlanIds?: readonly string[] }): Promise<AssociationPage>
   reconcileProviderEvent(workspaceId: string, orderId: string, input: ProviderEventInput, actor: AssociationActor): Promise<MutationResult>
   listEventRegistrations(workspaceId: string, eventId: string, input: AssociationListInput & { status?: RegistrationStatus }): Promise<AssociationPage>
   getRegistrationManagement(workspaceId: string, id: string): Promise<{ sourceKind: string; eventId?: string } | null>
@@ -389,9 +395,122 @@ export async function saveCrmEventRecord(client: PoolClient, workspaceId: string
   return { record: event, created }
 }
 
+async function applyProviderOrderEvent(client: PoolClient, workspaceId: string, orderId: string, input: ProviderEventInput, actor: AssociationActor): Promise<MutationResult> {
+  const fingerprint = crmOperationsSha256({ orderId, ...input, occurredAt: crmPageInstant(input.occurredAt) })
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
+        await lockAssociationModule(client, workspaceId)
+        await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('association-provider-event:'||$1::text||':'||$2||':'||$3,0))", [workspaceId, input.provider, input.eventId])
+        const inventoryEvents=await lockAssociationInventory(client,workspaceId,{orderId})
+        const order = (await client.query<ProviderOrderIdentity>(
+          'SELECT status,provider,provider_reference,currency,total_minor::text FROM association_orders WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
+          [workspaceId, orderId],
+        )).rows[0]
+        if (!order) throw new AssociationError('not_found', 'order not found')
+        requireBoundProviderOrder(order, input)
+        const replay = (await client.query<{ order_id: string; target_status: string; request_fingerprint: string | null; provider_reference: string | null; same_time: boolean; same_metadata: boolean }>(
+          `SELECT order_id,target_status,request_fingerprint,provider_reference,occurred_at=$4::timestamptz same_time,metadata=$5::jsonb same_metadata
+           FROM association_provider_events WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+          [workspaceId, input.provider, input.eventId, input.occurredAt, input.metadata],
+        )).rows[0]
+        if (replay) {
+          if (replay.order_id !== orderId || replay.target_status !== input.targetStatus || (replay.request_fingerprint
+            ? replay.request_fingerprint !== fingerprint
+            : replay.provider_reference !== input.providerReference || !replay.same_time || !replay.same_metadata)) {
+            throw new AssociationError('conflict', 'Provider event identity was already used for different normalized evidence.')
+          }
+          return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: false }
+        }
+        const unchanged = order.status === input.targetStatus
+        if (!unchanged && !mayTransitionOrder(order.status as OrderStatus, input.targetStatus)) {
+          throw new AssociationError('invalid_transition', `order cannot transition from ${order.status} to ${input.targetStatus}`)
+        }
+        if (order.status === 'pending' && input.targetStatus === 'paid'
+          && !(await client.query<{unexpired:boolean}>('SELECT reservation_expires_at>clock_timestamp() unexpired FROM association_orders WHERE workspace_id=$1 AND id=$2',[workspaceId,orderId])).rows[0]?.unexpired) {
+          throw new AssociationError(
+            'not_available',
+            'the order reservation expired before payment confirmation; manual reconciliation is required',
+          )
+        }
+        await client.query(
+          `INSERT INTO association_provider_events
+             (workspace_id, order_id, provider, provider_event_id, target_status,
+              provider_reference, occurred_at, metadata, request_fingerprint)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [workspaceId, orderId, input.provider, input.eventId, input.targetStatus,
+            input.providerReference, input.occurredAt, input.metadata, fingerprint],
+        )
+        if (unchanged) return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: true }
+        await client.query(
+          `UPDATE association_orders SET status = $3, provider = $4,
+                  provider_reference = COALESCE($5, provider_reference),
+                  reservation_expires_at = CASE WHEN $3 = 'pending' THEN reservation_expires_at ELSE NULL END
+            WHERE workspace_id = $1 AND id = $2`,
+          [workspaceId, orderId, input.targetStatus, input.provider,
+            input.providerReference ?? null],
+        )
+        const registrationStatus = input.targetStatus === 'paid' ? 'confirmed'
+          : input.targetStatus === 'refunded' ? 'refunded' : 'cancelled'
+        await client.query(
+          `UPDATE association_registrations
+              SET status = $3,
+                  reservation_expires_at = NULL
+            WHERE workspace_id = $1 AND order_id = $2
+              AND status IN ('reserved','confirmed','checked_in')`,
+          [workspaceId, orderId, registrationStatus],
+        )
+        if (input.targetStatus === 'paid') {
+          const orderContact = await client.query<{ contact_id: string }>(
+            `SELECT contact_id FROM association_orders WHERE workspace_id = $1 AND id = $2`,
+            [workspaceId, orderId],
+          )
+          await client.query(
+            `INSERT INTO association_notification_outbox
+               (workspace_id, source_kind, source_id, template_key,
+                recipient_kind, recipient_ref, payload)
+             VALUES
+               ($1,'order',$2,'order_receipt','contact',$3,$4),
+               ($1,'order',$2,'order_paid_staff_alert','queue','registrations',$4)
+             ON CONFLICT DO NOTHING`,
+            [workspaceId, orderId, orderContact.rows[0].contact_id, { orderId }],
+          )
+        }
+        await refreshAssociationInventory(client,workspaceId,inventoryEvents,actor.credentialKind)
+        await audit(client, workspaceId, `order.${input.targetStatus}`, 'order', orderId, actor, {
+          provider: input.provider,
+          providerEventId: input.eventId,
+          from: order.status,
+          to: input.targetStatus,
+        })
+        return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: true }
+
+}
+
 export function createAssociationStore(pool: Pool = getPool(), transactionClient?: PoolClient): AssociationStore {
   // A waitlist promotion shares this exact order implementation and outer commit.
   const transact = <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> => transactionClient ? fn(transactionClient) : transaction(pool, fn)
+  const providerHandlers = (workspaceId: string): ProviderInboxHandlers => ({
+    async authorize(client, envelope, actor, admittedActor) {
+      if (envelope.target !== 'order') throw new CrmOperationsError('invalid_input', 'Order evidence is required.')
+      requireAssociationProviderActor(actor)
+      const integration = await lockIntegrationActor(client, workspaceId, actor)
+      await lockAssociationModule(client, workspaceId)
+      await authorizeOrderIntegration(client, workspaceId, envelope.orderId, actor, 'association.provider_events.write', envelope.event.provider, integration)
+      if (admittedActor) await authorizeOrderIntegration(client, workspaceId, envelope.orderId, admittedActor, 'association.provider_events.write', envelope.event.provider)
+      const order = (await client.query<{ contact_id: string }>('SELECT contact_id FROM association_orders WHERE workspace_id=$1 AND id=$2', [workspaceId, envelope.orderId])).rows[0]
+      if (!order) throw new CrmOperationsError('not_found', 'Order is unavailable.')
+      return { contactId: order.contact_id, planId: null, entitlementId: null }
+    },
+    async apply(client, envelope, actor) {
+      if (envelope.target !== 'order') throw new CrmOperationsError('invalid_input', 'Order evidence is required.')
+      return applyProviderOrderEvent(client, workspaceId, envelope.orderId, envelope.event, actor)
+    },
+    async read(client, row) {
+      const order = await getOrderRecord(client, workspaceId, row.order_id!)
+      if (!order) throw new CrmOperationsError('not_found', 'Order is unavailable.')
+      return order
+    },
+  })
   return {
     async linkExternalIdentity(workspaceId, input, actor) {
       return transact(async (client) => {
@@ -1169,97 +1288,28 @@ export function createAssociationStore(pool: Pool = getPool(), transactionClient
       })
     },
 
-    async reconcileProviderEvent(workspaceId, orderId, raw, actor) {
-      const input = AssociationProviderEventInputSchema.parse(raw)
-      requireAssociationProviderActor(actor)
-      const fingerprint = crmOperationsSha256({ orderId, ...input, occurredAt: crmPageInstant(input.occurredAt) })
-      return transact(async (client) => {
-        const integration = await lockIntegrationActor(client, workspaceId, actor)
-        await lockAssociationModule(client, workspaceId)
-        await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
-        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('association-provider-event:'||$1::text||':'||$2||':'||$3,0))", [workspaceId, input.provider, input.eventId])
-        const inventoryEvents=await lockAssociationInventory(client,workspaceId,{orderId})
-        const order = (await client.query<ProviderOrderIdentity>(
-          'SELECT status,provider,provider_reference,currency,total_minor::text FROM association_orders WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
-          [workspaceId, orderId],
-        )).rows[0]
-        if (!order) throw new AssociationError('not_found', 'order not found')
-        requireBoundProviderOrder(order, input)
-        const replay = (await client.query<{ order_id: string; target_status: string; request_fingerprint: string | null; provider_reference: string | null; same_time: boolean; same_metadata: boolean }>(
-          `SELECT order_id,target_status,request_fingerprint,provider_reference,occurred_at=$4::timestamptz same_time,metadata=$5::jsonb same_metadata
-           FROM association_provider_events WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
-          [workspaceId, input.provider, input.eventId, input.occurredAt, input.metadata],
-        )).rows[0]
-        if (replay) {
-          if (replay.order_id !== orderId || replay.target_status !== input.targetStatus || (replay.request_fingerprint
-            ? replay.request_fingerprint !== fingerprint
-            : replay.provider_reference !== input.providerReference || !replay.same_time || !replay.same_metadata)) {
-            throw new AssociationError('conflict', 'Provider event identity was already used for different normalized evidence.')
-          }
-          return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: false }
-        }
-        const unchanged = order.status === input.targetStatus
-        if (!unchanged && !mayTransitionOrder(order.status as OrderStatus, input.targetStatus)) {
-          throw new AssociationError('invalid_transition', `order cannot transition from ${order.status} to ${input.targetStatus}`)
-        }
-        if (order.status === 'pending' && input.targetStatus === 'paid'
-          && !(await client.query<{unexpired:boolean}>('SELECT reservation_expires_at>clock_timestamp() unexpired FROM association_orders WHERE workspace_id=$1 AND id=$2',[workspaceId,orderId])).rows[0]?.unexpired) {
-          throw new AssociationError(
-            'not_available',
-            'the order reservation expired before payment confirmation; manual reconciliation is required',
-          )
-        }
-        await client.query(
-          `INSERT INTO association_provider_events
-             (workspace_id, order_id, provider, provider_event_id, target_status,
-              provider_reference, occurred_at, metadata, request_fingerprint)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [workspaceId, orderId, input.provider, input.eventId, input.targetStatus,
-            input.providerReference, input.occurredAt, input.metadata, fingerprint],
-        )
-        if (unchanged) return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: true }
-        await client.query(
-          `UPDATE association_orders SET status = $3, provider = $4,
-                  provider_reference = COALESCE($5, provider_reference),
-                  reservation_expires_at = CASE WHEN $3 = 'pending' THEN reservation_expires_at ELSE NULL END
-            WHERE workspace_id = $1 AND id = $2`,
-          [workspaceId, orderId, input.targetStatus, input.provider,
-            input.providerReference ?? null],
-        )
-        const registrationStatus = input.targetStatus === 'paid' ? 'confirmed'
-          : input.targetStatus === 'refunded' ? 'refunded' : 'cancelled'
-        await client.query(
-          `UPDATE association_registrations
-              SET status = $3,
-                  reservation_expires_at = NULL
-            WHERE workspace_id = $1 AND order_id = $2
-              AND status IN ('reserved','confirmed','checked_in')`,
-          [workspaceId, orderId, registrationStatus],
-        )
-        if (input.targetStatus === 'paid') {
-          const orderContact = await client.query<{ contact_id: string }>(
-            `SELECT contact_id FROM association_orders WHERE workspace_id = $1 AND id = $2`,
-            [workspaceId, orderId],
-          )
-          await client.query(
-            `INSERT INTO association_notification_outbox
-               (workspace_id, source_kind, source_id, template_key,
-                recipient_kind, recipient_ref, payload)
-             VALUES
-               ($1,'order',$2,'order_receipt','contact',$3,$4),
-               ($1,'order',$2,'order_paid_staff_alert','queue','registrations',$4)
-             ON CONFLICT DO NOTHING`,
-            [workspaceId, orderId, orderContact.rows[0].contact_id, { orderId }],
-          )
-        }
-        await refreshAssociationInventory(client,workspaceId,inventoryEvents,actor.credentialKind)
-        await audit(client, workspaceId, `order.${input.targetStatus}`, 'order', orderId, actor, {
-          provider: input.provider,
-          providerEventId: input.eventId,
-          from: order.status,
-          to: input.targetStatus,
-        })
-        return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: true }
+    reconcileProviderEvent: (workspaceId, orderId, event, actor) => receiveProviderInbox(pool, { target: 'order', orderId, event }, actor, workspaceId, providerHandlers(workspaceId)),
+    reconcileProviderEntitlement: (workspaceId, input, actor) => createProviderEntitlementInbox(pool).submit(workspaceId, input, actor),
+    async retryProviderEventReceipt(workspaceId, receiptId) {
+      const row = (await pool.query<ProviderInboxRow>('SELECT * FROM association_integration_events WHERE workspace_id=$1 AND id=$2', [workspaceId, receiptId])).rows[0]
+      if (!row) throw new CrmOperationsError('not_found', 'Provider receipt is unavailable.')
+      if (row.target_kind === 'entitlement') return createProviderEntitlementInbox(pool).retry(row)
+      return receiveProviderInbox(pool, row.normalized_payload, row.execution_actor, workspaceId, providerHandlers(workspaceId), 'worker')
+    },
+    async listProviderReceipts(workspaceId, input) {
+      return queryCrmPage((sql, params) => pool.query(sql, params), { workspaceId, resource: 'association.provider-receipts', key: 'items',
+        query: { limit: input.limit, cursor: input.cursor ?? undefined, createdAfter: input.createdAfter, createdBefore: input.createdBefore },
+        params: [workspaceId, input.orderId ?? null, input.entitlementId ?? null, input.state ?? null, input.allowedEventIds ?? null, input.allowedPlanIds ?? null],
+        sql: `SELECT r.id,r.provider,r.provider_event_id AS "eventId",r.provider_reference AS "providerReference",r.occurred_at AS "occurredAt",
+          r.target_kind AS target,r.order_id AS "orderId",r.entitlement_id AS "entitlementId",r.contact_id AS "contactId",r.plan_id AS "planId",
+          r.state,r.attempts,r.next_attempt_at AS "nextAttemptAt",r.last_error_code AS "errorCode",r.created_at AS "createdAt",r.applied_at AS "appliedAt"
+          FROM association_integration_events r WHERE r.workspace_id=$1 AND ($2::uuid IS NULL OR r.order_id=$2)
+          AND ($3::uuid IS NULL OR r.entitlement_id=$3) AND ($4::text IS NULL OR r.state=$4)
+          AND ((r.target_kind='order' AND ($5::uuid[] IS NULL OR (
+            EXISTS(SELECT 1 FROM association_order_lines l WHERE l.workspace_id=$1 AND l.order_id=r.order_id)
+            AND NOT EXISTS(SELECT 1 FROM association_order_lines l JOIN association_ticket_types t ON t.workspace_id=l.workspace_id AND t.id=l.ticket_id
+              WHERE l.workspace_id=$1 AND l.order_id=r.order_id AND NOT(t.event_id=ANY($5::uuid[]))))))
+          OR (r.target_kind='entitlement' AND ($6::uuid[] IS NULL OR r.plan_id=ANY($6::uuid[]))))`,
       })
     },
 

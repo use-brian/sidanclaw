@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { associationFingerprint } from '../../association/domain.js'
 import { createAssociationStore } from '../association-store.js'
 
+// The legacy store unit cases isolate domain transitions. Durable admission,
+// leases, authority and atomic acknowledgement run against real PostgreSQL.
+vi.mock('../../association/provider-inbox.js', () => ({
+  receiveProviderInbox: async (pool: Pool, envelope: { orderId: string; event: unknown }, actor: unknown, _workspace: string,
+    handlers: { apply(client: unknown, envelope: unknown, actor: unknown): Promise<unknown> }) => {
+    const client = await pool.connect()
+    try { await client.query('BEGIN'); const result = await handlers.apply(client, { ...envelope, target: 'order' }, actor); await client.query('COMMIT'); return result }
+    catch (error) { await client.query('ROLLBACK'); throw error }
+    finally { client.release() }
+  },
+}))
+
 const WID = '11111111-1111-4111-8111-111111111111'
 const CONTACT_ID = '22222222-2222-4222-8222-222222222222'
 const RECORD_ID = '33333333-3333-4333-8333-333333333333'

@@ -17,6 +17,15 @@ export type CrmPrivacyCoverageEntry = {
 }
 export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
   {
+    domain: 'association_integration_events',
+    columns: ['id','workspace_id','provider','provider_event_id','provider_reference','occurred_at','target_kind','order_id','entitlement_id','contact_id','plan_id',
+      'request_fingerprint','normalized_payload','admitted_actor','execution_actor','state','attempts','cycle_attempts','lease_token','lease_expires_at','next_attempt_at','last_error_code','created_at','updated_at','applied_at'],
+    excludedColumns: ['admitted_actor','execution_actor','lease_token'], workspaceWhere: 'true',
+    subjectWhere: 't.contact_id=$2 OR EXISTS(SELECT 1 FROM association_registrations r WHERE r.workspace_id=$1 AND r.order_id=t.order_id AND r.attendee_contact_id=$2)',
+    subjectRedactions: { request_fingerprint: 'NULL', normalized_payload: 'NULL', provider_reference: 'NULL', provider_event_id: 'NULL', contact_id: 'CASE WHEN t.contact_id=$2 THEN t.contact_id ELSE NULL END' },
+    transforms: {}, orderBy: 't.id', reason: 'Durable normalized status and target attribution remain; execution authority and shared provider payloads are excluded or redacted.',
+  },
+  {
     domain: 'association_waitlist_offers',
     columns: ['id','workspace_id','submission_id','ticket_id','promotion_id','order_id','request_fingerprint','actor_kind','actor_credential_id','created_at'],
     excludedColumns: [], workspaceWhere: 'true',

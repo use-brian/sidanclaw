@@ -16,6 +16,8 @@ import {
   CrmIntegrationScopeError,
   AssociationWaitlistOfferInputSchema,
   AssociationProviderBindingInputSchema,
+  ProviderEntitlementEventSchema,
+  ProviderReceiptStateSchema,
   type AssociationContext,
   type AssociationServicePort,
   type CrmOperationsActor,
@@ -152,7 +154,9 @@ function listInput(value: unknown, res: Response) {
 }
 
 export function associationErrorResponse(error: unknown, res: Response): void {
-  if (error instanceof CrmIntegrationScopeError) { res.status(403).json({ error: error.code, message: error.message }); return }
+  if (error instanceof CrmIntegrationScopeError) {
+    res.status(403).json({ error: error.code, message: error.message, ...('details' in error ? { details: error.details } : {}) }); return
+  }
   if (error instanceof z.ZodError) { res.status(400).json({ error: 'invalid_input', issues: error.issues.slice(0, 10) }); return }
   if (error instanceof WorkspaceModuleError) {
     const status = error.code === 'not_authorized' ? 403 : error.code === 'not_found' ? 404
@@ -174,7 +178,7 @@ export function associationErrorResponse(error: unknown, res: Response): void {
     res.status(status).json({ error: error.code, message: error.message, details: error.details })
     return
   }
-  console.error('[association] request failed:', error)
+  console.error('[association] request failed')
   res.status(500).json({ error: 'association_request_failed' })
 }
 
@@ -520,7 +524,20 @@ export function associationRoutes(opts: Options): Router {
     const event = parsed(ProviderEventInputSchema, req.body, res)
     if (!orderId || !event) return
     const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'reconcile_provider_event', orderId, event })
-    res.status(result.created ? 201 : 200).json({ order: result.record, reconciled: result.created })
+    res.status(result.created ? 201 : 200).json({ order: result.record, reconciled: result.created, ...(result.receipt ? { receipt: result.receipt } : {}) })
+  }))
+
+  router.post('/provider-entitlement-events', endpoint(async (req, res) => {
+    const event = parsed(ProviderEntitlementEventSchema, req.body, res)
+    if (!event) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'reconcile_provider_entitlement', event })
+    res.status(result.created ? 201 : 200).json({ entitlement: result.record, created: result.created, receipt: result.receipt })
+  }))
+  router.get('/provider-receipts', endpoint(async (req, res) => {
+    const query = parsed(ListPageSchema.extend({ orderId: UUID.optional(), entitlementId: UUID.optional(), state: ProviderReceiptStateSchema.optional() }), req.query, res)
+    if (!query) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'list_provider_receipts', ...query })
+    res.json({ receipts: result.items, nextCursor: result.nextCursor })
   }))
 
   router.get('/notifications', endpoint(async (req, res) => {

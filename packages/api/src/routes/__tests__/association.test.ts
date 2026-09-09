@@ -6,7 +6,7 @@ import type { BrainKeyStore } from '../../db/brain-keys-store.js'
 import type { AssociationStore } from '../../db/association-store.js'
 import { AssociationError } from '../../association/domain.js'
 import { WorkspaceModuleError } from '../../db/workspace-modules-store.js'
-import type { CrmOperationsServicePort } from '@use-brian/core'
+import { CrmOperationsError, type CrmOperationsServicePort } from '@use-brian/core'
 import { associationRoutes } from '../association.js'
 
 const WID = '11111111-1111-4111-8111-111111111111'
@@ -57,6 +57,9 @@ function fakeStore(): AssociationStore {
     confirmFreeOrder: vi.fn(),
     reconcileProviderEvent: vi.fn(),
     bindOrderProvider: vi.fn(),
+    reconcileProviderEntitlement: vi.fn(),
+    retryProviderEventReceipt: vi.fn(),
+    listProviderReceipts: vi.fn(),
     listEventRegistrations: vi.fn(),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'commerce' }),
     updateRegistration: vi.fn(),
@@ -81,6 +84,21 @@ function makeApp(
 }
 
 describe('[COMP:api/association-route] credential and workspace authority', () => {
+  it('preserves durable receipt creation, pagination and retry details at the compatibility boundary', async () => {
+    const store = fakeStore(), app = makeApp(store)
+    const event = { provider: 'fixture', providerReference: 'fictional-subscription', providerPeriodId: 'period-1', eventId: 'event-1', occurredAt: '2026-09-09T00:00:00Z', command: { kind: 'update_entitlement', entitlementId: RECORD_ID, status: 'cancelled' } }
+    vi.mocked(store.reconcileProviderEntitlement).mockResolvedValue({ record: { id: RECORD_ID }, created: true, receipt: { id: CONTACT_ID, state: 'applied' } })
+    const accepted = await request(app).post('/api/association/provider-entitlement-events').send(event)
+    expect(accepted.status).toBe(201)
+    expect(accepted.body).toMatchObject({ entitlement: { id: RECORD_ID }, receipt: { id: CONTACT_ID, state: 'applied' } })
+    vi.mocked(store.listProviderReceipts).mockResolvedValue({ items: [{ id: CONTACT_ID, state: 'applied' }], nextCursor: null })
+    expect((await request(app).get('/api/association/provider-receipts?limit=10&state=applied')).body).toMatchObject({ receipts: [{ id: CONTACT_ID }], nextCursor: null })
+    vi.mocked(store.reconcileProviderEntitlement).mockRejectedValue(new CrmOperationsError('conflict', 'Provider receipt is processing.', { reason: 'provider_event_processing', receiptId: CONTACT_ID, receiptState: 'processing' }))
+    const busy = await request(app).post('/api/association/provider-entitlement-events').send(event)
+    expect(busy.status).toBe(409)
+    expect(busy.body.details).toMatchObject({ receiptId: CONTACT_ID, receiptState: 'processing' })
+    expect((await request(makeApp(store, auth({ scope: 'read' }))).post('/api/association/provider-entitlement-events').send(event)).status).toBe(403)
+  })
   it('accepts backend binding and rejects incomplete payment evidence before the store', async () => {
     const store = fakeStore(), binding = { provider: 'fixture', providerReference: 'fictional-object', amountMinor: 1000, currency: 'USD' }
     vi.mocked(store.bindOrderProvider).mockResolvedValue({ record: { id: RECORD_ID, ...binding }, created: true })

@@ -30,6 +30,20 @@ function fixture(auth: CrmIntegrationPrincipal | null = principal) {
 }
 
 describe('[COMP:api/crm-integration-auth] Route isolation and shared adapters', () => {
+  it('exposes normalized provider receipts through the shared integration adapter', async () => {
+    const f = fixture()
+    f.association.execute.mockResolvedValueOnce({ command: 'reconcile_provider_entitlement', record: { id: eventId }, created: true, receipt: { id: credentialId, state: 'applied' } } as never)
+    const event = { provider: 'fixture', providerReference: 'fictional-subscription', providerPeriodId: 'period-1', eventId: 'event-1', occurredAt: '2026-09-09T00:00:00Z', command: { kind: 'update_entitlement', entitlementId: eventId, status: 'cancelled' } }
+    const accepted = await request(f.app).post('/api/crm/integration/association/provider-entitlement-events').set('Authorization', `Bearer ${token}`).send(event)
+    expect(accepted.status).toBe(201)
+    expect(accepted.body).toMatchObject({ entitlement: { id: eventId }, receipt: { state: 'applied' } })
+    expect(f.association.execute).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId, actor: { kind: 'integration_key', credentialId } }), { kind: 'reconcile_provider_entitlement', event })
+    f.association.execute.mockResolvedValueOnce({ command: 'list_provider_receipts', items: [{ id: credentialId }], nextCursor: 'next-page' } as never)
+    const page = await request(f.app).get('/api/crm/integration/association/provider-receipts?limit=10&state=retry').set('Authorization', `Bearer ${token}`)
+    expect(page.status).toBe(200)
+    expect(page.body).toMatchObject({ receipts: [{ id: credentialId }], nextCursor: 'next-page' })
+    expect(f.association.execute).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ kind: 'list_provider_receipts', limit: 10, state: 'retry' }))
+  })
   it('runs before JWT-only guards, derives context from the CRM credential and exposes no secret', async () => {
     const f = fixture()
     const result = await request(f.app).get('/api/crm/integration/catalog').set('Authorization', `Bearer ${token}`)
