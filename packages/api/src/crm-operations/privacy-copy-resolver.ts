@@ -2,6 +2,7 @@
 import type { PoolClient } from 'pg'
 import { CrmOperationsError, type CrmPrivacyBlocker } from '@use-brian/core'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
+import { readCrmPrivacyPolicy } from './privacy-policy.js'
 import { prepareCrmImportCopies, inspectCrmImportCopyConflicts } from './import-copy-resolver.js'
 import { inspectWorkflowCopyConflicts } from './workflow-copy-resolver.js'
 import { CRM_WORKFLOW_COPY_ROOT, CRM_WORKSPACE_TASK_ROOT, CRM_OTHER_CONTACT_EMAILS, CRM_SUBJECT_EMAILS, CRM_TASK_COPY_ROOT, CRM_SHARED_TASK_ROOT, crmDraftHasSubjectRecipient } from './privacy-copy-attribution.js'
@@ -56,6 +57,16 @@ export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: s
 /** Preview and canonical purge both refuse shared or ambiguous copy ownership. */
 export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspaceId: string, contactId: string): Promise<CrmPrivacyBlocker[]> {
   const blockers: CrmPrivacyBlocker[] = []
+  const holds=(await readCrmPrivacyPolicy(workspaceId,client)).policy.retention?.holds ?? []
+  if(holds.some(h=>h.domain==='contact' && h.id===contactId.toLowerCase()))blockers.push({domain:'entities',reason:'retention_hold',count:1})
+  for(const [kind,domain] of [['submission','association_enquiries'],['order','association_orders'],['file','workspace_files']] as const) {
+    const ids=holds.filter(h=>h.domain===kind).map(h=>h.id)
+    if(!ids.length)continue
+    const entry=CRM_PRIVACY_COVERAGE.find(e=>e.domain===domain)!
+    const held=await client.query<{count:number}>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+      SELECT count(*)::int count FROM ${domain} t WHERE t.workspace_id=$1 AND t.id=ANY($3::uuid[]) AND (${entry.subjectWhere})`,[workspaceId,contactId,ids])
+    if(held.rows[0]?.count)blockers.push({domain,reason:'retention_hold',count:held.rows[0].count})
+  }
   const drafts = await client.query<{ count: number }>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id), recipients AS(
       SELECT d.id,unnest(d.to_addresses||d.cc_addresses||d.bcc_addresses) address
         FROM crm_email_drafts d JOIN pg_temp.crm_privacy_copy_drafts s ON s.id=d.id WHERE d.workspace_id=$1

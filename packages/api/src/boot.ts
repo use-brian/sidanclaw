@@ -227,6 +227,7 @@ import { crmOperationsRoutes } from './routes/crm-operations.js'
 import { createCrmOperationsService } from './crm-operations/service.js'
 import { createCrmProductionImportService } from './crm-operations/import-service.js'
 import { createCrmImportSources } from './db/crm-import-sources.js'
+import { createCrmRetentionWorker } from './crm-operations/retention-worker.js'
 import {
   crmWorkflowAdmission,
   createCrmDomainEventWorker,
@@ -6773,6 +6774,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     ),
   })
   if (runWorkers) crmDomainEventWorker.start()
+  const crmRetentionWorker = createCrmRetentionWorker({ onError: () => console.warn('[crm-retention] Retention run failed; inspect the workspace run report.') })
+  if (runWorkers) crmRetentionWorker.start()
 
   // ════════════════════════════════════════════════════════════════
   // Open background workers
@@ -8379,6 +8382,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     programmaticBatchWorker?.stop()
     runQueueWorker.stop()
     crmDomainEventWorker.stop()
+    crmRetentionWorker.stop()
     knowledgeSyncWorker.stop()
     mailboxSyncWorker.stop()
     // Log out every IDLE socket - a SIGTERM must not leave a mailbox connection

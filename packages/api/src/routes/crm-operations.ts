@@ -26,6 +26,8 @@ import {
   SaveCrmConsentPurposeCommandSchema,
   SaveCrmSegmentCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
+  PreviewCrmRetentionCommandSchema,
+  ExecuteCrmRetentionCommandSchema,
   PreviewCrmContactErasureCommandSchema,
   EraseCrmContactWithPreviewCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
@@ -55,6 +57,7 @@ import {
 } from '../crm-operations/privacy.js'
 import { sendCrmPrivacyExport } from '../crm-operations/privacy-export.js'
 import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { listCrmRetentionRuns } from '../crm-operations/retention-service.js'
 import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 import { readCrmManagedMailboxPolicy, readCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
 import { query } from '../db/client.js'
@@ -1008,6 +1011,28 @@ export function crmOperationsRoutes(options: Options): Router {
       res.setHeader('Cache-Control','no-store')
       res.json({...erased.record,duplicate:erased.duplicate})
     }catch(error){writeError(res,error)}
+  })
+
+  router.post('/:workspaceId/operations/retention/dry-run',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=PreviewCrmRetentionCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'preview_retention',...body})
+      res.setHeader('Cache-Control','no-store');res.json(result.record)
+    }catch(error){writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/retention/execute',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=ExecuteCrmRetentionCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'execute_retention',...body})
+      res.setHeader('Cache-Control','no-store');res.json({...result.record,duplicate:result.duplicate})
+    }catch(error){writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/retention/runs',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {res.setHeader('Cache-Control','no-store');res.json(await listCrmRetentionRuns(ctx,CrmPageQuerySchema.parse(req.query)))}
+    catch(error){writeError(res,error)}
   })
 
   router.post('/:workspaceId/operations/retention', async (req, res) => {

@@ -28,6 +28,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_idempotency',
   'crm_privacy_policies',
   'crm_privacy_previews',
+  'crm_retention_runs',
   'crm_address_suppression_tombstones',
   'crm_managed_mailbox_policies',
   'crm_mailbox_integration_grants',
@@ -81,6 +82,8 @@ EXPORT_PROJECTIONS.crm_import_sources = [
   'integration_grants', 'created_at', 'octet_length(content_bytes) AS byte_count',
 ].join(',')
 EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
+
+EXPORT_PROJECTIONS.crm_retention_runs='id,workspace_id,owner_user_id,policy_version,mode,before_at,captured_at,expires_at,summary,status,receipt,error_code,completed_at,created_at'
 
 EXPORT_PROJECTIONS.crm_privacy_previews='id,workspace_id,owner_user_id,subject_id,policy_version,domain_summary,blockers,status,created_at,expires_at,consumed_at,receipt'
 
@@ -222,23 +225,32 @@ export async function pruneCrmOperationsRetention(
   try {
     await client.query('BEGIN')
     await acquireCrmPrivacyAdmission(client,workspaceId)
+    const retentionPolicy = (await readCrmPrivacyPolicy(workspaceId, client)).policy
+    const heldContacts = retentionPolicy.retention?.holds.filter(h => h.domain==='contact').map(h => h.id) ?? []
+    const heldSubmissions = retentionPolicy.retention?.holds.filter(h => h.domain==='submission').map(h => h.id) ?? []
+    const heldFiles = retentionPolicy.retention?.holds.filter(h => h.domain==='file').map(h => h.id) ?? []
     const enquiries = await client.query<{ id: string }>(
       `SELECT id FROM association_enquiries WHERE workspace_id=$1
-        AND status IN ('resolved','spam') AND updated_at<$2 ORDER BY id FOR UPDATE`, [workspaceId, before])
+        AND status IN ('resolved','spam') AND updated_at<$2
+        AND NOT(id=ANY($3::uuid[])) AND NOT(contact_id=ANY($4::uuid[]))
+        ORDER BY id FOR UPDATE`, [workspaceId, before, heldSubmissions, heldContacts])
     const submissionIds = enquiries.rows.map((row) => row.id)
     const retiredReceiptsDeleted = await retireCrmIntakeReceipts(client, workspaceId, { submissionIds })
     const remove = async (name: string, sql: string, values: unknown[]) => {
       const result = await client.query(sql, values)
       deleted[name] = result.rowCount ?? 0
     }
-    const heldSources = (await readCrmPrivacyPolicy(workspaceId, client)).policy.importSourceErasure?.heldSourceIds ?? []
+    const heldSources = retentionPolicy.importSourceErasure?.heldSourceIds ?? []
     await remove('crm_import_jobs',
       `DELETE FROM crm_import_jobs WHERE workspace_id=$1
         AND status IN ('completed','cancelled','failed') AND updated_at < $2
+        AND (staged_file_id IS NULL OR NOT(staged_file_id=ANY($4::uuid[])))
+        AND NOT EXISTS(SELECT 1 FROM crm_import_rows r WHERE r.workspace_id=crm_import_jobs.workspace_id
+          AND r.job_id=crm_import_jobs.id AND r.entity_id=ANY($5::uuid[]))
         AND (source_id IS NULL OR (NOT(source_id=ANY($3::uuid[]))
           AND EXISTS(SELECT 1 FROM crm_import_sources s WHERE s.workspace_id=crm_import_jobs.workspace_id
             AND s.id=crm_import_jobs.source_id AND s.privacy_erased)))`,
-      [workspaceId, before, heldSources])
+      [workspaceId, before, heldSources, heldFiles, heldContacts])
     await remove('crm_import_sources',
       `DELETE FROM crm_import_sources s WHERE workspace_id=$1 AND privacy_erased
         AND replay_expires_at<=clock_timestamp() AND NOT(id=ANY($2::uuid[]))
@@ -247,9 +259,12 @@ export async function pruneCrmOperationsRetention(
     await remove('crm_domain_event_outbox',
       `DELETE FROM crm_domain_event_outbox e WHERE workspace_id=$1
         AND status='delivered' AND created_at < $2
+        AND NOT(e.subject_id=ANY($3::uuid[])) AND NOT(e.subject_id=ANY($4::uuid[]))
+        AND NOT(COALESCE(e.payload->>'contactId','')=ANY($3::text[]))
+        AND NOT EXISTS(SELECT 1 FROM association_enquiries q WHERE q.workspace_id=e.workspace_id AND q.id=e.subject_id AND q.contact_id=ANY($3::uuid[]))
         AND NOT EXISTS(SELECT 1 FROM workflow_runs r
           WHERE r.workspace_id=e.workspace_id AND r.crm_event_id=e.id)`,
-      [workspaceId, before])
+      [workspaceId, before, heldContacts, heldSubmissions])
     await remove('crm_intake_idempotency',
       `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND status='retired'
         AND replay_expires_at<=clock_timestamp()`, [workspaceId])

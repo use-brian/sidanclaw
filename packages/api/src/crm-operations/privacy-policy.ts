@@ -1,9 +1,9 @@
 /** Explicit policy and receipt retirement in the caller's transaction. [COMP:crm/operations-privacy] */
 import type { PoolClient } from 'pg'
-import { CrmOperationsError, type CrmOperationsCommand, type CrmOperationsContext } from '@use-brian/core'
+import { CrmOperationsError, canonicalCrmRequest, type CrmOperationsCommand, type CrmOperationsContext, type CrmRetentionPolicy } from '@use-brian/core'
 import { query } from '../db/client.js'
 
-type Policy = { intakeReplay: { retentionSeconds: number } | null; addressSuppression?: { retentionSeconds: number } | null
+type Policy = { retention?: CrmRetentionPolicy | null; intakeReplay: { retentionSeconds: number } | null; addressSuppression?: { retentionSeconds: number } | null
   importSourceErasure?: { receiptRetentionSeconds: number; heldSourceIds: string[] } | null }
 type PolicyRecord = {
   id: string | null
@@ -46,12 +46,27 @@ export async function saveCrmPrivacyPolicy(
       throw new CrmOperationsError('invalid_input', 'Source holds must reference sources in this workspace.')
     }
   }
+  const requestedRetention = command.retention === undefined ? current.policy.retention ?? null : command.retention
+  const retention = requestedRetention && { ...requestedRetention,
+    openSubmissions: requestedRetention.openSubmissions && { ...requestedRetention.openSubmissions, fields: [...requestedRetention.openSubmissions.fields].sort() },
+    holds: requestedRetention.holds.map(h => ({...h,id:h.id.toLowerCase()})).sort((a,b) => `${a.domain}:${a.id}`.localeCompare(`${b.domain}:${b.id}`)) }
+  if (command.retention && retention) {
+    const tables = { contact: 'entities', submission: 'association_enquiries', order: 'association_orders', file: 'workspace_files' } as const
+    for (const domain of Object.keys(tables) as (keyof typeof tables)[]) {
+      const ids = retention.holds.filter(h => h.domain === domain).map(h => h.id)
+      if (!ids.length) continue
+      const held = await client.query(`SELECT id FROM ${tables[domain]} WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ${domain==='contact' ? "AND kind='person'" : ''} FOR KEY SHARE`, [context.workspaceId,ids])
+      if (held.rowCount !== ids.length) throw new CrmOperationsError('invalid_input', 'Retention holds must reference records in this workspace.')
+    }
+  }
   const policy: Policy = { intakeReplay: command.intakeReplay,
+    ...(command.retention !== undefined || Object.hasOwn(current.policy,'retention') ? { retention } : {}),
     ...(command.addressSuppression !== undefined || Object.hasOwn(current.policy,'addressSuppression') ? { addressSuppression } : {}),
     ...(command.importSourceErasure !== undefined || Object.hasOwn(current.policy,'importSourceErasure') ? { importSourceErasure } : {}) }
   if (current.version > 0 && current.policy.intakeReplay?.retentionSeconds === command.intakeReplay?.retentionSeconds
     && current.policy.addressSuppression?.retentionSeconds === addressSuppression?.retentionSeconds
-    && JSON.stringify(current.policy.importSourceErasure ?? null) === JSON.stringify(importSourceErasure)) {
+    && canonicalCrmRequest(current.policy.retention ?? null) === canonicalCrmRequest(retention)
+    && canonicalCrmRequest(current.policy.importSourceErasure ?? null) === canonicalCrmRequest(importSourceErasure)) {
     return { record: current, created: false }
   }
   const saved = await client.query<PolicyRecord>(
@@ -65,6 +80,7 @@ export async function saveCrmPrivacyPolicy(
 export async function retireCrmIntakeReceipts(
   client: PoolClient, workspaceId: string,
   subject: { contactId: string } | { submissionIds: string[] },
+  expiryAt?: Date,
 ): Promise<number> {
   const predicate = 'contactId' in subject ? 'contact_id=$2::uuid' : 'submission_id=ANY($2::uuid[])'
   const value = 'contactId' in subject ? subject.contactId : subject.submissionIds
@@ -88,6 +104,6 @@ export async function retireCrmIntakeReceipts(
     [workspaceId, ids, policy?.version ?? null, policy?.policy.intakeReplay?.retentionSeconds ?? null])
   const expired = await client.query(
     `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND id=ANY($2::uuid[])
-      AND status='retired' AND replay_expires_at<=clock_timestamp()`, [workspaceId, ids])
+      AND status='retired' AND replay_expires_at<=${expiryAt ? '$3::timestamptz' : 'clock_timestamp()'}`, expiryAt ? [workspaceId, ids, expiryAt] : [workspaceId, ids])
   return expired.rowCount ?? 0
 }

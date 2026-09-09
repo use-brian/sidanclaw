@@ -1268,6 +1268,14 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     "reason": "Workspace configuration is outside a single-person slice."
   },
   {
+    domain:'crm_retention_runs',
+    columns:['id','workspace_id','owner_user_id','policy_version','mode','before_at','captured_at','expires_at',
+      'snapshot_hash','preview_hash','summary','status','receipt','error_code','completed_at','created_at'],
+    excludedColumns:['snapshot_hash','preview_hash'],workspaceWhere:'true',subjectWhere:null,
+    subjectRedactions:{},transforms:{},orderBy:'t.id',
+    reason:'Content-free workspace retention reports; approval hashes are private.'
+  },
+  {
     "domain": "crm_privacy_previews",
     "columns": [
       "id",

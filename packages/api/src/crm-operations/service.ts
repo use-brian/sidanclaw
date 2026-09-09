@@ -30,6 +30,7 @@ import {
   type CrmOperationsServicePort,
   type CrmDeliveryServicePort,
   type CrmPrivacyServicePort,
+  type CrmRetentionServicePort,
 } from '@use-brian/core'
 import type {
   AuditIdentity,
@@ -40,6 +41,7 @@ import type {
   StoredIntakeDefinition,
 } from '../db/crm-operations-store.js'
 import {createCrmPrivacyService} from './privacy-previews.js'
+import {createCrmRetentionService} from './retention-service.js'
 import { hashSecret } from '../db/api-key-store.js'
 import { assertIntakeVerificationConfiguration, verifyIntakeIdentity } from './identity-verification.js'
 
@@ -48,6 +50,7 @@ type ServiceClock = () => Date
 export type CrmOperationsServiceOptions = {
   deliveries?: CrmDeliveryServicePort
   privacy?:CrmPrivacyServicePort
+  retention?:CrmRetentionServicePort
   now?: ServiceClock
   randomCredentialId?: () => string
   randomSecret?: () => string
@@ -452,6 +455,14 @@ export function createCrmOperationsService(
       const context = CrmOperationsContextSchema.parse(rawContext)
       const command = CrmOperationsCommandSchema.parse(rawCommand)
       assertCrmOperationsAuthority(context, command)
+      if(command.kind==='preview_retention') {
+        const preview=await (options.retention ?? createCrmRetentionService()).preview(context,command)
+        return result(command.kind,{...preview},{created:true})
+      }
+      if(command.kind==='execute_retention') {
+        const executed=await (options.retention ?? createCrmRetentionService()).execute(context,command)
+        return result(command.kind,executed.receipt,{created:!executed.duplicate,duplicate:executed.duplicate})
+      }
       if(command.kind==='send_message') {
         if(!options.deliveries) throw new CrmOperationsError('conflict','CRM delivery is unavailable.',{reason:'delivery_unavailable'})
         const sent=await options.deliveries.send(context,command)

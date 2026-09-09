@@ -43,3 +43,5 @@ export * from './sendability.js'
 export * from './segments.js'
 
 export * from './segment-catalog.js'
+
+export * from './retention-types.js'

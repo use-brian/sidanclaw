@@ -14,6 +14,7 @@ import { APP_LOCALES } from '@use-brian/shared'
 import { CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, type CrmIntegrationOperation } from './integration-authority.js'
 import { AssociationPlanInputSchema, AssociationEventInputSchema } from '../association/domain.js'
 import { CrmConfigCommandSchema, isCrmConfigCommand } from './config-commands.js'
+import { CrmRetentionPolicySchema, PreviewCrmRetentionCommandSchema, ExecuteCrmRetentionCommandSchema } from './retention-types.js'
 
 export const CrmOperationsUuidSchema = z.string().uuid()
 export const CrmOperationsStableKeySchema = z.string().trim().toLowerCase()
@@ -444,6 +445,7 @@ export const SaveCrmPrivacyPolicyCommandSchema = z.object({
   confirmed: z.literal(true),
   intakeReplay: CrmIntakeReplayPolicySchema,
   addressSuppression: CrmIntakeReplayPolicySchema.optional(),
+  retention: CrmRetentionPolicySchema.nullable().optional(),
   importSourceErasure: z.object({
     receiptRetentionSeconds: z.number().int().min(1).max(2147483647),
     heldSourceIds: z.array(CrmOperationsUuidSchema).max(250)
@@ -543,6 +545,8 @@ export interface CrmPrivacyServicePort {
 }
 
 export const CrmOperationsCommandSchema = z.union([
+  PreviewCrmRetentionCommandSchema,
+  ExecuteCrmRetentionCommandSchema,
   PreviewCrmContactErasureCommandSchema,
   EraseCrmContactWithPreviewCommandSchema,
   CrmConfigCommandSchema,
@@ -678,6 +682,8 @@ export function commandRequiresConfigurationAuthority(command: CrmOperationsComm
     || command.kind === 'revoke_intake_credential'
     || command.kind === 'save_consent_purpose'
     || command.kind === 'save_privacy_policy'
+    || command.kind === 'preview_retention'
+    || command.kind === 'execute_retention'
     || command.kind === 'preview_contact_erasure'
     || command.kind === 'erase_contact_with_preview'
     || command.kind === 'release_address_suppression'
@@ -689,7 +695,7 @@ export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
-  if (['preview_contact_erasure', 'erase_contact_with_preview', 'save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy', 'save_mailbox_integration_grant'].includes(command.kind) && (context.actor.kind !== 'user'
+  if (['preview_retention', 'execute_retention', 'preview_contact_erasure', 'erase_contact_with_preview', 'save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy', 'save_mailbox_integration_grant'].includes(command.kind) && (context.actor.kind !== 'user'
     || !['owner', 'admin'].includes(context.authority.role))) {
     throw new CrmOperationsError('not_authorized', 'Policy approval and suppression release require a workspace owner or admin member.')
   }
