@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "ownerBindings": [
+    "Replace reserved ids using catalog discovery.",
+    "Bind purpose policy and mailbox/channel targets.",
+    "Grant the required CRM, Tasks and Association access explicitly.",
+    "Keep recipes disabled until the corresponding tool registry and local acceptance checks pass."
+  ],
+  "recipes": [
+    {
+      "key": "submission_notification",
+      "name": "Submission received notice",
+      "enabled": false,
+      "trigger": {
+        "kind": "event",
+        "event": {
+          "sources": [
+            {
+              "source": {
+                "type": "crm"
+              },
+              "match": {
+                "inChannels": [
+                  "crm.submission.received"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "definition": {
+        "startStepId": "notify",
+        "steps": [
+          {
+            "id": "notify",
+            "type": "tool_call",
+            "toolName": "sendCrmMessage",
+            "arguments": {
+              "deliveryId": "{{input.event.domainEventId}}",
+              "connectorInstanceId": "00000009-0000-4000-8000-000000000001",
+              "purposeKey": "operator_notice",
+              "to": [
+                "operator@example.com"
+              ],
+              "cc": [],
+              "bcc": [],
+              "subject": "New enquiry received",
+              "body": "A new enquiry is ready for review. Submission: {{input.event.submissionId}}",
+              "attachments": []
+            },
+            "approval": {
+              "required": true
+            },
+            "nextStepId": null
+          }
+        ]
+      },
+      "sampleInput": {
+        "event": {
+          "domainEventId": "00000001-0000-4000-8000-000000000001",
+          "submissionId": "00000002-0000-4000-8000-000000000001",
+          "contactId": "00000003-0000-4000-8000-000000000001",
+          "planId": "00000004-0000-4000-8000-000000000001",
+          "entitlementId": "00000005-0000-4000-8000-000000000001",
+          "status": "active",
+          "definitionKey": "website_enquiry"
+        }
+      },
+      "sampleVars": {}
+    },
+    {
+      "key": "event_registration",
+      "name": "Register for an unconstrained event",
+      "enabled": false,
+      "trigger": {
+        "kind": "manual"
+      },
+      "definition": {
+        "startStepId": "register",
+        "steps": [
+          {
+            "id": "register",
+            "type": "tool_call",
+            "toolName": "recordCrmParticipation",
+            "arguments": {
+              "contact_id": "{{input.contactId}}",
+              "event_id": "{{input.eventId}}",
+              "source_kind": "workflow",
+              "source_id": "{{input.registrationSourceId}}",
+              "status": "registered",
+              "attendee_name": "{{input.attendeeName}}",
+              "metadata": {}
+            },
+            "nextStepId": null
+          }
+        ]
+      },
+      "sampleInput": {
+        "contactId": "00000003-0000-4000-8000-000000000001",
+        "eventId": "00000006-0000-4000-8000-000000000001",
+        "registrationSourceId": "fictional-registration-1",
+        "attendeeName": "Fictional Attendee"
+      },
+      "sampleVars": {}
+    },
+    {
+      "key": "membership_onboarding",
+      "name": "Effective member onboarding",
+      "enabled": false,
+      "trigger": {
+        "kind": "event",
+        "event": {
+          "sources": [
+            {
+              "source": {
+                "type": "crm"
+              },
+              "match": {
+                "inChannels": [
+                  "crm.entitlement.changed"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "definition": {
+        "startStepId": "effective",
+        "steps": [
+          {
+            "id": "effective",
+            "type": "tool_call",
+            "toolName": "listCrmEntitlements",
+            "arguments": {
+              "contact_id": "{{input.event.contactId}}",
+              "plan_id": "{{input.event.planId}}",
+              "active_only": true,
+              "limit": 1
+            },
+            "storeOutputAs": "membership"
+          },
+          {
+            "id": "eligible",
+            "type": "branch",
+            "condition": {
+              "and": [
+                {
+                  "==": [
+                    {
+                      "var": "input.event.status"
+                    },
+                    "active"
+                  ]
+                },
+                {
+                  "==": [
+                    {
+                      "var": "vars.membership.entitlements.0.isEffective"
+                    },
+                    true
+                  ]
+                }
+              ]
+            },
+            "nextStepIdIfTrue": "contact",
+            "nextStepIdIfFalse": null
+          },
+          {
+            "id": "contact",
+            "type": "tool_call",
+            "toolName": "getContact",
+            "arguments": {
+              "id": "{{input.event.contactId}}"
+            },
+            "storeOutputAs": "contact"
+          },
+          {
+            "id": "onboard",
+            "type": "tool_call",
+            "toolName": "saveTask",
+            "arguments": {
+              "title": "Welcome {{vars.contact.name}}",
+              "description": "Review the member preferences and offer an orientation. Confirm the contact record before contacting the member.",
+              "attributes": {
+                "crm_contact_id": "{{input.event.contactId}}",
+                "crm_entitlement_id": "{{input.event.entitlementId}}"
+              }
+            },
+            "nextStepId": null
+          }
+        ]
+      },
+      "sampleInput": {
+        "event": {
+          "domainEventId": "00000001-0000-4000-8000-000000000001",
+          "submissionId": "00000002-0000-4000-8000-000000000001",
+          "contactId": "00000003-0000-4000-8000-000000000001",
+          "planId": "00000004-0000-4000-8000-000000000001",
+          "entitlementId": "00000005-0000-4000-8000-000000000001",
+          "status": "active",
+          "definitionKey": "website_enquiry"
+        }
+      },
+      "sampleVars": {
+        "membership": {
+          "entitlements": [
+            {
+              "id": "00000005-0000-4000-8000-000000000001",
+              "isEffective": true
+            }
+          ],
+          "nextCursor": null
+        },
+        "contact": {
+          "id": "00000003-0000-4000-8000-000000000001",
+          "name": "Fictional Member"
+        }
+      }
+    },
+    {
+      "key": "weekly_deal_digest",
+      "name": "Weekly deal digest",
+      "enabled": false,
+      "trigger": {
+        "kind": "schedule",
+        "schedule": {
+          "type": "weekly",
+          "days": [
+            "monday"
+          ],
+          "time": "09:00"
+        },
+        "timezone": "UTC",
+        "mode": "local"
+      },
+      "definition": {
+        "startStepId": "digest",
+        "steps": [
+          {
+            "id": "digest",
+            "type": "assistant_call",
+            "target": {
+              "assistantId": "primary"
+            },
+            "prompt": "Produce a brief weekly deal digest from the configured deal segment. If CRM segment reads are unavailable, report that missing prerequisite and stop. Use the configured segment id 00000007-0000-4000-8000-000000000001 with previewCrmSegment and follow nextCursor with unchanged filters until null before summarizing. Mark incomplete reads explicitly. Summarize current stages and needed follow-ups from the returned records. This is advisory prose; make no business-state changes. Do not infer permission to contact anyone from a segment snapshot.",
+            "tools": [
+              "listCrmSegments",
+              "previewCrmSegment"
+            ],
+            "deliver": {
+              "channelType": "slack",
+              "channelId": "fictional-operator-digest"
+            },
+            "nextStepId": null
+          }
+        ]
+      },
+      "sampleInput": {},
+      "sampleVars": {}
+    },
+    {
+      "key": "managed_outreach",
+      "name": "Reviewed managed outreach",
+      "enabled": false,
+      "trigger": {
+        "kind": "manual"
+      },
+      "definition": {
+        "startStepId": "preview",
+        "steps": [
+          {
+            "id": "preview",
+            "type": "tool_call",
+            "toolName": "checkCrmSendability",
+            "arguments": {
+              "contact_id": "{{input.contactId}}",
+              "channel": "email",
+              "purpose_key": "member_updates"
+            },
+            "storeOutputAs": "sendability"
+          },
+          {
+            "id": "allowed",
+            "type": "branch",
+            "condition": {
+              "==": [
+                {
+                  "var": "vars.sendability.verdict"
+                },
+                "allowed"
+              ]
+            },
+            "nextStepIdIfTrue": "send",
+            "nextStepIdIfFalse": null
+          },
+          {
+            "id": "send",
+            "type": "tool_call",
+            "toolName": "sendCrmMessage",
+            "arguments": {
+              "deliveryId": "{{input.deliveryId}}",
+              "connectorInstanceId": "00000009-0000-4000-8000-000000000001",
+              "purposeKey": "member_updates",
+              "to": [
+                "{{input.recipient}}"
+              ],
+              "cc": [],
+              "bcc": [],
+              "subject": "{{input.subject}}",
+              "body": "{{input.body}}",
+              "attachments": []
+            },
+            "approval": {
+              "required": true
+            },
+            "nextStepId": null
+          }
+        ]
+      },
+      "sampleInput": {
+        "contactId": "00000003-0000-4000-8000-000000000001",
+        "deliveryId": "00000008-0000-4000-8000-000000000001",
+        "recipient": "member@example.com",
+        "subject": "Fictional member update",
+        "body": "Here is the update you requested."
+      },
+      "sampleVars": {
+        "sendability": {
+          "verdict": "allowed"
+        }
+      }
+    }
+  ]
+}

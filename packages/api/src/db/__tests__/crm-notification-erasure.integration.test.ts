@@ -34,8 +34,10 @@ async function fixture() {
   const erase=(p:CrmErasurePreview)=>privacy.erase(context,{kind:'erase_contact_with_preview',contactId,previewId:p.id,previewHash:p.previewHash,confirmed:true})
   const legacy=async()=>{const store=createSoftDeleteStore();await store.applyHardPurge({primitive:'contact',workspaceId,rowId:contactId,actorUserId:userId,reason:'Synthetic privacy request',ticketReference:null,snapshot:(await store.readForSoftDelete('contact',workspaceId,contactId))!,now:new Date()})}
   const event=async(status='pending',subjectId=submissionId,subjectKind='submission')=>{
-    const id=randomUUID();await pool.query(`INSERT INTO crm_domain_event_outbox(id,workspace_id,event_type,event_key,subject_kind,subject_id,actor_kind,payload,status,delivered_at,last_error)
-      VALUES($1,$2,'crm.submission.received',$1::uuid::text,$3,$4,'user','{"status":"original","unsafe":"subject@example.com"}',$5,CASE WHEN $5='delivered' THEN now() END,'subject@example.com')`,[id,workspaceId,subjectKind,subjectId,status]);return id
+    // Keep this fixture in the bounded lease batch even when earlier suites
+    // have left unrelated due events in the shared disposable database.
+    const id=randomUUID();await pool.query(`INSERT INTO crm_domain_event_outbox(id,workspace_id,event_type,event_key,subject_kind,subject_id,actor_kind,payload,status,delivered_at,last_error,next_attempt_at)
+      VALUES($1,$2,'crm.submission.received',$1::uuid::text,$3,$4,'user','{"status":"original","unsafe":"subject@example.com"}',$5,CASE WHEN $5='delivered' THEN now() END,'subject@example.com','1970-01-01T00:00:00Z')`,[id,workspaceId,subjectKind,subjectId,status]);return id
   }
   const notification=async(status='pending',recipient=contactId)=>{
     const id=randomUUID();await pool.query(`INSERT INTO association_notification_outbox(id,workspace_id,source_kind,source_id,template_key,recipient_kind,recipient_ref,payload,status,provider_message_id,last_error)
@@ -181,7 +183,7 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
     try {
       await client.query('BEGIN');await acquireCrmPrivacyAdmission(client,f.workspaceId)
       const leased=await outbox.leaseBatch('scan_worker',50,60_000)
-      expect(leased.map(e=>e.id)).toEqual([available]);expect(leased.some(e=>e.id===held)).toBe(false)
+      expect(leased.filter(e=>[f.workspaceId,other.workspaceId].includes(e.workspaceId)).map(e=>e.id)).toEqual([available]);expect(leased.some(e=>e.id===held)).toBe(false)
     }finally{await client.query('ROLLBACK');client.release()}
   })
   it('serializes run and step writes during privacy and preserves ordinary workflows afterward',async()=>{
