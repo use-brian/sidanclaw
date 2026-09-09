@@ -17,6 +17,13 @@ export type CrmPrivacyCoverageEntry = {
 }
 export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
   {
+    domain: 'association_inventory_boundaries',
+    columns: ['id','workspace_id','event_id','ticket_id','sold_out','revision','capacity','used','created_at','updated_at'],
+    excludedColumns: [], workspaceWhere: 'true', subjectWhere: null,
+    subjectRedactions: {}, transforms: {}, orderBy: 't.id',
+    reason: 'Committed capacity counts and workflow revisions contain no participant identity.',
+  },
+  {
     "domain": "association_audit_log",
     "columns": [
       "id",
@@ -373,7 +380,8 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "updated_at",
       "source_kind",
       "source_id",
-      "request_fingerprint"
+      "request_fingerprint",
+      "historical_import"
     ],
     "excludedColumns": [],
     "orderBy": "t.id",

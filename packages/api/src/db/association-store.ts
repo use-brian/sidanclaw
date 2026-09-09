@@ -11,6 +11,7 @@
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import { CrmOperationsError, CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
+import {lockAssociationInventory,refreshAssociationInventory} from '../association/inventory.js'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { getPool } from './client.js'
 import { lockCrmIntegrationCredential, type CrmIntegrationPrincipal } from './crm-integration-store.js'
@@ -114,6 +115,7 @@ async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string
     const integration = await lockIntegrationActor(client, workspaceId, actor)
     await lockAssociationModule(client, workspaceId)
     await authorizeOrderIntegration(client, workspaceId, id, actor, 'association.orders.write', undefined, integration)
+    const inventoryEvents=await lockAssociationInventory(client,workspaceId,{orderId:id})
     const current = await client.query<{ status: OrderStatus; total_minor: string; unexpired: boolean }>(
       `SELECT status,total_minor::text,reservation_expires_at>clock_timestamp() AS unexpired FROM association_orders
        WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, [workspaceId, id])
@@ -130,7 +132,7 @@ async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string
     if (action === 'confirm_free' && order.total_minor !== '0') throw new AssociationError('invalid_transition', 'Only a zero-total order can be confirmed without payment evidence')
     if (order.status === target) return { record: (await getOrderRecord(client, workspaceId, id))!, created: false }
     if (order.status !== 'pending') throw new AssociationError('invalid_transition', 'Only a pending order can be settled by this command')
-    if (action === 'confirm_free' && !order.unexpired) throw new AssociationError('not_available', 'The free-order reservation expired; create a new order after availability is checked')
+    if (action === 'confirm_free' && !(await client.query<{unexpired:boolean}>('SELECT reservation_expires_at>clock_timestamp() unexpired FROM association_orders WHERE workspace_id=$1 AND id=$2',[workspaceId,id])).rows[0]?.unexpired) throw new AssociationError('not_available', 'The free-order reservation expired; create a new order after availability is checked')
     await client.query(`UPDATE association_orders SET status=$3,reservation_expires_at=NULL WHERE workspace_id=$1 AND id=$2`, [workspaceId, id, target])
     await client.query(`UPDATE association_registrations SET status=$3,reservation_expires_at=NULL
       WHERE workspace_id=$1 AND order_id=$2 AND status='reserved'`, [workspaceId, id, target === 'paid' ? 'confirmed' : 'cancelled'])
@@ -138,6 +140,7 @@ async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string
       (workspace_id,source_kind,source_id,template_key,recipient_kind,recipient_ref,payload)
       SELECT workspace_id,'order',id,'order_receipt','contact',contact_id::text,jsonb_build_object('orderId',id)
       FROM association_orders WHERE workspace_id=$1 AND id=$2 ON CONFLICT DO NOTHING`, [workspaceId, id])
+    await refreshAssociationInventory(client,workspaceId,inventoryEvents,actor.credentialKind)
     await audit(client, workspaceId, action === 'expire' ? 'order.expired' : action === 'cancel' ? 'order.cancelled' : 'order.free_confirmed', 'order', id, actor)
     return { record: (await getOrderRecord(client, workspaceId, id))!, created: true }
   })
@@ -208,7 +211,7 @@ const REGISTRATION_SELECT = `
   attendee_contact_id AS "attendeeContactId", attendee_name AS "attendeeName",
   attendee_email AS "attendeeEmail", attendee_metadata AS "attendeeMetadata",
   status, reservation_expires_at AS "reservationExpiresAt",
-  checked_in_at AS "checkedInAt", source_kind AS "sourceKind", source_id AS "sourceId",
+  checked_in_at AS "checkedInAt", source_kind AS "sourceKind", source_id AS "sourceId", historical_import AS "historicalImport",
   created_at AS "createdAt", updated_at AS "updatedAt"`
 const NOTIFICATION_SELECT = `
   id, workspace_id AS "workspaceId", source_kind AS "sourceKind",
@@ -341,11 +344,12 @@ export async function saveCrmEntitlementPlanRecord(client: PoolClient, workspace
 }
 
 
-export async function saveCrmEventRecord(client: PoolClient, workspaceId: string, input: EventInput): Promise<MutationResult> {
+export async function saveCrmEventRecord(client: PoolClient, workspaceId: string, input: EventInput, actorKind='system_job'): Promise<MutationResult> {
   const before = await client.query<{ id: string }>(
     `SELECT id FROM association_events WHERE workspace_id = $1 AND slug = $2`,
     [workspaceId, input.slug],
   )
+  if(before.rows[0])await lockAssociationInventory(client,workspaceId,{eventIds:[before.rows[0].id]})
   const result = await client.query<DbRow>(
     `INSERT INTO association_events
        (workspace_id, slug, programme_key, title, description, starts_at,
@@ -371,6 +375,7 @@ export async function saveCrmEventRecord(client: PoolClient, workspaceId: string
       input.metadata],
   )
   const event = result.rows[0]
+  await refreshAssociationInventory(client,workspaceId,[String(event.id)],actorKind)
   const created = before.rows.length === 0
   return { record: event, created }
 }
@@ -749,7 +754,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async upsertEvent(workspaceId, input, actor) {
       return transaction(pool, async (client) => {
-        const saved = await saveCrmEventRecord(client, workspaceId, input)
+        const saved = await saveCrmEventRecord(client, workspaceId, input, actor.credentialKind)
         await audit(client, workspaceId, saved.created ? 'event.created' : 'event.updated', 'event', String(saved.record.id), actor)
         return saved
       })
@@ -772,6 +777,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         const module = await lockAssociationModule(client, workspaceId)
         requireAssociationAdmission(module)
         authorizeIntegration(actor, 'crm.catalog.configure', { eventIds: eventId }, integration)
+        await lockAssociationInventory(client,workspaceId,{eventIds:[eventId]})
         const event = await client.query(
           `SELECT 1 FROM association_events WHERE workspace_id = $1 AND id = $2`,
           [workspaceId, eventId],
@@ -820,13 +826,14 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
              LEFT JOIN LATERAL (
                SELECT count(*)::int AS reserved_count FROM association_registrations r
                 WHERE r.workspace_id = t.workspace_id AND r.ticket_id = t.id
-                  AND (r.status IN ('confirmed','checked_in')
-                    OR (r.status = 'reserved' AND r.reservation_expires_at > now()))
+                  AND NOT r.historical_import AND (r.status IN ('confirmed','checked_in','registered','attended')
+                    OR (r.status = 'reserved' AND r.reservation_expires_at > statement_timestamp()))
              ) i ON true
             WHERE t.workspace_id = $1 AND t.id = $2`,
           [workspaceId, result.rows[0].id],
         )
         const created = before.rows.length === 0
+        await refreshAssociationInventory(client,workspaceId,[eventId],actor.credentialKind)
         await audit(client, workspaceId, created ? 'ticket.created' : 'ticket.updated', 'ticket', String(result.rows[0].id), actor, { eventId })
         return { record: tickets.rows[0], created }
       })
@@ -839,8 +846,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
            LEFT JOIN LATERAL (
              SELECT count(*)::int AS reserved_count FROM association_registrations r
               WHERE r.workspace_id = t.workspace_id AND r.ticket_id = t.id
-                AND (r.status IN ('confirmed','checked_in')
-                  OR (r.status = 'reserved' AND r.reservation_expires_at > now()))
+                AND NOT r.historical_import AND (r.status IN ('confirmed','checked_in','registered','attended')
+                  OR (r.status = 'reserved' AND r.reservation_expires_at > statement_timestamp()))
            ) i ON true
           WHERE t.workspace_id = $1 AND t.event_id = $2
           ORDER BY t.created_at, t.id`,
@@ -871,6 +878,12 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         requireAssociationAdmission(module)
         await requirePerson(client, workspaceId, input.contactId)
         const ticketIds = input.lines.map((line) => line.ticketId)
+        const inventoryEvents=await lockAssociationInventory(client,workspaceId,{ticketIds})
+        const lockedMemberships = input.lines.some(line => line.useMemberPrice)
+          ? (await client.query<{ id: string }>(`SELECT id FROM association_memberships
+              WHERE workspace_id=$1 AND contact_id=$2 AND status='active' ORDER BY id FOR SHARE`,
+            [workspaceId, input.contactId])).rows.map(row => row.id) : []
+        const admittedAt=(await client.query<{instant:string}>('SELECT clock_timestamp()::text instant')).rows[0].instant
         const ticketsResult = await client.query<{
           id: string
           event_id: string
@@ -883,6 +896,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           sale_starts_at: Date | null
           sale_ends_at: Date | null
           status: string
+          admissible: boolean
           event_status: string
           event_capacity: number | null
           registration_opens_at: Date | null
@@ -892,13 +906,18 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
                   t.member_price_minor::text, t.eligible_plan_keys, t.capacity,
                   t.per_order_limit, t.sale_starts_at, t.sale_ends_at, t.status,
                   e.status AS event_status, e.capacity AS event_capacity,
-                  e.registration_opens_at, e.registration_closes_at
+                  e.registration_opens_at, e.registration_closes_at,
+                  (t.status='on_sale' AND e.status='published' AND e.ends_at>$3::timestamptz
+                    AND(t.sale_starts_at IS NULL OR t.sale_starts_at<=$3::timestamptz)
+                    AND(t.sale_ends_at IS NULL OR t.sale_ends_at>$3::timestamptz)
+                    AND(e.registration_opens_at IS NULL OR e.registration_opens_at<=$3::timestamptz)
+                    AND(e.registration_closes_at IS NULL OR e.registration_closes_at>$3::timestamptz)) AS admissible
              FROM association_ticket_types t
              JOIN association_events e
                ON e.workspace_id = t.workspace_id AND e.id = t.event_id
             WHERE t.workspace_id = $1 AND t.id = ANY($2::uuid[])
-            ORDER BY t.id FOR UPDATE OF t, e`,
-          [workspaceId, ticketIds],
+            ORDER BY t.id`,
+          [workspaceId, ticketIds, admittedAt],
         )
         if (ticketsResult.rows.length !== ticketIds.length) {
           throw new AssociationError('not_found', 'one or more ticket types were not found')
@@ -931,11 +950,11 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           `SELECT ticket_id, event_id, count(*)::int AS used
              FROM association_registrations
             WHERE workspace_id = $1
-              AND (status IN ('confirmed','checked_in')
-                OR (status = 'reserved' AND reservation_expires_at > now()))
+              AND NOT historical_import AND (status IN ('confirmed','checked_in','registered','attended')
+                OR (status = 'reserved' AND reservation_expires_at > $4::timestamptz))
               AND (ticket_id = ANY($2::uuid[]) OR event_id = ANY($3::uuid[]))
             GROUP BY ticket_id, event_id`,
-          [workspaceId, ticketIds, [...new Set(ticketsResult.rows.map((ticket) => ticket.event_id))]],
+          [workspaceId, ticketIds, inventoryEvents, admittedAt],
         )
         const ticketUsed = new Map<string, number>()
         const eventUsed = new Map<string, number>()
@@ -949,13 +968,9 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           requestedByEvent.set(ticket.event_id, (requestedByEvent.get(ticket.event_id) ?? 0) + line.quantity)
         }
 
-        const now = Date.now()
         for (const line of input.lines) {
           const ticket = tickets.get(line.ticketId)!
-          const opens = ticket.sale_starts_at ?? ticket.registration_opens_at
-          const closes = ticket.sale_ends_at ?? ticket.registration_closes_at
-          if (ticket.status !== 'on_sale' || ticket.event_status !== 'published'
-            || (opens && opens.getTime() > now) || (closes && closes.getTime() <= now)) {
+          if (!ticket.admissible) {
             throw new AssociationError('not_available', 'ticket is not currently on sale', { ticketId: line.ticketId })
           }
           if (line.quantity > ticket.per_order_limit) {
@@ -991,10 +1006,11 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
                  JOIN association_membership_plans p
                    ON p.workspace_id = m.workspace_id AND p.id = m.plan_id
                 WHERE m.workspace_id = $1 AND m.contact_id = $2
-                  AND crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,statement_timestamp())
+                  AND m.id=ANY($4::uuid[])
+                  AND crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,clock_timestamp())
                   AND (cardinality($3::text[]) = 0 OR p.plan_key = ANY($3::text[]))
                 ORDER BY m.starts_at DESC LIMIT 1`,
-              [workspaceId, input.contactId, ticket.eligible_plan_keys],
+              [workspaceId, input.contactId, ticket.eligible_plan_keys, lockedMemberships],
             )
             membershipId = eligibility.rows[0]?.id ?? null
             if (!membershipId) {
@@ -1007,7 +1023,8 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         const subtotal = pricedLines.reduce((sum, line) => sum + line.publicPrice * line.input.quantity, 0)
         const total = pricedLines.reduce((sum, line) => sum + line.unitPrice * line.input.quantity, 0)
         const discount = subtotal - total
-        const reservationExpiresAt = new Date(now + input.reservationMinutes * 60_000)
+        const reservationExpiresAt=(await client.query<{deadline:string}>(
+          "SELECT ($1::timestamptz+$2::integer*interval '1 minute')::text deadline",[admittedAt,input.reservationMinutes])).rows[0].deadline
         const orderResult = await client.query<{ id: string }>(
           `INSERT INTO association_orders
              (workspace_id, contact_id, idempotency_key, request_fingerprint,
@@ -1047,6 +1064,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
             )
           }
         }
+        await refreshAssociationInventory(client,workspaceId,inventoryEvents,actor.credentialKind)
         await audit(client, workspaceId, 'order.reserved', 'order', orderId, actor, {
           contactId: input.contactId,
           totalMinor: total,
@@ -1097,6 +1115,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         await lockAssociationModule(client, workspaceId)
         await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
+        const inventoryEvents=await lockAssociationInventory(client,workspaceId,{orderId})
         const replay = await client.query<{
           order_id: string
           target_status: OrderStatus
@@ -1139,7 +1158,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           throw new AssociationError('invalid_transition', `order cannot transition from ${order.status} to ${input.targetStatus}`)
         }
         if (order.status === 'pending' && input.targetStatus === 'paid'
-          && order.reservation_expires_at && order.reservation_expires_at.getTime() <= Date.now()) {
+          && !(await client.query<{unexpired:boolean}>('SELECT reservation_expires_at>clock_timestamp() unexpired FROM association_orders WHERE workspace_id=$1 AND id=$2',[workspaceId,orderId])).rows[0]?.unexpired) {
           throw new AssociationError(
             'not_available',
             'the order reservation expired before payment confirmation; manual reconciliation is required',
@@ -1187,6 +1206,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
             [workspaceId, orderId, orderContact.rows[0].contact_id, { orderId }],
           )
         }
+        await refreshAssociationInventory(client,workspaceId,inventoryEvents,actor.credentialKind)
         await audit(client, workspaceId, `order.${input.targetStatus}`, 'order', orderId, actor, {
           provider: input.provider,
           providerEventId: input.eventId,
@@ -1230,13 +1250,15 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           const resource = await client.query<{ event_id: string }>('SELECT event_id FROM association_registrations WHERE workspace_id=$1 AND id=$2', [workspaceId, id])
           authorizeIntegration(actor, 'association.orders.write', { eventIds: resource.rows.map((row) => row.event_id) }, integration)
         }
-        const current = await client.query<{ status: RegistrationStatus }>(
-          `SELECT status FROM association_registrations
+        const inventoryEvents=await lockAssociationInventory(client,workspaceId,{registrationId:id})
+        const current = await client.query<{ status: RegistrationStatus; source_kind: string }>(
+          `SELECT status,source_kind FROM association_registrations
             WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
           [workspaceId, id],
         )
         const registration = current.rows[0]
         if (!registration) throw new AssociationError('not_found', 'registration not found')
+        if (registration.source_kind !== 'commerce') throw new AssociationError('invalid_transition', 'Non-commerce participation uses CRM participation commands.')
         if (!mayTransitionRegistration(registration.status, input.status)) {
           throw new AssociationError(
             'invalid_transition',
@@ -1252,6 +1274,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
             RETURNING ${REGISTRATION_SELECT}`,
           [workspaceId, id, input.status],
         )
+        await refreshAssociationInventory(client,workspaceId,inventoryEvents,actor.credentialKind)
         await audit(client, workspaceId, `registration.${input.status}`, 'registration', id, actor, {
           from: registration.status,
           to: input.status,

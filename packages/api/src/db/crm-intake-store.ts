@@ -399,7 +399,7 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
                     ELSE r.status
                   END AS status,
                   r.status AS "sourceStatus", r.source_kind AS "sourceKind",
-                  r.source_id AS "sourceId", (r.source_kind='commerce') AS "commerceManaged",
+                  r.source_id AS "sourceId",r.historical_import AS "historicalImport", (r.source_kind='commerce') AS "commerceManaged",
                   r.created_at AS "createdAt", r.updated_at AS "updatedAt"
              FROM association_registrations r
              JOIN association_events e

@@ -3474,11 +3474,13 @@ export const ja: Dictionary = {
       eventCrmTypesHint:
         "確定済みの CRM イベントを1つ以上選択します。未選択の場合はすべての CRM イベントが対象です。",
       eventCrmStableKeysLabel: "安定したカタログキー（任意）",
-      eventCrmStableKeysPlaceholder: "定義、目的、プラン、イベント、パイプライン、ステージを追加",
+      eventCrmStableKeysPlaceholder: "定義、目的、プラン、イベント、チケット、パイプライン、ステージを追加",
       eventCrmStableKeysHint:
         "ワークスペースの CRM カタログから返されたキーのみ選択できます。",
       eventCrmIncludeAutomated: "アシスタントとシステムによる変更も含める",
       eventCrmEventLabels: {
+        "association.inventory.sold_out": "定員に到達",
+        "association.inventory.available": "空き枠あり",
         "crm.submission.received": "送信を受信",
         "crm.submission.updated": "送信を更新",
         "crm.consent.changed": "同意を変更",

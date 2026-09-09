@@ -267,6 +267,8 @@ export function createDbCrmSegmentStore(): CrmSegmentReadStore {
            UNION ALL
            SELECT 'event:'||id::text,created_at,'event',slug,title FROM association_events WHERE workspace_id=$1
            UNION ALL
+           SELECT 'ticket:'||id::text,created_at,'ticket',ticket_key,name FROM association_ticket_types WHERE workspace_id=$1
+           UNION ALL
            SELECT 'stage:'||id::text,created_at,'stage',legacy_key,name FROM crm_pipeline_stages
             WHERE workspace_id=$1 AND legacy_key IS NOT NULL`,
         })

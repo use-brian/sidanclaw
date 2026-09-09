@@ -122,6 +122,20 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     expect(mocks.createContact).not.toHaveBeenCalled()
   })
 
+  it('validates explicit historical participation imports during dry run', async () => {
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
+    for (const [historical, validRows] of [['true', 1], ['false', 1], ['yes', 0]] as const) {
+      readBytes.mockResolvedValueOnce({ ok: true, value: { file: { id: fileId }, bytes: Buffer.from(
+        `Contact,Event,Source,Name,Historical\n${entityId},${fileId},fixture-row,Fictional attendee,${historical}\n`,
+      ) } })
+      const result = await service.dryRun(context, { stagedFileId: fileId, entityKind: 'operations',
+        mapping: { columns: { 0: 'contactId', 1: 'participationEventId', 2: 'participationSourceId', 3: 'participantName', 4: 'participationHistoricalImport' } },
+      })
+      expect(result.validRows).toBe(validRows)
+      if (!validRows) expect(result.sampleErrors).toContainEqual(expect.objectContaining({ code: 'invalid_historical_import' }))
+    }
+  })
+
   it('commits one bounded chunk and treats a completed resume as a no-op', async () => {
     const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const checked = await service.dryRun(context, {

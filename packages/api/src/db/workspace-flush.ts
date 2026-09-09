@@ -121,6 +121,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'connector_actions',
   // CRM operations rows that directly or indirectly reference contacts.
   'crm_domain_event_outbox',
+  'association_inventory_boundaries',
   'crm_suppression_events',
   'crm_intake_credential_definitions',
   'crm_intake_credentials',

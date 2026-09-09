@@ -3340,10 +3340,12 @@ export const zhCN: Dictionary = {
       eventCrmTypesLabel: "监听项目",
       eventCrmTypesHint: "选择一项或多项已提交的 CRM 事件。未选择代表任何 CRM 事件。",
       eventCrmStableKeysLabel: "稳定目录键（选填）",
-      eventCrmStableKeysPlaceholder: "添加定义、目的、方案、活动、管线或阶段",
+      eventCrmStableKeysPlaceholder: "添加定义、目的、方案、活动、票种、管线或阶段",
       eventCrmStableKeysHint: "只能选择工作空间 CRM 目录返回的键。",
       eventCrmIncludeAutomated: "包含助手和系统变更",
       eventCrmEventLabels: {
+        "association.inventory.sold_out": "名额已满",
+        "association.inventory.available": "名额可用",
         "crm.submission.received": "收到提交",
         "crm.submission.updated": "更新提交",
         "crm.consent.changed": "变更同意",

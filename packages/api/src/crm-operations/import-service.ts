@@ -49,7 +49,7 @@ const BASE_TARGETS = new Set([
   'suppressionSource', 'suppressionOccurredAt', 'entitlementPlanId', 'entitlementIdempotencyKey',
   'entitlementStatus', 'entitlementStartsAt', 'entitlementEndsAt',
   'entitlementRenewalMode', 'participationEventId', 'participationSourceId',
-  'participationStatus', 'participantName', 'participantEmail',
+  'participationStatus', 'participationHistoricalImport', 'participantName', 'participantEmail',
 ])
 
 function validTarget(target: string): boolean {
@@ -327,12 +327,15 @@ function validateMappedRow(
   for (const field of ['entitlementStartsAt', 'entitlementEndsAt']) {
     if (values[field] && Number.isNaN(Date.parse(values[field]))) add('invalid_instant', 'Value must be an ISO timestamp.', field)
   }
-  const hasParticipation = values.participationEventId || values.participationSourceId || values.participationStatus
+  const hasParticipation = values.participationEventId || values.participationSourceId || values.participationStatus || values.participationHistoricalImport
   if (hasParticipation && !(values.participationEventId && values.participationSourceId && values.participantName)) {
     add('incomplete_participation', 'Participation event, source, and attendee name are required together.', 'participationEventId')
   }
   if (values.participationStatus && !['registered', 'attended', 'cancelled', 'no_show'].includes(values.participationStatus)) {
     add('invalid_participation_status', 'Participation status is outside the supported catalog.', 'participationStatus')
+  }
+  if (values.participationHistoricalImport && !['true', 'false'].includes(values.participationHistoricalImport)) {
+    add('invalid_historical_import', 'Historical import must be true or false.', 'participationHistoricalImport')
   }
   if (values.participantEmail && !z.string().email().safeParse(values.participantEmail).success) {
     add('invalid_email', 'Participant email is invalid.', 'participantEmail')
@@ -786,6 +789,7 @@ export function createCrmProductionImportService(deps: {
       await operations.execute(importContext, {
         kind: 'record_participation', contactId, eventId: values.participationEventId,
         sourceKind: 'import', sourceId: values.participationSourceId,
+        ...(values.participationHistoricalImport === 'true' ? { historicalImport: true } : {}),
         status: (values.participationStatus || 'registered') as 'registered' | 'attended' | 'cancelled' | 'no_show',
         attendeeName: values.participantName,
         attendeeEmail: values.participantEmail,

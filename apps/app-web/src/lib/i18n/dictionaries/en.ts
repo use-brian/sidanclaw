@@ -3694,11 +3694,13 @@ export const en = {
       eventCrmTypesHint:
         "Pick one or more committed CRM event types. Nothing selected means any CRM event.",
       eventCrmStableKeysLabel: "Stable catalog keys (optional)",
-      eventCrmStableKeysPlaceholder: "Add a definition, purpose, plan, event, pipeline, or stage",
+      eventCrmStableKeysPlaceholder: "Add a definition, purpose, plan, event, ticket, pipeline, or stage",
       eventCrmStableKeysHint:
         "Only keys returned by the workspace CRM catalog can be selected.",
       eventCrmIncludeAutomated: "Include assistant and system changes",
       eventCrmEventLabels: {
+        "association.inventory.sold_out": "Inventory sold out",
+        "association.inventory.available": "Inventory available",
         "crm.submission.received": "Submission received",
         "crm.submission.updated": "Submission updated",
         "crm.consent.changed": "Consent changed",

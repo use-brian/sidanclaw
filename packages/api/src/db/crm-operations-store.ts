@@ -25,6 +25,7 @@ import { readCrmPrivacyPolicy, saveCrmPrivacyPolicy } from '../crm-operations/pr
 import { releaseCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 import { saveCrmManagedMailboxPolicy, saveCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
 import { saveCrmEntitlementPlanRecord, saveCrmEventRecord } from './association-store.js'
+import { lockAssociationInventory, refreshAssociationInventory } from '../association/inventory.js'
 import type { PlanInput, EventInput } from '../association/domain.js'
 import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
 import type { CrmOperationsCommand } from '@use-brian/core'
@@ -287,7 +288,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     saveManagedMailboxPolicy: (command) => saveCrmManagedMailboxPolicy(client, context, command),
     authorizeIntegration: (command) => authorizeCrmIntegrationCommand(client, context, command),
     saveEntitlementPlan: (input) => saveCrmEntitlementPlanRecord(client, workspaceId, input),
-    saveEvent: (input) => saveCrmEventRecord(client, workspaceId, input),
+    saveEvent: (input) => saveCrmEventRecord(client, workspaceId, input, context.actor.kind),
     async getIntakeDefinition(definitionKey) {
       const result = await client.query<DbRecord>(
         `SELECT d.id, d.workspace_id AS "workspaceId", d.definition_key AS "definitionKey",
@@ -1098,11 +1099,24 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async recordParticipation(params) {
+      const historical = params.historicalImport === true
+      if (historical) {
+        const actor = context.actor
+        if (params.sourceKind !== 'import' || (actor.kind !== 'user' && actor.kind !== 'import')) {
+          throw new CrmOperationsError('not_authorized', 'Historical participation requires a human admin import.')
+        }
+        const admin = await client.query(
+          `SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND role IN('owner','admin') FOR SHARE`,
+          [workspaceId, actor.userId],
+        )
+        if (!admin.rowCount) throw new CrmOperationsError('not_authorized', 'Historical participation requires a current workspace admin.')
+        await client.query("SELECT set_config('app.crm_historical_actor',$1,true)", [actor.userId])
+      }
       const existing = await client.query<DbRecord>(
         `SELECT id,event_id AS "eventId",attendee_contact_id AS "contactId",
                 attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                 attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                source_id AS "sourceId",request_fingerprint AS "requestFingerprint",
+                source_id AS "sourceId",historical_import AS "historicalImport",request_fingerprint AS "requestFingerprint",
                 checked_in_at AS "checkedInAt",
                 created_at AS "createdAt",updated_at AS "updatedAt"
            FROM association_registrations
@@ -1119,6 +1133,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         const { requestFingerprint: _ignored, ...record } = existing.rows[0]
         return { record, created: false }
       }
+      const eventIds = await lockAssociationInventory(client, workspaceId, { eventIds: [String(params.eventId)] })
       const [contact, event] = await Promise.all([
         client.query(
           `SELECT 1 FROM entities
@@ -1127,34 +1142,41 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
           [workspaceId, params.contactId],
         ),
         client.query(
-          `SELECT 1 FROM association_events
-            WHERE workspace_id=$1 AND id=$2`,
+          `SELECT ends_at<=clock_timestamp() AS ended,
+                  capacity IS NOT NULL OR EXISTS(SELECT 1 FROM association_ticket_types t WHERE t.workspace_id=$1 AND t.event_id=e.id) AS controlled
+             FROM association_events e WHERE workspace_id=$1 AND id=$2`,
           [workspaceId, params.eventId],
         ),
       ])
       if (!contact.rowCount) throw new CrmOperationsError('not_found', 'CRM contact was not found.')
       if (!event.rowCount) throw new CrmOperationsError('not_found', 'CRM event was not found.')
+      if (historical && !event.rows[0].ended) {
+        throw new CrmOperationsError('conflict', 'Historical imports require an event that has already ended.', { reason: 'historical_event_not_ended' })
+      }
+      if (!historical && event.rows[0].controlled) {
+        throw new CrmOperationsError('conflict', 'This event requires an Association order to admit participants.', { reason: 'association_order_required' })
+      }
       const result = await client.query<DbRecord>(
         `INSERT INTO association_registrations (
            workspace_id,event_id,attendee_contact_id,attendee_name,attendee_email,
-           attendee_metadata,status,source_kind,source_id,request_fingerprint
-         ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+           attendee_metadata,status,source_kind,source_id,request_fingerprint,historical_import
+         ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11)
          ON CONFLICT DO NOTHING
          RETURNING id,event_id AS "eventId",attendee_contact_id AS "contactId",
                    attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                    attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                   source_id AS "sourceId",checked_in_at AS "checkedInAt",
+                   source_id AS "sourceId",historical_import AS "historicalImport",checked_in_at AS "checkedInAt",
                    created_at AS "createdAt",updated_at AS "updatedAt"`,
         [workspaceId, params.eventId, params.contactId, params.attendeeName,
           params.attendeeEmail ?? null, JSON.stringify(params.metadata ?? {}), params.status,
-          params.sourceKind, params.sourceId, params.requestHash],
+          params.sourceKind, params.sourceId, params.requestHash, historical],
       )
       if (!result.rows[0]) {
         const raced = await client.query<DbRecord>(
           `SELECT id,event_id AS "eventId",attendee_contact_id AS "contactId",
                   attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                   attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                  source_id AS "sourceId",request_fingerprint AS "requestFingerprint",
+                  source_id AS "sourceId",historical_import AS "historicalImport",request_fingerprint AS "requestFingerprint",
                   checked_in_at AS "checkedInAt",
                   created_at AS "createdAt",updated_at AS "updatedAt"
              FROM association_registrations
@@ -1173,10 +1195,12 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         const { requestFingerprint: _ignored, ...record } = raced.rows[0]
         return { record, created: false }
       }
+      await refreshAssociationInventory(client, workspaceId, eventIds, context.actor.kind)
       return { record: first(result), created: true }
     },
 
     async updateParticipation(participationId, status) {
+      const eventIds = await lockAssociationInventory(client, workspaceId, { registrationId: participationId })
       const current = await client.query<{ status: string; sourceKind: string }>(
         `SELECT status, source_kind AS "sourceKind"
            FROM association_registrations
@@ -1206,10 +1230,11 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
          RETURNING id,event_id AS "eventId",attendee_contact_id AS "contactId",
                    attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                    attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                   source_id AS "sourceId",checked_in_at AS "checkedInAt",
+                   source_id AS "sourceId",historical_import AS "historicalImport",checked_in_at AS "checkedInAt",
                    created_at AS "createdAt",updated_at AS "updatedAt"`,
         [workspaceId, participationId, status],
       )
+      await refreshAssociationInventory(client, workspaceId, eventIds, context.actor.kind)
       return result.rows[0] ?? null
     },
 

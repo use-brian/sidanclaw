@@ -22,6 +22,10 @@ function fakePool(
       return { rows: [{ workspaceId: WID, moduleKey: 'association', state: 'enabled', version: 1,
         enabledAt: null, disableRequestedAt: null, disabledAt: null, updatedAt: null, updatedByUserId: null }], rowCount: 1 }
     }
+    // These provider-transition fixtures have no inventory scopes; races are
+    // exercised against PostgreSQL in association-inventory.integration.test.ts.
+    if (normalized.startsWith('SELECT DISTINCT event_id FROM association_ticket_types')) return { rows: [] }
+    if (normalized.startsWith('SELECT reservation_expires_at>clock_timestamp() unexpired')) return { rows: [{ unexpired: false }] }
     return resolve(normalized, params)
   })
   const release = vi.fn()

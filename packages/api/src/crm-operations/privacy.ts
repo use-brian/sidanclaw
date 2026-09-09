@@ -47,6 +47,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'association_memberships',
   'association_events',
   'association_registrations',
+  'association_inventory_boundaries',
   'association_audit_log',
   'workspace_audit_log',
   'workspace_modules',

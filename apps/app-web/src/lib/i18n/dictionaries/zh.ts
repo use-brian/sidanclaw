@@ -3437,10 +3437,12 @@ export const zh: Dictionary = {
       eventCrmTypesLabel: "監聽項目",
       eventCrmTypesHint: "選擇一項或多項已提交的 CRM 事件。未選擇代表任何 CRM 事件。",
       eventCrmStableKeysLabel: "穩定目錄鍵（選填）",
-      eventCrmStableKeysPlaceholder: "加入定義、目的、方案、活動、管線或階段",
+      eventCrmStableKeysPlaceholder: "加入定義、目的、方案、活動、票種、管線或階段",
       eventCrmStableKeysHint: "只能選擇工作空間 CRM 目錄傳回的鍵。",
       eventCrmIncludeAutomated: "包含助理和系統變更",
       eventCrmEventLabels: {
+        "association.inventory.sold_out": "名額已滿",
+        "association.inventory.available": "名額可用",
         "crm.submission.received": "收到提交",
         "crm.submission.updated": "更新提交",
         "crm.consent.changed": "變更同意",

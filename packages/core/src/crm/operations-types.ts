@@ -391,6 +391,7 @@ export const RecordCrmParticipationCommandSchema = z.object({
   contactId: CrmOperationsUuidSchema,
   eventId: CrmOperationsUuidSchema,
   sourceKind: z.enum(['manual', 'form', 'workflow', 'import']),
+  historicalImport:z.boolean().optional(),
   sourceId: z.string().trim().min(1).max(500),
   status: z.enum(['registered', 'attended', 'cancelled', 'no_show']).default('registered'),
   attendeeName: z.string().trim().min(1).max(200),
@@ -589,6 +590,8 @@ export const CrmDomainEventTypeSchema = z.enum([
   'crm.entitlement.changed',
   'crm.participation.changed',
   'crm.deal.stage_changed',
+  'association.inventory.sold_out',
+  'association.inventory.available',
 ])
 export type CrmDomainEventType = z.infer<typeof CrmDomainEventTypeSchema>
 
