@@ -106,7 +106,9 @@ export function CrmBoard({
             key={stage.id}
             {...dropHandlers(stage)}
             className={cn(
-              "flex w-72 shrink-0 flex-col rounded-2xl bg-muted/30 transition-shadow",
+              // `snap-start` pairs with the surface body's `max-md:snap-x`, so
+              // a phone swipe lands one column at a time (D11).
+              "flex w-72 shrink-0 snap-start scroll-ml-4 flex-col rounded-2xl bg-muted/30 transition-shadow",
               overColumn === stage.id && "ring-2 ring-primary/40",
             )}
           >
@@ -232,7 +234,7 @@ export function CrmBoard({
           (drag a card here to close the deal) and a click reveals/hides the
           full columns. Hidden while the columns are showing. */}
       {!showClosed && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {closedSummaries.map(({ stage }) => {
             const authoritative = stageSummary.get(stage.id);
             return (

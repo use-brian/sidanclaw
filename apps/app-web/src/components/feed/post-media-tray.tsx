@@ -72,7 +72,7 @@ function Thumb({
           type="button"
           onClick={onRemove}
           aria-label={tm.mediaRemove}
-          className="absolute right-0.5 top-0.5 inline-flex size-5 items-center justify-center rounded-full bg-background/90 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/thumb:opacity-100"
+          className="absolute right-0.5 top-0.5 inline-flex size-7 md:size-5 items-center justify-center rounded-full bg-background/90 text-muted-foreground opacity-100 md:opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 md:group-hover/thumb:opacity-100"
         >
           <X className="size-3" aria-hidden />
         </button>

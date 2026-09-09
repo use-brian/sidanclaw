@@ -65,6 +65,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowDownToLine, Plus, Sparkles } from "lucide-react";
 import { useWorkspaces } from "@/contexts/workspace-context";
+import { isPhoneViewport } from "@/lib/viewport";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import { useT, format } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
@@ -154,6 +161,14 @@ import {
   type BrainContentCacheScope,
 } from "@/lib/offline/brain-content-cache";
 
+/**
+ * Once per full page load: the first Brain mount on a phone lands on the List
+ * view (C 14); a later mount in the same load keeps whatever the user chose.
+ * Module-level on purpose - the page remounts per navigation, the provider
+ * holding `viewMode` does not, and the seed must not override a choice.
+ */
+let phoneViewSeeded = false;
+
 function BrainPageInner() {
   const { activeId } = useWorkspaces();
   const { me } = useWorkspaceContext();
@@ -218,9 +233,18 @@ function BrainPageInner() {
     if (seededRef.current) return;
     seededRef.current = true;
     if (searchParams.get("pending") === "true") setSection("reviews");
+    // Phones land on the List view (C 14 / M9): at the initial fit a leaf
+    // node is a 6-18px disc, the only affordance for opening an entity from
+    // the graph, so taps land on whitespace. Once per full page load (the
+    // module flag), so a phone user's own switch back to Graph survives a
+    // navigation away and back; an explicit `?view=graph` deep link wins.
+    const phoneDefault = !phoneViewSeeded && isPhoneViewport();
+    phoneViewSeeded = true;
     if (searchParams.get("view") === "graph") {
       setSection("entries");
       setViewMode("graph");
+    } else if (phoneDefault) {
+      setViewMode("grouped");
     }
     if (searchParams.get("view") === "skills") setSection("skills");
     if (searchParams.get("view") === "blueprints") setSection("blueprints");
@@ -857,7 +881,9 @@ function BrainPageInner() {
           aria-pressed={viewMode === "graph"}
           onClick={() => setViewMode("graph")}
           className={cn(
-            "rounded px-2.5 py-0.5 transition-colors",
+            // `h-9 sm:h-7`-class targets (C 69): the toggle is a primary
+            // phone control inside the 44px bar.
+            "inline-flex items-center rounded px-2.5 py-2 transition-colors sm:py-0.5",
             viewMode === "graph"
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
@@ -871,7 +897,7 @@ function BrainPageInner() {
           aria-pressed={viewMode === "grouped"}
           onClick={() => setViewMode("grouped")}
           className={cn(
-            "rounded px-2.5 py-0.5 transition-colors",
+            "inline-flex items-center rounded px-2.5 py-2 transition-colors sm:py-0.5",
             viewMode === "grouped"
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
@@ -974,11 +1000,15 @@ function BrainPageInner() {
             {format(topbarCopy.suggestedCount, { count: suggestedCount })}
           </button>
         )}
+        {/* From `sm`: the three quiet actions inline. Below `sm` they collapse
+            into ONE "+" menu (C 13 / M8): the bar was ~450-540px wide on a
+            390px phone and "+ New skill" sat off the right edge with nothing
+            signalling it existed. */}
         <button
           type="button"
           disabled={offline}
           onClick={() => setGroupsOpen(true)}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-sm:hidden"
         >
           <Sparkles className="size-3.5" aria-hidden />
           {t.brainPage.skillGroups.cta}
@@ -987,7 +1017,7 @@ function BrainPageInner() {
           type="button"
           disabled={offline}
           onClick={() => setImportOpen(true)}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-sm:hidden"
         >
           <ArrowDownToLine className="size-3.5" aria-hidden />
           {t.brainPage.skillImport.importCta}
@@ -996,11 +1026,46 @@ function BrainPageInner() {
           type="button"
           disabled={offline}
           onClick={openSkillCreator}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-sm:hidden"
         >
           <Plus className="size-3.5" aria-hidden />
           {t.brainPage.skills.newSkill}
         </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                disabled={offline}
+                aria-label={topbarCopy.skillActionsAria}
+                title={topbarCopy.skillActionsAria}
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:hidden"
+              >
+                <Plus className="size-4" aria-hidden />
+              </button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="min-h-11"
+              onClick={() => setGroupsOpen(true)}
+            >
+              <Sparkles aria-hidden />
+              {t.brainPage.skillGroups.cta}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="min-h-11"
+              onClick={() => setImportOpen(true)}
+            >
+              <ArrowDownToLine aria-hidden />
+              {t.brainPage.skillImport.importCta}
+            </DropdownMenuItem>
+            <DropdownMenuItem className="min-h-11" onClick={openSkillCreator}>
+              <Plus aria-hidden />
+              {t.brainPage.skills.newSkill}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </>
     ) : section === "blueprints" ? (
       <>
@@ -1070,7 +1135,9 @@ function BrainPageInner() {
               aria-pressed={section === s}
               onClick={() => setSection(s)}
               className={cn(
-                "flex-1 rounded px-2 py-1 transition-colors",
+                // `py-2.5 sm:py-1` (C 69): the segments a phone user touches
+                // most were ~26px tall.
+                "flex-1 rounded px-2 py-2.5 transition-colors sm:py-1",
                 section === s
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",

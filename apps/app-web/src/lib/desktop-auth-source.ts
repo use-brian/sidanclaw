@@ -30,6 +30,16 @@ interface DesktopTokens {
  * present in every mode (thin shell + bundled); the token methods are added only
  * by the bundled app.
  */
+export interface DesktopAccount {
+  key: string;
+  id: string;
+  name: string;
+  email: string;
+  deployment: "cloud" | "local" | "self-hosted";
+  appUrl: string;
+  active: boolean;
+}
+
 export interface DesktopBridge {
   /** Host OS reported by Electron (`darwin`, `win32`, or `linux`). */
   platform?: string;
@@ -89,6 +99,11 @@ export interface DesktopBridge {
    * instead when it's absent.
    */
   addAccount?: () => void;
+  /** Saved identities across deployments; credentials stay in the shell. */
+  listAccounts?: () => Promise<{ accounts: DesktopAccount[]; canSwitch: boolean }>;
+  selectAccount?: (key: string) => Promise<{ ok: true } | { ok: false; error: "switch" | "reauth" }>;
+  selectCloud?: () => Promise<{ ok: boolean }>;
+  chooseDeployment?: () => void;
   /**
    * Switch the active account to a saved one (by id), in the shell's own cookie
    * jar. Resolves with the outcome so the switcher can show an inline message

@@ -145,7 +145,7 @@ export function TaskRulesPanel({
           type="button"
           aria-label={tasksT.closeDetail}
           onClick={onClose}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground sm:size-7"
         >
           <X className="size-4" aria-hidden />
         </button>
@@ -226,7 +226,7 @@ export function TaskRulesPanel({
                             type="button"
                             disabled={busyId === rule.id}
                             onClick={() => void toggle(rule, "disabled")}
-                            className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+                            className="inline-flex h-11 items-center rounded px-2 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50 sm:h-7"
                           >
                             {t.ruleDisable}
                           </button>
@@ -235,7 +235,7 @@ export function TaskRulesPanel({
                             type="button"
                             disabled={busyId === rule.id}
                             onClick={() => void toggle(rule, "active")}
-                            className="rounded bg-action px-2 py-1 text-xs text-action-foreground disabled:opacity-50"
+                            className="inline-flex h-11 items-center rounded bg-action px-2 text-xs text-action-foreground disabled:opacity-50 sm:h-7"
                           >
                             {rule.status === "proposed"
                               ? t.ruleActivate
@@ -247,7 +247,7 @@ export function TaskRulesPanel({
                           aria-label={t.ruleDelete}
                           disabled={busyId === rule.id}
                           onClick={() => void remove(rule)}
-                          className="rounded p-1 text-muted-foreground hover:bg-muted disabled:opacity-50"
+                          className="inline-flex size-11 items-center justify-center rounded text-muted-foreground hover:bg-muted disabled:opacity-50 sm:size-7"
                         >
                           <Trash2 className="size-3.5" aria-hidden />
                         </button>

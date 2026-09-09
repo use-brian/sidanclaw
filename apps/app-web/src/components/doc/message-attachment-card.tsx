@@ -135,7 +135,7 @@ function PdfPreviewDialog({
         />
         <Dialog.Popup
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex h-[88vh] w-[min(960px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg bg-background shadow-xl",
+            "fixed left-1/2 top-1/2 z-50 flex h-[88dvh] w-[min(960px,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg bg-background shadow-xl",
             "transition-all duration-150",
             "data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0",
             "data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0",

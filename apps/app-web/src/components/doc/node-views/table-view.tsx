@@ -59,6 +59,22 @@ type PointerDrag = {
 
 const DRAG_THRESHOLD_PX = 5;
 
+/**
+ * Is the editor selection inside the node at `pos` (size `nodeSize`)? The
+ * node's own boundary tokens sit at `pos` and `pos + nodeSize - 1`, so a
+ * selection is inside only when it lies strictly between them. Pure; drives
+ * the frame's `data-caret-inside` (responsive contract M2 / report B row 41:
+ * the append rails show whenever the caret is in the table, the one signal a
+ * finger and a mouse share).
+ */
+export function caretInsideNode(
+  selection: { from: number; to: number },
+  pos: number,
+  nodeSize: number,
+): boolean {
+  return selection.from >= pos + 1 && selection.to <= pos + nodeSize - 1;
+}
+
 type TableText = ReturnType<typeof useT>["docPage"]["table"];
 
 type AxisMenuAction = {
@@ -188,7 +204,9 @@ function AxisMenuContent({
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={t.searchActions}
           aria-label={t.searchActions}
-          autoFocus
+          // Not on a phone: auto-focusing the filter raises the keyboard over
+          // the menu the user just opened to tap a row (M4).
+          autoFocus={!isCoarsePointer()}
         />
       </div>
       {visible.length === 0 ? (
@@ -249,6 +267,26 @@ export function TableView(props: NodeViewProps) {
   const [menuQuery, setMenuQuery] = useState("");
   const [dropTarget, setDropTarget] = useState<DragTarget>(null);
   const [dropHandle, setDropHandle] = useState<AxisHandle | null>(null);
+  // The caret is inside this table (see `caretInsideNode`). Tracked from the
+  // editor's `selectionUpdate` so the append rails can key off it in CSS.
+  const [caretInside, setCaretInside] = useState(false);
+  const { editor, getPos, node } = props;
+  const nodeSize = node.nodeSize;
+  useEffect(() => {
+    const update = () => {
+      const pos = typeof getPos === "function" ? getPos() : undefined;
+      if (pos === undefined) {
+        setCaretInside(false);
+        return;
+      }
+      setCaretInside(caretInsideNode(editor.state.selection, pos, nodeSize));
+    };
+    update();
+    editor.on("selectionUpdate", update);
+    return () => {
+      editor.off("selectionUpdate", update);
+    };
+  }, [editor, getPos, nodeSize]);
 
   const targetFromCell = useCallback((cell: HTMLTableCellElement): {
     row: AxisHandle;
@@ -512,6 +550,7 @@ export function TableView(props: NodeViewProps) {
         ref={frameRef}
         className="doc-table-frame"
         data-menu-open={menuOpen ? "true" : undefined}
+        data-caret-inside={caretInside ? "true" : undefined}
         data-selected-axis={selectedAxis ?? undefined}
         data-area-select-ignore
         onPointerMove={onPointerMove}

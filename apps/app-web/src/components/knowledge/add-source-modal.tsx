@@ -190,6 +190,7 @@ export function AddSourceModal({
         <Dialog.Popup
           className={cn(
             "fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2",
+            "max-h-[90dvh] overflow-y-auto",
             "rounded-2xl border border-border bg-background p-5 shadow-xl ring-1 ring-foreground/5",
             "transition-all duration-150",
             "data-[starting-style]:opacity-0 data-[starting-style]:scale-95",
@@ -296,7 +297,7 @@ export function AddSourceModal({
                   value={localPath}
                   onChange={(e) => setLocalPath(e.target.value)}
                   placeholder={copy.localPathPlaceholder}
-                  className="w-full rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  className="w-full rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                 />
               </ModalField>
             )}
@@ -307,7 +308,7 @@ export function AddSourceModal({
                 value={rootPath}
                 onChange={(e) => setRootPath(e.target.value)}
                 placeholder={copy.rootPathPlaceholder}
-                className="w-full rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                className="w-full rounded-lg border border-border bg-muted/50 px-3 py-2 font-mono text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
             </ModalField>
 
@@ -321,14 +322,14 @@ export function AddSourceModal({
               <button
                 onClick={onClose}
                 disabled={connecting}
-                className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                className="inline-flex h-11 items-center rounded-lg border border-border px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50 sm:h-7"
               >
                 {copy.addRepoCancel}
               </button>
               <button
                 onClick={() => void handleConnect()}
                 disabled={submitDisabled}
-                className="rounded-lg bg-action px-3 py-1.5 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
+                className="inline-flex h-11 items-center rounded-lg bg-action px-3 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50 sm:h-7"
               >
                 {connecting ? copy.addRepoSubmitting : copy.addRepoSubmit}
               </button>

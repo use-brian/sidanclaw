@@ -91,4 +91,23 @@ describe("[COMP:app-web/view-config-toolbar] container SSR", () => {
     const html = mount({ ...v, search: "alpha" });
     expect(html).toMatch(/value="alpha"/);
   });
+
+  // Phone (responsive contract M2 / M8; report B row 34): the controls
+  // collapse behind a "View options" button below `md`, closed at first
+  // paint, and the search field is 16px so iOS never zooms on focus.
+  it("renders the phone 'View options' toggle, closed, with the controls hidden below md", () => {
+    const html = mount(v);
+    expect(html).toMatch(/data-action="view-options"/);
+    expect(html).toMatch(/aria-expanded="false"/);
+    expect(html).toContain(en.docPage.viewToolbar.viewOptions);
+    // The controls container starts `hidden` and is `md:flex`.
+    const controls = html.match(/data-view-toolbar-controls[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(controls.split(" ")).toContain("hidden");
+    expect(controls.split(" ")).toContain("md:flex");
+  });
+
+  it("sizes the search input 16px below md", () => {
+    const html = mount(v);
+    expect(html).toMatch(/data-field="search"[^>]*text-\[16px\]/);
+  });
 });

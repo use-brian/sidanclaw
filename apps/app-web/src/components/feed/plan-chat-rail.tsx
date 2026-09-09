@@ -68,6 +68,229 @@ export type PlanQuickAction = {
   run: () => void;
 };
 
+/**
+ * The `proposePlan` cardboard (D19's accept-before-write contract): the
+ * refresh control, the P11 brief-patch card, "Accept all" and one card per
+ * proposed slot. Extracted from the rail so the Plan column can host the
+ * SAME element below `lg`, where the rail is not mounted (§6.3: the phone
+ * gets the full rail, nothing trimmed). Every control is 44px on touch and
+ * its desktop size at `md+` (responsive contract M3).
+ */
+export function PlanProposalCardboard({
+  proposals,
+  briefPatch,
+  canEdit,
+  pullingProposals,
+  acceptingProposalIndex,
+  onApplyBriefPatch,
+  onDismissBriefPatch,
+  onAcceptProposal,
+  onAcceptAllProposals,
+  onDismissProposal,
+  onRefreshProposals,
+  className,
+}: {
+  proposals: readonly ProposedSlot[];
+  briefPatch: ProposedBriefPatch | null;
+  canEdit: boolean;
+  pullingProposals: boolean;
+  acceptingProposalIndex: number | null;
+  onApplyBriefPatch: () => void;
+  onDismissBriefPatch: () => void;
+  onAcceptProposal: (proposal: ProposedSlot) => void;
+  onAcceptAllProposals: () => void;
+  onDismissProposal: (proposal: ProposedSlot) => void;
+  onRefreshProposals: () => void;
+  className?: string;
+}) {
+  const t = useT().feedPage;
+  const tp = t.plan;
+  return (
+    <div
+      data-plan-proposal-cardboard
+      className={cn("space-y-2 px-3 py-2.5", className)}
+      aria-labelledby="plan-proposals-heading"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h3
+          id="plan-proposals-heading"
+          className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+        >
+          {tp.proposedHeading}
+        </h3>
+        <button
+          type="button"
+          onClick={onRefreshProposals}
+          disabled={pullingProposals}
+          className="inline-flex h-9 md:h-6 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+        >
+          <RefreshCw
+            className={cn("size-3", pullingProposals && "animate-spin")}
+            aria-hidden
+          />
+          {tp.refreshProposals}
+        </button>
+      </div>
+
+      {/* Direction change first (P11): the month-brief revision is its
+          own apply-or-dismiss card, same accept-before-write contract. */}
+      {briefPatch ? (
+        <div
+          data-plan-brief-patch
+          className="rounded-lg border border-dashed border-border bg-card/60 p-2"
+        >
+          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            {tp.briefPatchHeading}
+          </div>
+          {briefPatch.brief !== undefined ? (
+            <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-[12.5px] leading-relaxed">
+              {briefPatch.brief}
+            </p>
+          ) : null}
+          {briefPatch.cadencePerWeek !== undefined ? (
+            <div className="mt-1 text-[11px] text-muted-foreground">
+              {briefPatch.cadencePerWeek === null
+                ? tp.contextCadenceUnset
+                : format(tp.contextCadence, {
+                    count: String(briefPatch.cadencePerWeek),
+                  })}
+            </div>
+          ) : null}
+          {canEdit ? (
+            <div className="mt-2 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={onApplyBriefPatch}
+                className="inline-flex h-9 md:h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent"
+              >
+                <Check className="size-3" aria-hidden />
+                {tp.applyBriefPatch}
+              </button>
+              <button
+                type="button"
+                onClick={onDismissBriefPatch}
+                aria-label={tp.dismissSlot}
+                title={tp.dismissSlot}
+                className="inline-flex size-9 md:size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {proposals.length === 0 && !briefPatch ? (
+        <p className="rounded-lg border border-dashed border-border p-2.5 text-[11px] leading-relaxed text-muted-foreground">
+          {tp.proposalsPending}
+        </p>
+      ) : (
+        <>
+          {canEdit && proposals.length > 1 ? (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onAcceptAllProposals}
+                className="inline-flex h-9 md:h-auto items-center px-2 md:px-0 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                {tp.acceptAll}
+              </button>
+            </div>
+          ) : null}
+          <ul className="space-y-1.5">
+            {proposals.map((slot) => {
+              const parsed = parseIsoDay(slot.date);
+              const dayLabel = parsed
+                ? new Intl.DateTimeFormat(undefined, {
+                    weekday: "short",
+                    month: "short",
+                    day: "numeric",
+                  }).format(parsed)
+                : slot.date;
+              return (
+                <li
+                  key={slot.index}
+                  className="rounded-lg border border-dashed border-border bg-card/60 p-2"
+                >
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <PlatformIcon platform={slot.platform} className="size-3" />
+                    <span>{t.platformLabels[slot.platform]}</span>
+                    <span aria-hidden>·</span>
+                    <span>{dayLabel}</span>
+                  </div>
+                  <div className="mt-1 text-[12.5px] font-medium">
+                    {slot.title}
+                  </div>
+                  {slot.brief ? (
+                    <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-muted-foreground">
+                      {slot.brief}
+                    </p>
+                  ) : null}
+                  {canEdit ? (
+                    <div className="mt-2 flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={acceptingProposalIndex === slot.index}
+                        onClick={() => onAcceptProposal(slot)}
+                        className="inline-flex h-9 md:h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                      >
+                        <Check className="size-3" aria-hidden />
+                        {tp.acceptSlot}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDismissProposal(slot)}
+                        aria-label={tp.dismissSlot}
+                        title={tp.dismissSlot}
+                        className="inline-flex size-9 md:size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      >
+                        <X className="size-3" aria-hidden />
+                      </button>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The P3 quick-action chips ("Fill empty slots", "Plan next week", "Review
+ * the month"), each seeding the plan conversation. Shared by the rail and
+ * the Plan column's phone host for the same reason as the cardboard above.
+ */
+export function PlanQuickActions({
+  actions,
+  className,
+}: {
+  actions: readonly PlanQuickAction[];
+  className?: string;
+}) {
+  const tp = useT().feedPage.plan;
+  return (
+    <div
+      role="group"
+      aria-label={tp.quickActionsAria}
+      className={cn("flex flex-wrap items-center gap-1.5 px-3 py-2", className)}
+    >
+      {actions.map((action) => (
+        <button
+          key={action.key}
+          type="button"
+          onClick={action.run}
+          className="inline-flex h-9 md:h-7 items-center rounded-full border border-border px-3 md:px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          {action.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function PlanChatRail({
   assistantId,
   assistantName,
@@ -271,175 +494,29 @@ export function PlanChatRail({
       {/* Assistant proposals — contextual output, absent until the operator
           asks for a plan or a saved proposal exists (D19). */}
       {showProposals ? (
-        <div
-          className="max-h-72 shrink-0 space-y-2 overflow-y-auto border-b border-border/60 px-3 py-2.5"
-          aria-labelledby="plan-proposals-heading"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <h3
-              id="plan-proposals-heading"
-              className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
-            >
-              {tp.proposedHeading}
-            </h3>
-            <button
-              type="button"
-              onClick={onRefreshProposals}
-              disabled={pullingProposals}
-              className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border px-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-            >
-              <RefreshCw
-                className={cn("size-3", pullingProposals && "animate-spin")}
-                aria-hidden
-              />
-              {tp.refreshProposals}
-            </button>
-          </div>
-
-          {/* Direction change first (P11): the month-brief revision is its
-              own apply-or-dismiss card, same accept-before-write contract. */}
-          {briefPatch ? (
-            <div
-              data-plan-brief-patch
-              className="rounded-lg border border-dashed border-border bg-card/60 p-2"
-            >
-              <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                {tp.briefPatchHeading}
-              </div>
-              {briefPatch.brief !== undefined ? (
-                <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-[12.5px] leading-relaxed">
-                  {briefPatch.brief}
-                </p>
-              ) : null}
-              {briefPatch.cadencePerWeek !== undefined ? (
-                <div className="mt-1 text-[11px] text-muted-foreground">
-                  {briefPatch.cadencePerWeek === null
-                    ? tp.contextCadenceUnset
-                    : format(tp.contextCadence, {
-                        count: String(briefPatch.cadencePerWeek),
-                      })}
-                </div>
-              ) : null}
-              {canEdit ? (
-                <div className="mt-2 flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={onApplyBriefPatch}
-                    className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent"
-                  >
-                    <Check className="size-3" aria-hidden />
-                    {tp.applyBriefPatch}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onDismissBriefPatch}
-                    aria-label={tp.dismissSlot}
-                    title={tp.dismissSlot}
-                    className="inline-flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  >
-                    <X className="size-3" aria-hidden />
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {proposals.length === 0 && !briefPatch ? (
-            <p className="rounded-lg border border-dashed border-border p-2.5 text-[11px] leading-relaxed text-muted-foreground">
-              {tp.proposalsPending}
-            </p>
-          ) : (
-            <>
-              {canEdit && proposals.length > 1 ? (
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={onAcceptAllProposals}
-                    className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-                  >
-                    {tp.acceptAll}
-                  </button>
-                </div>
-              ) : null}
-              <ul className="space-y-1.5">
-                {proposals.map((slot) => {
-                  const parsed = parseIsoDay(slot.date);
-                  const dayLabel = parsed
-                    ? new Intl.DateTimeFormat(undefined, {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                      }).format(parsed)
-                    : slot.date;
-                  return (
-                    <li
-                      key={slot.index}
-                      className="rounded-lg border border-dashed border-border bg-card/60 p-2"
-                    >
-                      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <PlatformIcon platform={slot.platform} className="size-3" />
-                        <span>{t.platformLabels[slot.platform]}</span>
-                        <span aria-hidden>·</span>
-                        <span>{dayLabel}</span>
-                      </div>
-                      <div className="mt-1 text-[12.5px] font-medium">
-                        {slot.title}
-                      </div>
-                      {slot.brief ? (
-                        <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-muted-foreground">
-                          {slot.brief}
-                        </p>
-                      ) : null}
-                      {canEdit ? (
-                        <div className="mt-2 flex items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={acceptingProposalIndex === slot.index}
-                            onClick={() => onAcceptProposal(slot)}
-                            className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
-                          >
-                            <Check className="size-3" aria-hidden />
-                            {tp.acceptSlot}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onDismissProposal(slot)}
-                            aria-label={tp.dismissSlot}
-                            title={tp.dismissSlot}
-                            className="inline-flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                          >
-                            <X className="size-3" aria-hidden />
-                          </button>
-                        </div>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </>
-          )}
-        </div>
+        <PlanProposalCardboard
+          className="max-h-72 shrink-0 overflow-y-auto border-b border-border/60"
+          proposals={proposals}
+          briefPatch={briefPatch}
+          canEdit={canEdit}
+          pullingProposals={pullingProposals}
+          acceptingProposalIndex={acceptingProposalIndex}
+          onApplyBriefPatch={onApplyBriefPatch}
+          onDismissBriefPatch={onDismissBriefPatch}
+          onAcceptProposal={onAcceptProposal}
+          onAcceptAllProposals={onAcceptAllProposals}
+          onDismissProposal={onDismissProposal}
+          onRefreshProposals={onRefreshProposals}
+        />
       ) : null}
 
       {/* Quick actions (P3) — the retired header split button's jobs, as
           seeded prompts the operator still reads before sending. */}
       {canEdit && quickActions.length > 0 ? (
-        <div
-          role="group"
-          aria-label={tp.quickActionsAria}
-          className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 px-3 py-2"
-        >
-          {quickActions.map((action) => (
-            <button
-              key={action.key}
-              type="button"
-              onClick={action.run}
-              className="inline-flex h-7 items-center rounded-full border border-border px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
+        <PlanQuickActions
+          actions={quickActions}
+          className="shrink-0 border-b border-border/60"
+        />
       ) : null}
 
       <div className="min-h-0 flex-1">

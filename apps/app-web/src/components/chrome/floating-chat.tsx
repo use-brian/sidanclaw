@@ -3610,7 +3610,7 @@ export function FloatingChat({
             onChange={setInput}
             onKeyDown={slashCommands.handleKeyDown}
             highlightRanges={slashCommands.highlightRanges}
-            inputWrapClassName="flex-1 min-w-0 rounded-md border border-border bg-background focus-within:border-ring [&_:focus-visible]:shadow-none"
+            inputWrapClassName="flex-1 min-w-0 max-md:min-w-[10rem] rounded-md border border-border bg-background focus-within:border-ring [&_:focus-visible]:shadow-none"
             focusRequest={messageBrianRequest}
             // While a turn streams, Send QUEUES: the message is handed to the
             // running turn, which takes it at its next safe boundary.
@@ -3772,7 +3772,12 @@ export function FloatingChat({
               ) : null
             }
             className="flex flex-col gap-1"
-            rowClassName="flex items-end gap-2"
+            // Wraps below `md` (responsive contract M8): while streaming the
+            // attach, record, Send and Stop controls left the textarea
+            // ~150px wide on a 390px sheet. The input wrap is `flex-1
+            // min-w-0`, so it takes the first line and the buttons drop to a
+            // second one only when they no longer fit beside it.
+            rowClassName="flex flex-wrap items-end gap-2 md:flex-nowrap"
             // ChatComposer auto-grows the textarea to fit content; we just set
             // the cap. A roomier `max-h-[240px]` (~10 lines) lets a longer
             // prompt stay fully visible before the box starts scrolling — the
@@ -4287,7 +4292,7 @@ function MessageBubble({
           </div>
         ) : null}
         {message.text ? (
-          <div className="flex items-center gap-1 -mr-1 pt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 -mr-1 pt-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
             <IconActionButton
               tooltip={copied ? copiedLabel : copyLabel}
               onClick={() => onCopy(message.id, message.text)}
@@ -4363,7 +4368,7 @@ function MessageBubble({
           <ChatCitationList citations={message.citations} label={citationLabel} />
         ) : null}
         {message.text ? (
-          <div className="flex items-center gap-1 -ml-1 pt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 -ml-1 pt-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
             <IconActionButton
               tooltip={copied ? copiedLabel : copyLabel}
               onClick={() => onCopy(message.id, message.text)}
@@ -4402,13 +4407,18 @@ function IconActionButton({
       <button
         type="button"
         onClick={onClick}
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        // The tooltip is hover-only, so the accessible name and the native
+        // title carry the label on touch (responsive contract M2); 36px
+        // targets below `md` (M3).
+        aria-label={tooltip}
+        title={tooltip}
+        className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors md:size-7"
       >
         {children}
       </button>
       <div
         role="tooltip"
-        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-0.5 text-[10px] font-medium rounded bg-foreground text-background whitespace-nowrap opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity shadow-md"
+        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-0.5 text-[10px] font-medium rounded bg-foreground text-background whitespace-nowrap max-md:hidden md:opacity-0 md:group-hover/btn:opacity-100 pointer-events-none transition-opacity shadow-md"
       >
         {tooltip}
       </div>

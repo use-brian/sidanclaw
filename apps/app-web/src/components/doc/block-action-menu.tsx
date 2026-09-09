@@ -201,6 +201,10 @@ export function BlockActionMenu({
   // as a second level INSIDE the menu (a hover fly-out beside a 240px menu
   // has nowhere to go on a 390px phone), and every row is a 44px target.
   const coarse = useCoarsePointer();
+  // Desktop fly-outs open to the right; when the menu sits against the right
+  // edge (a wide-column layout, a narrow window) the fly-out would run
+  // off-screen, so it opens to the LEFT instead.
+  const [flyoutSide, setFlyoutSide] = useState<"right" | "left">("right");
 
   // Position against the grip's viewport rect (fixed; the portal escapes the
   // tippy transform). Opens just below the grip, clamped inside the viewport:
@@ -220,6 +224,8 @@ export function BlockActionMenu({
       top = Math.max(margin, window.innerHeight - margin - menuHeight);
     }
     setStyle({ position: "fixed", top, left });
+    // The widest fly-out is the colour grid (`w-56` = 224px) plus its 4px gap.
+    setFlyoutSide(left + menuWidth + 4 + 224 > window.innerWidth - margin ? "left" : "right");
   }, [anchorEl, sub]);
 
   // Outside-click + Esc dismissal (turn-into-menu.tsx idiom).
@@ -376,6 +382,7 @@ export function BlockActionMenu({
           onOpen={() => openSub("turn")}
           onClose={scheduleCloseSub}
           inline={coarse}
+          flyoutSide={flyoutSide}
           onToggle={() => setSub((cur) => (cur === "turn" ? null : "turn"))}
         >
           {turnIntoItems.map((it) => {
@@ -406,6 +413,7 @@ export function BlockActionMenu({
           onOpen={() => openSub("color")}
           onClose={scheduleCloseSub}
           inline={coarse}
+          flyoutSide={flyoutSide}
           onToggle={() => setSub((cur) => (cur === "color" ? null : "color"))}
           wide
         >
@@ -529,6 +537,11 @@ function MenuButton({
  * menu, directly under the row, with the chevron turned down. The hover
  * handlers are not bound in that mode: a tap fires a synthetic `mouseenter`
  * first, which would open the fly-out before the tap could toggle it.
+ *
+ * In fly-out mode a CLICK (or Enter / Space on the focused row) opens the
+ * fly-out too, so a keyboard user and a hover-capable device with a stylus
+ * have a path that does not depend on `mouseenter`. `flyoutSide` flips the
+ * fly-out to the left when the menu sits against the right edge.
  */
 function SubmenuRow({
   icon: Icon,
@@ -538,6 +551,7 @@ function SubmenuRow({
   onClose,
   onToggle,
   inline = false,
+  flyoutSide = "right",
   wide,
   children,
 }: {
@@ -550,6 +564,8 @@ function SubmenuRow({
   onToggle?: () => void;
   /** Render the child list inside the menu instead of a hover fly-out. */
   inline?: boolean;
+  /** Which side the fly-out opens on (fly-out mode only). */
+  flyoutSide?: "right" | "left";
   wide?: boolean;
   children: React.ReactNode;
 }) {
@@ -564,7 +580,7 @@ function SubmenuRow({
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={inline ? onToggle : undefined}
+        onClick={inline ? onToggle : onOpen}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-foreground transition-colors hover:bg-muted"
       >
         <Icon className="h-4 w-4 flex-shrink-0 text-muted-foreground" aria-hidden />
@@ -579,10 +595,12 @@ function SubmenuRow({
         <div
           role="menu"
           data-submenu={inline ? "inline" : "flyout"}
+          data-flyout-side={inline ? undefined : flyoutSide}
           className={
             inline
               ? "mx-2 mb-1 rounded-md border border-border/70 bg-muted/30 p-1"
-              : "absolute left-full top-0 z-[61] ml-1 rounded-md border border-border bg-popover p-1 shadow-lg " +
+              : "absolute top-0 z-[61] rounded-md border border-border bg-popover p-1 shadow-lg " +
+                (flyoutSide === "left" ? "right-full mr-1 " : "left-full ml-1 ") +
                 (wide ? "w-56" : "w-52")
           }
         >

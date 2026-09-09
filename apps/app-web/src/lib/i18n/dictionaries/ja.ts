@@ -478,6 +478,13 @@ export const ja: Dictionary = {
     continueBrowsing: "閲覧を続ける",
   },
   workspaceSwitcher: {
+    deploymentCloud: "クラウド",
+    deploymentLocal: "ローカル",
+    deploymentSelfHosted: "セルフホスト",
+    deploymentSource: "{url} のアカウント",
+    useOwnDeployment: "自分のデプロイ環境を使う",
+    openCloudAccount: "クラウドアカウントを開く",
+
     loading: "ワークスペースを読み込み中…",
     loadError: "ワークスペースを読み込めませんでした。",
     empty: "ワークスペースなし",
@@ -1708,6 +1715,8 @@ export const ja: Dictionary = {
       propertyDragAria: "{name} を並べ替え",
       close: "閉じる",
       apply: "適用",
+      viewOptions: "表示オプション",
+      viewOptionsAria: "表示オプションを開く",
     },
     tableMenu: {
       sortAsc: "昇順で並べ替え",
@@ -1794,6 +1803,8 @@ export const ja: Dictionary = {
       collabOfflineUnavailableBody:
         "このデバイスではまだ開かれていないページです。オンラインに戻ると読み込まれます。",
     },
+    topbarTabsMenu: "{count} 個のタブ",
+    topbarTabsMenuAria: "開いているタブ",
   },
   settings: {
     nav: {
@@ -2595,6 +2606,7 @@ export const ja: Dictionary = {
       wsManageError: "このコネクターを更新できませんでした。もう一度お試しください。",
       wsToolPolicyTitle: "ワークスペースのツール権限",
       wsToolPolicyDesc: "各ツールをワークスペース全体で許可、確認、またはブロックします。チームアシスタントはこの設定に従います。",
+      backToList: "すべてのコネクター",
     },
   },
   chrome: {
@@ -2903,6 +2915,7 @@ export const ja: Dictionary = {
     revokeInviteConfirmBody: "{email} に送ったリンクは無効になります。後で新しい招待を送れます。",
     revokeInviteConfirm: "招待を取り消す",
     resend: "再送信",
+    rowActionsAria: "{name} の操作",
   },
   workspaceLlmKey: {
     heading: "Gemini API キー",
@@ -3419,6 +3432,9 @@ export const ja: Dictionary = {
         failed: "失敗",
         skipped: "スキップ",
       },
+      editLayout: "レイアウトを編集",
+      editLayoutHint:
+        "オン: ドラッグでステップを移動します。オフ: タップで選択、ドラッグでボードをスクロールします。",
     },
     builder: {
       newPageTitle: "新しいワークフロー",
@@ -3867,6 +3883,18 @@ export const ja: Dictionary = {
         sectionEmpty: "(なし)",
       },
       runRowDuration: "{value}",
+      connectToLabel: "接続先",
+      connectToPlaceholder: "次のステップを追加",
+      connectToSearchPlaceholder: "ステップを検索",
+      connectToEmpty: "接続できる他のステップがありません",
+      connectToTrueLabel: "true のとき接続先",
+      connectToFalseLabel: "false のとき接続先",
+      connectToCurrent: "現在: {names}",
+      enabledSwitch: "有効",
+      timezoneSearchPlaceholder: "タイムゾーンを検索",
+      timezoneEmpty: "一致するタイムゾーンがありません",
+      timezoneDefaultOption: "デフォルト (UTC)",
+      timezoneCreate: "「{query}」を使用",
     },
   },
   brainPage: {
@@ -4559,6 +4587,7 @@ export const ja: Dictionary = {
       filtersMany: "フィルタ {count} 件",
       clearFilters: "クリア",
       suggestedCount: "提案中 {count} 件",
+      skillActionsAria: "スキルの操作",
     },
     emptyState: {
       nudge: {
@@ -5046,6 +5075,7 @@ export const ja: Dictionary = {
       validation: "トークンは xoxb- で始まり、シークレットは 16 文字以上である必要があります",
       show: "表示",
       hide: "非表示",
+      close: "Slack設定を閉じる",
     },
   },
   operatorBar: {
@@ -6017,6 +6047,9 @@ export const ja: Dictionary = {
     typeTitleToDelete: "完全削除を確認するには、次のタイトルを正確に入力してください：",
     titleConfirmationPlaceholder: "上に表示されたタイトルを入力",
     deprecateTemplate: "テンプレートを非推奨にする",
+    editorActions: "エディター操作",
+    compactTextTools: "テキスト",
+    editText: "テキストを編集",
   },
   // ── Chat operator app ([COMP:app-web/chat-surface]) ──
   // ── Custom Home apps ([COMP:app-web/home-app-frame]) ──
@@ -6712,6 +6745,7 @@ export const ja: Dictionary = {
       discardIdeaBody: "「{text}」がバックログから外れます。",
       discardIdeaConfirm: "アイデアを破棄",
       ideaSaveFailed: "アイデアを保存できませんでした。",
+      dateLabel: "日付",
     },
     postEditor: {
       savedLocally: "この端末に保存しました。同期待ちです。",
@@ -6826,6 +6860,7 @@ export const ja: Dictionary = {
       articleDescriptionPlaceholder: "リンクカード用の短い説明",
       articleFallbackTitle: "記事タイトル",
       articleFallbackDescription: "記事の説明がここに表示されます。",
+      refineOpenAria: "推敲チャットを開く",
     },
     posts: {
       filterAria: "ステータスで投稿を絞り込む",
@@ -7873,6 +7908,7 @@ export const ja: Dictionary = {
         budgetLabel: "週間提案バジェット",
         budgetHelp: "直近7日間の提案数の上限です。上限に達するとウィンドウが進むまで停止します。",
       },
+      backToList: "ソース一覧",
     },
     ingestRules: {
       statusNote: "ソースを有効にすると、ルーティングルールがすぐに準備されます。ソースごとのリアルタイム配信は順次対応中で、対応するまでは有効化しても取り込みはまだ行われません。",
@@ -8107,6 +8143,7 @@ export const ja: Dictionary = {
           unknown: "ルールを保存できませんでした。もう一度お試しください。",
         },
       },
+      backToList: "ソース一覧",
     },
     channels: {
       whatsappOfficial: {
@@ -8521,6 +8558,7 @@ export const ja: Dictionary = {
       saving: "保存中…",
       saveError: "保存できませんでした。もう一度お試しください。",
       clearanceTooHighError: "チャネルのクリアランスを自分のメンバー権限より高く設定することはできません。",
+      backToList: "チャネル一覧",
     },
     assistants: {
       newCta: "新しいアシスタント",
@@ -8543,6 +8581,8 @@ export const ja: Dictionary = {
       createSubmitting: "作成中…",
       createCancel: "キャンセル",
       createError: "アシスタントを作成できませんでした。もう一度お試しください。",
+      loadError: "アシスタントを読み込めませんでした。再読み込みしてもう一度お試しください。",
+      backToList: "アシスタント一覧",
     },
   },
   programmaticAccess: {
@@ -8724,6 +8764,7 @@ export const ja: Dictionary = {
     adding: "追加中...",
     byAuthor: "作成者:",
     requiresPrefix: "必要:",
+    close: "ディレクトリを閉じる",
   },
 
   connectorToolList: {
@@ -9273,13 +9314,13 @@ export const ja: Dictionary = {
     liveTranscriptLoading: "ライブ文字起こしを読み込んでいます...",
     liveTranscriptGap: "ここで{count}件のライブ文字起こしウィンドウを取得できませんでした。",
     transcriptPending: "録音の処理が完了すると、ここに文字起こしが表示されます。",
+    statusStagedTitle: "再生できます",
+    statusStagedBody: "アップロードが完了しました。再生してノートにタイムスタンプを追加できます。文字起こしが必要な場合は Brian に処理を依頼してください。",
     statusProcessingTitle: "録音を処理しています",
     statusProcessingBody:
       "バックグラウンドで文字起こしを実行中です。完了すると、文字起こしとアクションアイテムがここに表示されます。",
     statusFailedTitle: "処理に失敗しました",
     statusFailedBody: "この録音を処理できませんでした。録音を開いて再試行してください。",
-    statusStagedTitle: "再生できます",
-    statusStagedBody: "アップロードが完了しました。再生してノートにタイムスタンプを追加できます。文字起こしが必要な場合は Brian に処理を依頼してください。",
     statusFailedBodyDetail: "この録音を処理できませんでした: {detail}",
     statusAwaitingUploadTitle: "音声を待っています",
     statusAwaitingUploadBody:
@@ -9336,8 +9377,8 @@ export const ja: Dictionary = {
     meetingRecording: "会議の録音",
     micAndComputerAudio: "マイク + コンピューター音声",
     finishing: "保存中...",
-    pause: "一時停止",
     savingBackground: "バックグラウンドで録音・録画を保存中（{count}件）。チャットや次の録音・録画を続けられます。",
+    pause: "一時停止",
     resume: "再開",
     stop: "停止",
     discard: "破棄",
@@ -9450,7 +9491,7 @@ export const ja: Dictionary = {
       liveCount: "{count}件が動作中",
       selectTitle: "ライブブラウザを見る",
       selectHint:
-        "左のセッションを選んで見るか操作を引き継ぐか、アシスタントがブラウザを開くのを待ちます。",
+        "ライブセッションを選んで閲覧または操作を引き継ぐか、アシスタントがブラウザを開くのを待ちます。",
       liveView: "ライブブラウザ",
       profilesView: "ブラウザプロフィール",
       viewSwitcherAria: "ブラウザ表示",
@@ -9630,5 +9671,6 @@ export const ja: Dictionary = {
       proxyInvalid: "有効なURLを入力するか、空欄のままにしてください。",
       proxySave: "保存",
     },
+    typeIntoPage: "ページに入力",
   },
 };

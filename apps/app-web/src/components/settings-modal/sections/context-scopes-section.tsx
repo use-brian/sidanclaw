@@ -179,7 +179,7 @@ export function TeamsContextSection() {
       {canManage ? (
         <div className="flex gap-2">
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t.teamNamePlaceholder}
-            className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:border-ring" />
+            className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-[16px] outline-none focus-visible:border-ring md:text-sm" />
           <Button onClick={() => void create()} disabled={!name.trim()}><Plus className="size-4" />{t.createTeam}</Button>
         </div>
       ) : null}
@@ -197,17 +197,17 @@ export function TeamsContextSection() {
                   <label className="grid gap-1 text-xs text-muted-foreground">
                     {t.teamNameLabel}
                     <input value={editName} onChange={(event) => setEditName(event.target.value)}
-                      className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring" />
+                      className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] text-foreground outline-none focus-visible:border-ring md:text-sm" />
                   </label>
                   <label className="grid gap-1 text-xs text-muted-foreground">
                     {t.teamColorLabel}
                     <input value={editColor} onChange={(event) => setEditColor(event.target.value)} placeholder={t.teamColorPlaceholder}
-                      className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring" />
+                      className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] text-foreground outline-none focus-visible:border-ring md:text-sm" />
                   </label>
                   <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
                     {t.teamDescriptionLabel}
                     <input value={editDescription} onChange={(event) => setEditDescription(event.target.value)}
-                      className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring" />
+                      className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] text-foreground outline-none focus-visible:border-ring md:text-sm" />
                   </label>
                   <Button size="sm" variant="outline" className="self-start" onClick={() => void saveTeamDetails()} disabled={!editName.trim()}>
                     <Check className="size-4" />{t.saveTeamDetails}
@@ -343,7 +343,7 @@ export function ProjectsContextSection() {
       <div><h2 className="text-lg font-semibold">{t.projectsTitle}</h2><p className="mt-1 text-sm text-muted-foreground">{t.projectsDescription}</p></div>
       {canManage ? <div className="flex gap-2">
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t.projectNamePlaceholder}
-          className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:border-ring" />
+          className="h-9 flex-1 rounded-lg border border-border bg-background px-3 text-[16px] outline-none focus-visible:border-ring md:text-sm" />
         <Button onClick={() => void create()} disabled={!name.trim()}><Plus className="size-4" />{t.createProject}</Button>
       </div> : null}
       {readiness ? (

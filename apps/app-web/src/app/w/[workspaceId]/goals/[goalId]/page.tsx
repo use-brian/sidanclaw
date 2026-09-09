@@ -21,7 +21,7 @@
  * [COMP:app-web/goal-detail]
  */
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import { BackButton } from "@/components/ui/back-button";
 import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -29,17 +29,50 @@ import { ContextScopeChips } from "@/components/context/context-scope-chips";
 import { ContextScopePicker } from "@/components/context/context-scope-picker";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
-import { getGoalDetail, updateGoalContext, type GoalDetail } from "@/lib/api/goals";
+import {
+  getGoalDetail,
+  updateGoalContext,
+  type GoalDetail,
+  type GoalRow,
+} from "@/lib/api/goals";
 import {
   listContextProjects,
   listContextTeams,
   type ContextProject,
   type ContextTeam,
 } from "@/lib/api/context-scopes";
+import { readSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import {
+  goalDetailCacheKey,
+  goalsCacheKey,
+  triageCacheKey,
+} from "@/lib/surface-prefetch";
+import { requestGoalRefresh } from "@/lib/goal-events";
+import { Skeleton } from "@/components/skeleton";
 import { cn } from "@/lib/utils";
 import { STATUS_BADGE } from "@/components/doc/panels/goal-status-badge";
 import { summariseDoneWhen } from "@/components/doc/panels/goal-done-when";
 import { GoalExecutionActivity } from "@/components/chat-app/goal-execution-activity";
+
+/**
+ * The board / triage row for this goal, if any list slot already holds it -
+ * the title and status paint from it while the detail is cold, so a tap from
+ * the board never opens a blank page. Reads every status slot the board can
+ * hold plus the triage queue; a miss just means the skeleton has no header.
+ */
+function findCachedGoalRow(workspaceId: string, goalId: string): GoalRow | null {
+  const keys = [
+    triageCacheKey(workspaceId),
+    ...["all", ...Object.keys(STATUS_BADGE)].map((status) =>
+      goalsCacheKey(workspaceId, status),
+    ),
+  ];
+  for (const key of keys) {
+    const hit = readSurfaceCache<GoalRow[]>(key).data?.find((r) => r.id === goalId);
+    if (hit) return hit;
+  }
+  return null;
+}
 
 export default function GoalDetailPage({
   params,
@@ -54,7 +87,22 @@ export default function GoalDetailPage({
   // panel to skip the hop). See docs/architecture/features/doc.md → "Top bar".
   const listHref = `/w/${workspaceId}/p?panel=goals`;
 
-  const [goal, setGoal] = useState<GoalDetail | null | undefined>(undefined);
+  // The detail slot is shared with the Autopilot / Triage panes and marked
+  // stale by the spine map (`goal:<wid>:`) on every goal change (N1 / N3): a
+  // revisit paints the last-known goal on the first frame. `getGoalDetail`
+  // answers `null` on a non-OK response, so a cold `error` is a network
+  // failure: not-found, never a skeleton forever.
+  const detail = useCachedResource<GoalDetail | null>(
+    goalDetailCacheKey(workspaceId, goalId),
+    () => getGoalDetail(goalId),
+  );
+  const goal =
+    detail.data === undefined && detail.error !== undefined ? null : detail.data;
+  // The board row seeds the header while the detail is cold.
+  const seed = useMemo(
+    () => (goal === undefined ? findCachedGoalRow(workspaceId, goalId) : null),
+    [goal, workspaceId, goalId],
+  );
   const [teams, setTeams] = useState<ContextTeam[]>([]);
   const [projects, setProjects] = useState<ContextProject[]>([]);
   const [draftTeamId, setDraftTeamId] = useState<string | null>(null);
@@ -62,20 +110,25 @@ export default function GoalDetailPage({
   const [contextSaving, setContextSaving] = useState(false);
   const [contextError, setContextError] = useState<string | null>(null);
 
+  // The context picker is an editable draft: adopt a (re)validated goal's
+  // bindings only while the picker still equals the bindings it was last
+  // seeded from, so a spine revalidation never resets a half-made choice.
+  const adoptedRef = useRef<GoalDetail | null>(null);
+  const draftsRef = useRef({ team: draftTeamId, project: draftProjectId });
+  draftsRef.current = { team: draftTeamId, project: draftProjectId };
   useEffect(() => {
-    let cancelled = false;
-    setGoal(undefined);
-    void getGoalDetail(goalId).then((g) => {
-      if (!cancelled) {
-        setGoal(g);
-        setDraftTeamId(g?.contextGroupId ?? null);
-        setDraftProjectId(g?.contextProjectId ?? null);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [goalId]);
+    if (!goal) return;
+    const adopted = adoptedRef.current;
+    const clean =
+      adopted === null ||
+      (draftsRef.current.team === adopted.contextGroupId &&
+        draftsRef.current.project === adopted.contextProjectId);
+    if (clean) {
+      setDraftTeamId(goal.contextGroupId);
+      setDraftProjectId(goal.contextProjectId);
+    }
+    adoptedRef.current = goal;
+  }, [goal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,16 +147,45 @@ export default function GoalDetailPage({
   }, [t.contextScope.loadFailed, workspaceId]);
 
   if (goal === undefined) {
+    // Cold cache (N4): the chrome row, the title + status from the board row
+    // when a list slot holds it, and a geometry-matched skeleton for the
+    // contract. A revisit never reaches this branch.
     return (
-      <div className="w-full px-6 py-10 text-sm text-muted-foreground">
-        {t.goalsPage.loading}
+      <div
+        className="w-full h-full overflow-y-auto px-4 md:px-6 pt-6 pb-28 flex flex-col gap-6"
+        aria-busy
+      >
+        <BackButton href={listHref} label={labels.back} />
+        {seed ? (
+          <header className="flex items-start justify-between gap-3">
+            <h1 className="text-xl font-semibold flex-1 min-w-0 break-words">{seed.outcome}</h1>
+            <span
+              className={cn(
+                "text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0",
+                STATUS_BADGE[seed.status],
+              )}
+            >
+              {t.goalsPage.status[seed.status]}
+            </span>
+          </header>
+        ) : (
+          <Skeleton className="h-6 w-2/3" />
+        )}
+        <div className="flex flex-col gap-4">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-start gap-6">
+              <Skeleton className="h-3 w-24 shrink-0" />
+              <Skeleton className="h-3.5" style={{ width: `${36 + ((i * 19) % 45)}%` }} />
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
 
   if (goal === null) {
     return (
-      <div className="w-full px-6 py-20 text-center flex flex-col gap-3">
+      <div className="w-full px-4 md:px-6 py-20 text-center flex flex-col gap-3">
         <div className="font-medium">{labels.notFoundTitle}</div>
         <p className="text-sm text-muted-foreground">{labels.notFoundBody}</p>
         <BackButton href={listHref} label={labels.back} className="mx-auto" />
@@ -149,12 +231,15 @@ export default function GoalDetailPage({
         contextProjectId: goal.contextProjectId ?? draftProjectId,
       });
       if (!result.ok) throw new Error(result.error);
-      const refreshed = await getGoalDetail(goal.id);
+      // Authoritative re-read into the shared slot (the page keeps painting
+      // the old goal meanwhile); the same-tab signal marks the board and the
+      // panels' panes stale so they follow.
+      const refreshed = await detail.refresh();
       if (refreshed) {
-        setGoal(refreshed);
         setDraftTeamId(refreshed.contextGroupId);
         setDraftProjectId(refreshed.contextProjectId);
       }
+      requestGoalRefresh(workspaceId, goal.id);
     } catch (error) {
       setContextError(error instanceof Error ? error.message : t.contextScope.updateFailed);
     } finally {
@@ -167,7 +252,9 @@ export default function GoalDetailPage({
     // per-iteration spend) and a full per-iteration decision log (the acting
     // loop's run trace) are the natural next sections here. The detail
     // projection already carries `means` / `policy` for that follow-up.
-    <div className="w-full h-full overflow-y-auto px-6 pt-6 pb-28 flex flex-col gap-6">
+    // `px-4 md:px-6` (C 85): 24px gutters plus a ~100px label column left
+    // ~200px for values at 360px.
+    <div className="w-full h-full overflow-y-auto px-4 md:px-6 pt-6 pb-28 flex flex-col gap-6">
       <BackButton href={listHref} label={labels.back} />
 
       <header className="flex items-start justify-between gap-3">
@@ -200,7 +287,8 @@ export default function GoalDetailPage({
         </section>
       ) : null}
 
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-3 text-sm">
+      {/* Label above value below `sm` (C 85). */}
+      <dl className="grid grid-cols-1 gap-y-3 text-sm sm:grid-cols-[max-content_1fr] sm:gap-x-6">
         <Field label={labels.statusHeading}>{t.goalsPage.status[goal.status]}</Field>
 
         <Field label={labels.hostHeading}>

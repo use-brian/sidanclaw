@@ -272,7 +272,7 @@ function RenamePopover({
               placeholder={t.breadcrumbUntitled}
               aria-label={t.breadcrumbRenameHint}
               spellCheck={false}
-              className="w-64 max-w-[60vw] border-0 bg-transparent p-0 text-sm font-medium text-foreground outline-none placeholder:text-muted-foreground/50"
+              className="w-64 max-w-[60vw] border-0 bg-transparent p-0 text-[16px] font-medium text-foreground outline-none placeholder:text-muted-foreground/50 md:text-sm"
             />
           </PopoverPrimitive.Popup>
         </PopoverPrimitive.Positioner>

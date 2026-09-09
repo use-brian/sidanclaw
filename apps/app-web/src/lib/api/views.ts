@@ -597,10 +597,16 @@ export async function listViews(params: {
   const url = `${API_URL}/api/workspaces/${params.workspaceId}/saved-views${
     qs.toString() ? `?${qs.toString()}` : ""
   }`;
-  const { mergeLocalPages } = await import("@/lib/offline/offline-pages");
+  const { mergeLocalPages, sidebarCacheKey } = await import("@/lib/offline/offline-pages");
   const { idbGet, idbSet, idbDelete } = await import("@/lib/offline/idb");
-  const key = `sidebar:${params.state === "saved" ? "saved" : params.state === "draft" ? "drafts" : "all"}:${params.workspaceId}`;
-  const cached = await idbGet<ViewListRow[]>(key);
+  // Viewer-scoped (`sidebar:<kind>:<wid>:<viewer>`); `null` with no signed-in
+  // viewer, in which case the disk tier is skipped rather than shared across
+  // every account on the device.
+  const key = sidebarCacheKey(
+    params.state === "saved" ? "saved" : params.state === "draft" ? "drafts" : "all",
+    params.workspaceId,
+  );
+  const cached = key ? await idbGet<ViewListRow[]>(key) : null;
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return mergeLocalPages(cached ?? [], params.workspaceId, params.state);
   }
@@ -610,11 +616,11 @@ export async function listViews(params: {
       return mergeLocalPages(cached ?? [], params.workspaceId, params.state);
     }
     if (res.status === 401 || res.status === 403 || res.status === 404) {
-      await idbDelete(key);
+      if (key) await idbDelete(key);
       return json<{ savedViews: ViewListRow[] }>(res).then((body) => body.savedViews);
     }
     const body = await json<{ savedViews: ViewListRow[] }>(res);
-    await idbSet(key, body.savedViews);
+    if (key) await idbSet(key, body.savedViews);
     return mergeLocalPages(body.savedViews, params.workspaceId, params.state);
   } catch (error) {
     if (error instanceof TypeError || /^HTTP 5\d\d/.test(String((error as Error).message))) {

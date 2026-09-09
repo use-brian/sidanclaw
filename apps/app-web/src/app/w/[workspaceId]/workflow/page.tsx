@@ -21,7 +21,7 @@
  * [COMP:app-web/workflow]
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
@@ -36,11 +36,8 @@ import {
   type WorkflowTrigger,
 } from "@/lib/api/workflow";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
-import {
-  WORKFLOW_REFRESH_EVENT,
-  type WorkflowRefreshDetail,
-} from "@/lib/workflow-events";
 import { CreateWorkflowModal } from "@/components/workflow/create-workflow-modal";
+import { GridSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 import { cn } from "@/lib/utils";
 import { useCachedResource } from "@/lib/surface-cache";
 import { surfaceDataKey } from "@/lib/surface-prefetch";
@@ -68,27 +65,15 @@ export default function WorkflowPage() {
   >(null);
   const [bulkWorking, setBulkWorking] = useState(false);
 
-  // Stable callback, not the resource object: the refresh-event effect below
-  // depends on `reload`, and a dep on the (freshly-allocated) resource would
-  // tear down and re-add that window listener on every render.
+  // Revalidate after the page's own mutations. The workflow event bus (same-
+  // tab mutations AND the shell's server leg) reaches this list through the
+  // ONE spine map (`lib/surface-cache-invalidation.ts` marks `workflow:<wid>`
+  // stale, the hook refetches behind the paint), so the page carries no
+  // listener of its own (N3).
   const refreshWorkflows = workflowList.refresh;
   const reload = useCallback(async () => {
     await refreshWorkflows();
   }, [refreshWorkflows]);
-
-  // Silent re-fetch on the workflow event bus — same-tab mutations AND the
-  // shell's server leg (assistant chat, workers, another tab). No "…"
-  // flash: the current grid stays put until the fresh list swaps in.
-  useEffect(() => {
-    if (!activeId) return;
-    const handler = (ev: Event) => {
-      const detail = (ev as CustomEvent<WorkflowRefreshDetail>).detail;
-      if (detail?.workspaceId && detail.workspaceId !== activeId) return;
-      void reload();
-    };
-    window.addEventListener(WORKFLOW_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(WORKFLOW_REFRESH_EVENT, handler);
-  }, [activeId, reload]);
 
   const live = (workflows ?? []).filter((w) => w.lifecycleState !== "archived");
   const archived = (workflows ?? []).filter((w) => w.lifecycleState === "archived");
@@ -134,7 +119,7 @@ export default function WorkflowPage() {
   };
 
   return (
-    <div className="h-full w-full px-8 py-6 flex flex-col gap-5 overflow-y-auto">
+    <div className="h-full w-full px-4 md:px-8 py-4 md:py-6 flex flex-col gap-5 overflow-y-auto">
       <header className="flex items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {t.workflowPage.description}
@@ -145,7 +130,7 @@ export default function WorkflowPage() {
               type="button"
               onClick={() => void onDeleteAll()}
               disabled={bulkWorking}
-              className="text-sm font-medium text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-50"
+              className="inline-flex h-11 sm:h-8 items-center text-sm font-medium text-muted-foreground hover:text-red-400 transition-colors disabled:opacity-50"
             >
               {bulkWorking
                 ? t.workflowPage.list.deleteAllWorking
@@ -156,7 +141,7 @@ export default function WorkflowPage() {
             type="button"
             onClick={() => setCreateOpen(true)}
             className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium",
+              "inline-flex h-11 sm:h-8 items-center gap-1.5 px-3 rounded-md text-sm font-medium",
               "bg-action text-action-foreground hover:opacity-90 transition-opacity",
             )}
           >
@@ -193,8 +178,12 @@ export default function WorkflowPage() {
       )}
 
       {workflows === null ? (
-        <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-          …
+        // Cold entry (nothing cached, the rail hover did not warm this key):
+        // the card grid in placeholder blocks, never a "…" (N4). The page
+        // already painted its own header and gutters, so the skeleton draws
+        // neither chrome row nor padding.
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <GridSurfaceSkeleton chrome={false} padded={false} />
         </div>
       ) : live.length === 0 && archived.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 border border-border rounded-md bg-card/50">
@@ -380,7 +369,10 @@ function WorkflowCard({
           }}
           aria-label={t.workflowPage.builder.deleteBtn}
           title={t.workflowPage.builder.deleteBtn}
-          className="shrink-0 rounded-md p-1 text-muted-foreground/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-400 hover:bg-red-400/10 transition"
+          // Touch reveal (M2 / C 56): a 44px, always-visible target below `md`
+          // (the only other route is open -> scroll -> Delete); hover / focus
+          // reveal, 28px, above it.
+          className="shrink-0 -my-2 -mr-2 md:m-0 inline-flex size-11 md:size-7 items-center justify-center rounded-md text-muted-foreground/60 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 hover:text-red-400 hover:bg-red-400/10 transition"
         >
           <svg
             width="14"

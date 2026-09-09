@@ -37,6 +37,7 @@ import { DISPLAY_API_URL } from "@/lib/display-api-url";
 import { webAppUrl } from "@/lib/primary-auth";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { ModelTierRow, isModelAlias, type ModelAlias } from "@/components/studio/model-tier-row";
+import { isPhoneViewport } from "@/lib/viewport";
 
 const DOCS_HREF = `${webAppUrl()}/docs/api`;
 
@@ -809,12 +810,12 @@ function CreateKeyForm({
       <label className="block max-w-xl">
         <span className="text-[13px] text-muted-foreground">{t.apiKeys.create.nameLabel}</span>
         <input
-          autoFocus
+          autoFocus={!isPhoneViewport()}
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t.apiKeys.create.placeholder}
           maxLength={120}
-          className="mt-1 w-full bg-background border border-border rounded-lg px-3 py-2 text-[14px] focus:outline-none focus:ring-2 focus:ring-primary/40"
+          className="mt-1 w-full bg-background border border-border rounded-lg px-3 py-2 text-[16px] md:text-[14px] focus:outline-none focus:ring-2 focus:ring-primary/40"
         />
       </label>
 

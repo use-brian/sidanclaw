@@ -249,8 +249,12 @@ export function SkillImportDialog({ workspaceId, open, onClose, onImported }: Pr
         />
         <Dialog.Popup
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2",
-            "rounded-2xl border border-border bg-background p-6 shadow-xl ring-1 ring-foreground/5",
+            // Full-screen below `sm` (C 65 / M5, the settings-modal shape): the
+            // paste tab plus the keyboard clipped the Cancel / Import footer
+            // on a landscape phone with no scroll.
+            "fixed z-50 overflow-y-auto max-sm:inset-0 max-sm:h-[100dvh] max-sm:w-full",
+            "sm:left-1/2 sm:top-1/2 sm:max-h-[90dvh] sm:w-[calc(100%-2rem)] sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2",
+            "border border-border bg-background p-4 shadow-xl ring-1 ring-foreground/5 sm:rounded-2xl sm:p-6",
             "transition-all duration-150",
             "data-[starting-style]:opacity-0 data-[starting-style]:scale-95",
             "data-[ending-style]:opacity-0 data-[ending-style]:scale-95",
@@ -380,7 +384,7 @@ export function SkillImportDialog({ workspaceId, open, onClose, onImported }: Pr
                       // Hand-edited text is no longer the picked file.
                       setPasteFileName(null);
                     }}
-                    className="mt-1.5 w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
+                    className="mt-1.5 w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-[16px] md:text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
                   />
                   <p className="mt-1.5 text-xs text-muted-foreground">
                     {pasteFileName
@@ -405,7 +409,7 @@ export function SkillImportDialog({ workspaceId, open, onClose, onImported }: Pr
                         void runImport({ kind: "url", url: url.trim() });
                       }
                     }}
-                    className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                    className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-3 text-[16px] md:text-sm text-foreground outline-none placeholder:text-muted-foreground"
                   />
                   <p className="mt-1.5 text-xs text-muted-foreground">{copy.urlHint}</p>
                 </div>

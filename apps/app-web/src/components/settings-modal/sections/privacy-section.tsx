@@ -11,6 +11,7 @@ import { clearLocalDocCaches } from "@/lib/offline/idb";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { isOssEdition } from "@/lib/edition";
+import { isPhoneViewport } from "@/lib/viewport";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import {
   Select,
@@ -646,8 +647,9 @@ function ConfirmBlock({
         type="text"
         value={input}
         onChange={(e) => onChange(e.target.value)}
-        autoFocus
-        className="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-destructive/30"
+        // Below `md` the keyboard would pop over the confirm copy (M4).
+        autoFocus={!isPhoneViewport()}
+        className="w-full text-[16px] md:text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-destructive/30"
       />
       <div className="flex items-center gap-2 justify-end">
         <button

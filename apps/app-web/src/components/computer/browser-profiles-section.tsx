@@ -11,13 +11,16 @@
  * [COMP:app-web/profile-management]
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { Cloud, Laptop, Settings2, Trash2 } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { Skeleton } from "@/components/skeleton";
 import { normalizeCaptureSite } from "@/lib/computer-takeover";
+import { useCachedResource } from "@/lib/surface-cache";
+import { browserProfilesCacheKey } from "@/lib/surface-prefetch";
 import { ConnectBrowserPanel } from "./connect-browser-panel";
 import {
   captureProfileSession,
@@ -123,12 +126,35 @@ export function BrowserProfilesSection({
   const params = useParams<{ workspaceId?: string }>();
   const workspaceId = params?.workspaceId ?? "";
 
-  const [state, setState] = useState<
+  // The roster paints from the surface cache (instant-navigation contract
+  // N1): a revisit renders the last-known profiles on its first frame and
+  // revalidates behind them; only a cold entry shows the skeleton. The
+  // Browsers sidebar panel reads the SAME key in profiles mode, so the two
+  // never issue a second copy of one request. No spine primitive names a
+  // browser profile, so revalidation is mount / visibility plus the
+  // `refresh()` every mutation below awaits.
+  const roster = useCachedResource(
+    workspaceId ? browserProfilesCacheKey(workspaceId) : null,
+    () => listBrowserProfiles(workspaceId),
+  );
+  const { refresh: refreshRoster } = roster;
+  const state:
     | { kind: "loading" }
     | { kind: "unconfigured" }
     | { kind: "ready"; profiles: BrowserProfile[]; credentialAuthConfigured: boolean }
-    | { kind: "error" }
-  >({ kind: "loading" });
+    | { kind: "error" } = !workspaceId
+    ? { kind: "unconfigured" }
+    : roster.data
+      ? roster.data.configured
+        ? {
+            kind: "ready",
+            profiles: roster.data.profiles,
+            credentialAuthConfigured: roster.data.credentialAuthConfigured,
+          }
+        : { kind: "unconfigured" }
+      : roster.error !== undefined
+        ? { kind: "error" }
+        : { kind: "loading" };
   const [newName, setNewName] = useState("");
   const [newBackend, setNewBackend] = useState<BrowserBackend>("cloud");
   const [busy, setBusy] = useState(false);
@@ -178,30 +204,13 @@ export function BrowserProfilesSection({
     [],
   );
 
+  // Authoritative reload after the user's own mutation: `refresh()` loads
+  // into the same key, so the rows on screen stay up until the new roster
+  // lands (no blank frame) and the next visit paints the post-edit list.
   const reload = useCallback(async () => {
-    if (!workspaceId) {
-      setState({ kind: "unconfigured" });
-      return;
-    }
-    try {
-      const res = await listBrowserProfiles(workspaceId);
-      setState(
-        res.configured
-          ? {
-              kind: "ready",
-              profiles: res.profiles,
-              credentialAuthConfigured: res.credentialAuthConfigured,
-            }
-          : { kind: "unconfigured" },
-      );
-    } catch {
-      setState({ kind: "error" });
-    }
-  }, [workspaceId]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+    if (!workspaceId) return;
+    await refreshRoster();
+  }, [refreshRoster, workspaceId]);
 
   const onCreate = useCallback(async () => {
     const name = newName.trim();
@@ -470,7 +479,23 @@ export function BrowserProfilesSection({
   return (
     <div className="space-y-4">
       {state.kind === "loading" ? (
-        <p className="text-xs text-muted-foreground">…</p>
+        // Cold entry only (nothing cached yet): the selected-profile card's
+        // geometry, so the swap to real rows is quiet (N4).
+        <div
+          aria-busy="true"
+          data-testid="browser-profiles-skeleton"
+          className="rounded-xl border border-border bg-background p-4 shadow-sm"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-border pb-3">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="size-8 rounded-md" />
+          </div>
+          <div className="mt-3 space-y-3">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-3/4" />
+            <Skeleton className="h-8 w-2/3" />
+          </div>
+        </div>
       ) : state.kind === "unconfigured" ? (
         <p className="text-xs text-muted-foreground">{t.computer.profiles.notConfigured}</p>
       ) : state.kind === "error" ? (
@@ -516,7 +541,7 @@ export function BrowserProfilesSection({
                   if (e.key === "Enter") void onCreate();
                 }}
                 placeholder={t.computer.profiles.createPlaceholder}
-                className="h-9 flex-1 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                className="h-9 flex-1 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
               />
               <button
                 type="button"
@@ -621,7 +646,7 @@ export function BrowserProfilesSection({
                                 if (event.key === "Enter") void onCaptureFromBrowser(profile);
                               }}
                               placeholder={t.computer.profiles.capturePlaceholder}
-                              className="h-8 flex-1 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                              className="h-8 flex-1 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
                             />
                             <button
                               type="button"
@@ -686,8 +711,8 @@ export function BrowserProfilesSection({
                           onClick={() => void onLocalControlMode(profile, mode)}
                           className={
                             profile.localControlMode === mode
-                              ? "rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
-                              : "rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
+                              ? "rounded-md bg-primary/10 px-2 py-2 text-[11px] font-medium text-primary sm:py-1"
+                              : "rounded-md border border-border px-2 py-2 text-[11px] text-muted-foreground hover:bg-accent sm:py-1"
                           }
                         >
                           {localControlModeLabel(mode)}
@@ -721,7 +746,7 @@ export function BrowserProfilesSection({
                                 setCredentialField(profile.id, "loginUrl", event.target.value)
                               }
                               placeholder={t.computer.profiles.credentialUrlPlaceholder}
-                              className="h-8 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring sm:col-span-2"
+                              className="h-8 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring sm:col-span-2 md:text-sm"
                             />
                             <input
                               type="text"
@@ -731,7 +756,7 @@ export function BrowserProfilesSection({
                                 setCredentialField(profile.id, "accountLabel", event.target.value)
                               }
                               placeholder={t.computer.profiles.credentialAccountPlaceholder}
-                              className="h-8 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring sm:col-span-2"
+                              className="h-8 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring sm:col-span-2 md:text-sm"
                             />
                             <input
                               type="text"
@@ -741,7 +766,7 @@ export function BrowserProfilesSection({
                                 setCredentialField(profile.id, "username", event.target.value)
                               }
                               placeholder={t.computer.profiles.credentialUsernamePlaceholder}
-                              className="h-8 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                              className="h-8 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
                             />
                             <input
                               type="password"
@@ -751,7 +776,7 @@ export function BrowserProfilesSection({
                                 setCredentialField(profile.id, "password", event.target.value)
                               }
                               placeholder={t.computer.profiles.credentialPasswordPlaceholder}
-                              className="h-8 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                              className="h-8 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
                             />
                           </div>
                           <button
@@ -809,7 +834,7 @@ export function BrowserProfilesSection({
                                   onClick={() =>
                                     void onTestCredential(profile.id, credential.id)
                                   }
-                                  className="rounded-md border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50"
+                                  className="rounded-md border border-border px-2.5 py-2 text-xs font-medium sm:py-1 hover:bg-accent disabled:opacity-50"
                                 >
                                   {credentialBusyId === credential.id
                                     ? t.computer.profiles.credentialTesting
@@ -824,7 +849,7 @@ export function BrowserProfilesSection({
                                       credential.site,
                                     )
                                   }
-                                  className="rounded-md border border-destructive/40 px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
+                                  className="rounded-md border border-destructive/40 px-2.5 py-2 text-xs font-medium sm:py-1 text-destructive hover:bg-destructive/10"
                                 >
                                   {t.computer.profiles.revoke}
                                 </button>
@@ -855,7 +880,7 @@ export function BrowserProfilesSection({
                           if (e.key === "Enter") void onLogin(profile);
                         }}
                         placeholder={t.computer.profiles.loginPlaceholder}
-                        className="h-8 flex-1 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                        className="h-8 flex-1 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
                       />
                       <button
                         type="button"
@@ -899,8 +924,8 @@ export function BrowserProfilesSection({
                           onClick={() => void mutate(profile.id, { scope })}
                           className={
                             profile.scope === scope
-                              ? "rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
-                              : "rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
+                              ? "rounded-md bg-primary/10 px-2 py-2 text-[11px] font-medium text-primary sm:py-1"
+                              : "rounded-md border border-border px-2 py-2 text-[11px] text-muted-foreground hover:bg-accent sm:py-1"
                           }
                         >
                           {scopeLabel(scope)}
@@ -929,8 +954,8 @@ export function BrowserProfilesSection({
                           onClick={() => void mutate(profile.id, { clearance })}
                           className={
                             profile.clearance === clearance
-                              ? "rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary"
-                              : "rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent"
+                              ? "rounded-md bg-primary/10 px-2 py-2 text-[11px] font-medium text-primary sm:py-1"
+                              : "rounded-md border border-border px-2 py-2 text-[11px] text-muted-foreground hover:bg-accent sm:py-1"
                           }
                         >
                           {clearanceLabel(clearance)}
@@ -962,7 +987,7 @@ export function BrowserProfilesSection({
                           if (e.key === "Enter") void onSaveProxy(profile);
                         }}
                         placeholder={t.computer.profiles.proxyPlaceholder}
-                        className="h-8 flex-1 rounded-md border border-border bg-background px-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+                        className="h-8 flex-1 rounded-md border border-border bg-background px-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
                       />
                       <button
                         type="button"
@@ -1013,7 +1038,7 @@ export function BrowserProfilesSection({
                               onClick={() =>
                                 void onRevokeGrant(profile.id, grant.id, grant.skillName)
                               }
-                              className="shrink-0 rounded-md border border-destructive/40 px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
+                              className="shrink-0 rounded-md border border-destructive/40 px-2.5 py-2 text-xs font-medium sm:py-1 text-destructive hover:bg-destructive/10"
                             >
                               {t.computer.profiles.revoke}
                             </button>
@@ -1070,7 +1095,7 @@ export function BrowserProfilesSection({
                             <button
                               type="button"
                               onClick={() => void onRevoke(profile.id, session.site)}
-                              className="shrink-0 rounded-md border border-destructive/40 px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
+                              className="shrink-0 rounded-md border border-destructive/40 px-2.5 py-2 text-xs font-medium sm:py-1 text-destructive hover:bg-destructive/10"
                             >
                               {t.computer.profiles.revoke}
                             </button>

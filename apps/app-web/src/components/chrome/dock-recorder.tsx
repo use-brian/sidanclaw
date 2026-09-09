@@ -369,7 +369,7 @@ export function DockRecorderButton({
                 aria-label={t.audioOptions}
                 title={t.audioOptions}
                 className={cn(
-                  "inline-flex h-full w-4 items-center justify-center border-l border-border/70",
+                  "inline-flex h-full w-8 items-center justify-center border-l border-border/70 sm:w-4",
                   "text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
                   "disabled:pointer-events-none disabled:opacity-50",
                   floating ? "rounded-r-full" : "rounded-r-md",
@@ -535,7 +535,7 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
             aria-label={paused ? t.resume : t.pause}
             title={paused ? t.resume : t.pause}
             onClick={() => (paused ? rec.resume() : rec.pause())}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:size-7"
           >
             {paused ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
           </button>
@@ -552,7 +552,7 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
                 if (ok) rec.discard();
               });
             }}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-destructive sm:size-7"
           >
             <X className="size-3.5" aria-hidden />
           </button>
@@ -561,7 +561,7 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
             aria-label={t.stop}
             title={t.stop}
             onClick={() => rec.stop()}
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-destructive px-2.5 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-destructive px-2.5 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 sm:h-7"
           >
             <Square className="size-3 fill-current" aria-hidden />
             {t.stop}

@@ -276,13 +276,13 @@ export function KbMaintenanceForm({
         <div className="flex items-center gap-2">
           <button
             onClick={beginEdit}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
+            className="inline-flex h-9 items-center rounded-lg border border-border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted sm:h-7"
           >
             {copy.editAction}
           </button>
           <button
             onClick={() => void remove()}
-            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:text-destructive"
+            className="inline-flex h-9 items-center rounded-lg border border-border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:text-destructive sm:h-7"
           >
             {copy.removeAction}
           </button>
@@ -364,7 +364,7 @@ export function KbMaintenanceForm({
               type="time"
               value={dailyTime}
               onChange={(e) => setDailyTime(e.target.value)}
-              className="rounded-lg border border-border bg-muted/50 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-primary/30"
+              className="rounded-lg border border-border bg-muted/50 px-2 py-1 text-[16px] md:text-xs focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           )}
         </div>

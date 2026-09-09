@@ -165,6 +165,7 @@ import {
   usePeekResize,
 } from "@/components/operator/resizable-peek";
 import { loadWorkspaceRoster } from "@/lib/api/workspace-roster";
+import { isPhoneViewport } from "@/lib/viewport";
 
 // (The NEXT_PUBLIC_CHAT_HOME_ENABLED inline-actions rollback flag retired
 // with the Notion-style entry page: all page actions live in the drawer's
@@ -825,7 +826,9 @@ export function BrainDetailDrawer({
       <aside
         role="dialog"
         aria-label={headerName}
-        style={drawerWidth !== null ? { width: drawerWidth } : undefined}
+        // A stored desktop width never applies below `md` (C 64): the sheet is
+        // `w-full` there and a 360px floor on a 390px phone would narrow it.
+        style={drawerWidth !== null && !isPhoneViewport() ? { width: drawerWidth } : undefined}
         className={cn(
           "fixed top-0 right-0 bottom-0 z-50",
           "w-full sm:w-[480px] lg:w-[640px] xl:w-[760px] bg-popover border-l border-border shadow-2xl",
@@ -837,7 +840,11 @@ export function BrainDetailDrawer({
           drawerResizing && "select-none",
         )}
       >
-        <PeekResizeHandle resizing={drawerResizing} {...drawerHandleProps} />
+        {/* The resize handle sits exactly where iOS starts its back-swipe;
+            hidden below `lg` the way `ResizablePeek` hides its own (C 64). */}
+        <div className="contents max-lg:hidden">
+          <PeekResizeHandle resizing={drawerResizing} {...drawerHandleProps} />
+        </div>
         {/* Top toolbar — the Notion chrome position: quiet state on the
             left, page actions on the right. */}
         <header className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border">
@@ -876,7 +883,8 @@ export function BrainDetailDrawer({
                 type="button"
                 disabled={actionBusy}
                 onClick={() => void handleConfirm()}
-                className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+                // Confirm is THE trust action (C 70): 44px on touch.
+                className="text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {t.memoriesReview.confirm}
               </button>
@@ -886,7 +894,7 @@ export function BrainDetailDrawer({
               type="button"
               onClick={onClose}
               aria-label={labels.close}
-              className="h-7 w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground shrink-0"
+              className="h-11 w-11 sm:h-7 sm:w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground shrink-0"
             >
               <svg
                 width="14"
@@ -906,7 +914,7 @@ export function BrainDetailDrawer({
         <fieldset
           disabled={readOnly}
           aria-disabled={readOnly || undefined}
-          className="m-0 flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto border-0 px-6 py-6"
+          className="m-0 flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto border-0 px-4 py-6 sm:px-6"
         >
           {actionError && (
             <p className="text-xs text-red-500" role="alert">
@@ -1266,7 +1274,7 @@ function ChangeTypePanel({
               deal: labels.kindOptions.deal,
             }}
           >
-            <SelectTrigger className="text-xs w-full">
+            <SelectTrigger className="text-[16px] md:text-xs w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false}>
@@ -1292,7 +1300,7 @@ function ChangeTypePanel({
                 onChange={(e) => setDomain(e.target.value)}
                 placeholder="example.com"
                 disabled={busy}
-                className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
+                className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
               />
             </dd>
           </>
@@ -1309,7 +1317,7 @@ function ChangeTypePanel({
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={busy}
-                className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
+                className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
               />
             </dd>
             <dt className="text-xs text-muted-foreground uppercase tracking-wide pt-1.5">
@@ -1321,7 +1329,7 @@ function ChangeTypePanel({
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 disabled={busy}
-                className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
+                className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
               />
             </dd>
           </>
@@ -1346,7 +1354,7 @@ function ChangeTypePanel({
                   lost: labels.dealStages.lost,
                 }}
               >
-                <SelectTrigger className="text-xs w-full">
+                <SelectTrigger className="text-[16px] md:text-xs w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent alignItemWithTrigger={false}>
@@ -1368,7 +1376,7 @@ function ChangeTypePanel({
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 disabled={busy}
-                className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
+                className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
               />
             </dd>
             <dt className="text-xs text-muted-foreground uppercase tracking-wide pt-1.5">
@@ -1380,7 +1388,7 @@ function ChangeTypePanel({
                 value={closeDate}
                 onChange={(e) => setCloseDate(e.target.value)}
                 disabled={busy}
-                className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
+                className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
               />
             </dd>
           </>
@@ -1396,7 +1404,7 @@ function ChangeTypePanel({
             onChange={(e) => setReason(e.target.value)}
             placeholder={labels.changeTypeReasonPlaceholder}
             disabled={busy}
-            className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
+            className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full"
           />
         </dd>
       </dl>
@@ -1412,7 +1420,7 @@ function ChangeTypePanel({
           type="button"
           disabled={busy}
           onClick={submit}
-          className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+          className="text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
         >
           {busy
             ? isCrmKind
@@ -1551,7 +1559,7 @@ function AliasesSection({
           placeholder={labels.aliasPlaceholder}
           disabled={busy}
           maxLength={200}
-          className="flex-1 text-xs px-2 py-1.5 rounded border border-border bg-background"
+          className="flex-1 text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background"
         />
         <button
           type="button"
@@ -2579,7 +2587,7 @@ function PrimitiveSection({
           </div>
           {goalEditing ? (
             <textarea
-              autoFocus
+              autoFocus={!isPhoneViewport()}
               value={goalDraft}
               rows={2}
               disabled={goalBusy}
@@ -2597,7 +2605,7 @@ function PrimitiveSection({
                   setGoalEditing(false);
                 }
               }}
-              className="w-full resize-none field-sizing-content rounded-md bg-muted/50 px-1.5 py-1 -ml-1.5 text-sm outline-none ring-1 ring-ring/40"
+              className="w-full resize-none field-sizing-content rounded-md bg-muted/50 px-1.5 py-1 -ml-1.5 text-[16px] md:text-sm outline-none ring-1 ring-ring/40"
             />
           ) : taskGoal.status === "done" ? (
             <p className="text-sm text-foreground">{taskGoal.outcome}</p>
@@ -2621,7 +2629,7 @@ function PrimitiveSection({
               type="button"
               disabled={goalBusy}
               onClick={handleConfirmGoal}
-              className="self-start text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+              className="self-start text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
             >
               {labels.goalConfirm}
             </button>
@@ -2634,7 +2642,7 @@ function PrimitiveSection({
               type="button"
               disabled={goalBusy}
               onClick={handleWorkGoal}
-              className="self-start text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+              className="self-start text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
             >
               {labels.goalWork}
             </button>
@@ -3032,11 +3040,13 @@ function WhyBody({
         type="button"
         onClick={onToggleDetails}
         aria-expanded={detailsOpen}
-        className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 w-fit"
+        // The one control in the provenance section was a 12px text link
+        // (C 73): a 36px row with a readable chevron.
+        className="text-muted-foreground hover:text-foreground inline-flex min-h-9 items-center gap-1.5 w-fit"
       >
         <svg
-          width="10"
-          height="10"
+          width="16"
+          height="16"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
@@ -3219,7 +3229,9 @@ function SkillDrawer({
       <aside
         role="dialog"
         aria-label={skill.name}
-        style={drawerWidth !== null ? { width: drawerWidth } : undefined}
+        // A stored desktop width never applies below `md` (C 64): the sheet is
+        // `w-full` there and a 360px floor on a 390px phone would narrow it.
+        style={drawerWidth !== null && !isPhoneViewport() ? { width: drawerWidth } : undefined}
         className={cn(
           "fixed top-0 right-0 bottom-0 z-50",
           "w-full sm:w-[480px] lg:w-[640px] xl:w-[760px] bg-popover border-l border-border shadow-2xl",
@@ -3231,7 +3243,11 @@ function SkillDrawer({
           drawerResizing && "select-none",
         )}
       >
-        <PeekResizeHandle resizing={drawerResizing} {...drawerHandleProps} />
+        {/* The resize handle sits exactly where iOS starts its back-swipe;
+            hidden below `lg` the way `ResizablePeek` hides its own (C 64). */}
+        <div className="contents max-lg:hidden">
+          <PeekResizeHandle resizing={drawerResizing} {...drawerHandleProps} />
+        </div>
         <header className="flex items-start justify-between gap-3 px-4 py-3 border-b border-border">
           <div className="flex flex-col gap-1 min-w-0 flex-1">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -3247,7 +3263,7 @@ function SkillDrawer({
             type="button"
             onClick={onClose}
             aria-label={labels.close}
-            className="h-7 w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground shrink-0"
+            className="h-11 w-11 sm:h-7 sm:w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground shrink-0"
           >
             <svg
               width="14"
@@ -3454,7 +3470,7 @@ function SkillSection({
             onChange={(e) => setDraftContent(e.target.value)}
             disabled={busy}
             rows={12}
-            className="text-sm px-2.5 py-2 rounded border border-border bg-background w-full font-mono leading-relaxed"
+            className="text-[16px] md:text-sm px-2.5 py-2 rounded border border-border bg-background w-full font-mono leading-relaxed"
           />
           <FormActions
             t={t}

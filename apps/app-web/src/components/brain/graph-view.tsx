@@ -136,7 +136,17 @@ import {
 } from "@/lib/graph-semantic-zoom";
 import { format, useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { useCoarsePointer } from "@/lib/viewport";
 import { BrainGraphLoadingSkeleton } from "@/components/brain/graph-loading";
+
+/**
+ * Minimum pointer-area radius on a coarse (touch) pointer, in SCREEN px
+ * (C 14 / M3): at the initial fit a leaf node is a 6-18px disc, so a finger
+ * landed on whitespace or a neighbour. The paint radius is unchanged - only
+ * the hit disc grows, divided by `globalScale` so it stays 22px on screen at
+ * every zoom.
+ */
+const COARSE_POINTER_MIN_HIT_PX = 22;
 
 type Props = {
   graph: BrainGraph;
@@ -410,6 +420,7 @@ export function BrainGraphView({
   loading,
 }: Props) {
   const t = useT();
+  const coarsePointer = useCoarsePointer();
   const containerRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const hoverCardRef = useRef<HTMLDivElement>(null);
@@ -1553,7 +1564,8 @@ export function BrainGraphView({
                 <button
                   type="button"
                   onClick={returnToPreviousScope}
-                  className={cn(chipCls, "px-2.5 py-1 transition-colors hover:text-[var(--graph-fg)]")}
+                  // The only way out of a drilled-in group: `py-2 sm:py-1` (C 71).
+                  className={cn(chipCls, "px-2.5 py-2 transition-colors hover:text-[var(--graph-fg)] sm:py-1")}
                 >
                   {t.brainPage.graphView.semantic.back}
                 </button>
@@ -1927,11 +1939,17 @@ export function BrainGraphView({
             node: GraphNodeWithPos,
             color: string,
             ctx: CanvasRenderingContext2D,
+            globalScale: number,
           ) => {
             const n = node;
+            const r = displayRadius(n) + 2;
+            // Floor the hit disc to 22 screen px on touch (see the constant).
+            const hit = coarsePointer
+              ? Math.max(r, COARSE_POINTER_MIN_HIT_PX / (globalScale || 1))
+              : r;
             ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.arc(n.x ?? 0, n.y ?? 0, displayRadius(n) + 2, 0, 2 * Math.PI);
+            ctx.arc(n.x ?? 0, n.y ?? 0, hit, 0, 2 * Math.PI);
             ctx.fill();
           }}
           linkColor={(link: GraphEdgeWithRefs) => {

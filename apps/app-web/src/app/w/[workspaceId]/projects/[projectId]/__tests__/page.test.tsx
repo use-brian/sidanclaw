@@ -31,6 +31,7 @@ vi.mock("@/components/ui/checkbox", () => ({
 }));
 
 import ProjectDetailPage from "../page";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 
 const PROJECT = {
   id: "project-1",
@@ -59,6 +60,9 @@ async function mount() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The page paints from the module-level surface cache: each mount below
+  // must fetch fresh, not paint the previous test's rows.
+  resetSurfaceCache();
   api.getProject.mockResolvedValue(PROJECT);
   api.authFetch
     .mockResolvedValueOnce(new Response(JSON.stringify({ members: [{ userId: "user-1", userName: "Ari" }] })))

@@ -16,11 +16,13 @@
  * [COMP:app-web/page-picker]
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import { fetchPages } from "@/lib/api/mentions";
 import type { PageMentionItem } from "@/components/doc/mentions/mention-popup";
 import { useT } from "@/lib/i18n/client";
+import { clampPopupRect, measureViewport, onViewportChange } from "@/lib/popup-clamp";
+import { isPhoneViewport } from "@/lib/viewport";
 
 export type PagePickerProps = {
   workspaceId: string;
@@ -37,11 +39,35 @@ export function PagePicker({ workspaceId, position, onPick, onClose }: PagePicke
   const [selectedIndex, setSelectedIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Where the popover actually lands: the caret position, clamped inside the
+  // visible viewport and flipped above the caret when the keyboard leaves no
+  // room below (responsive contract M5). Seeded with the raw caret so the
+  // first paint is where the caret is; the layout effect corrects it before
+  // the frame shows, and again whenever the visual viewport changes.
+  const [placed, setPlaced] = useState(position);
 
-  // Focus the search box on open.
+  // Focus the search box on open. Not on a phone: the caret's keyboard is
+  // already up and a second focus hop only scrolls the page (M4).
   useEffect(() => {
-    inputRef.current?.focus();
+    if (!isPhoneViewport()) inputRef.current?.focus();
   }, []);
+
+  useLayoutEffect(() => {
+    const place = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      const next = clampPopupRect(
+        { top: position.top, bottom: position.top, left: position.left },
+        { width: el.offsetWidth || 288, height: el.offsetHeight || 300 },
+        measureViewport(),
+      );
+      setPlaced((cur) =>
+        cur.top === next.top && cur.left === next.left ? cur : { top: next.top, left: next.left },
+      );
+    };
+    place();
+    return onViewportChange(place);
+  }, [position.top, position.left, items.length]);
 
   // Resolve pages on open + as the query changes. `fetchPages` caches the
   // roster per workspace, so each keystroke is a local filter.
@@ -98,8 +124,8 @@ export function PagePicker({ workspaceId, position, onPick, onClose }: PagePicke
     <div
       ref={rootRef}
       data-page-picker="root"
-      className="fixed z-50 w-72 overflow-hidden rounded-md border border-border bg-popover text-sm shadow-lg"
-      style={{ top: position.top, left: position.left }}
+      className="fixed z-50 w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border bg-popover text-sm shadow-lg"
+      style={{ top: placed.top, left: placed.left }}
     >
       <div className="border-b border-border p-2">
         <input
@@ -108,7 +134,7 @@ export function PagePicker({ workspaceId, position, onPick, onClose }: PagePicke
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={t.searchPlaceholder}
-          className="w-full bg-transparent px-1 py-0.5 text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+          className="w-full bg-transparent px-1 py-0.5 text-[16px] text-foreground outline-none placeholder:text-muted-foreground/60 md:text-sm"
         />
       </div>
       <div className="max-h-72 overflow-y-auto py-1">

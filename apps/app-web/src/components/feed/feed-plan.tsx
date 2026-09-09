@@ -30,6 +30,8 @@ import {
 import { PlanBriefEditor } from "@/components/feed/plan-brief-editor";
 import {
   PlanChatRail,
+  PlanProposalCardboard,
+  PlanQuickActions,
   type PlanQuickAction,
 } from "@/components/feed/plan-chat-rail";
 import { useLgViewport } from "@/components/feed/use-lg-viewport";
@@ -39,6 +41,7 @@ import {
 } from "@/components/operator/resizable-peek";
 import { PlanCaptureStrip } from "@/components/feed/plan-capture-strip";
 import { PlanMobileSheet } from "@/components/feed/plan-mobile-sheet";
+import { Skeleton } from "@/components/skeleton";
 import { ChevronRight } from "lucide-react";
 import {
   createFeedIdea,
@@ -47,15 +50,19 @@ import {
   draftFromFeedIdea,
   draftFromPlanSlot,
   ensurePlanSession,
-  fetchFeedIdeas,
   fetchFeedSessionIdByChannel,
-  fetchPlanBrief,
-  fetchPlanSlots,
   savePlanBrief,
   updateFeedIdea,
   updatePlanSlot,
 } from "@/lib/api/feed";
 import { fetchSessionMessages } from "@/lib/api/sessions";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { feedPlanCacheKey } from "@/lib/surface-prefetch";
+import {
+  loadFeedPlanMonth,
+  type FeedPlanMonth,
+} from "@/lib/feed-surface-cache";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   defaultFeedPlatform,
   feedPath,
@@ -135,6 +142,41 @@ const PLAN_CHANNEL_ID = "plan";
 /** Bounded proposal watch: fast enough to feel live, never an idle poller. */
 const PROPOSAL_WATCH_INTERVAL_MS = 4_000;
 const PROPOSAL_WATCH_TIMEOUT_MS = 120_000;
+/** Stable empties so the memos keyed on the month record do not churn. */
+const NO_SLOTS: PlanSlot[] = [];
+const NO_IDEAS: FeedIdea[] = [];
+
+/**
+ * The cold-cache fallback for the month: the calendar's own geometry (the
+ * view toggle row, then a 7 x 5 grid at the real cell height) rather than
+ * the 520px pulsing block, so the swap-in does not jump (N4).
+ */
+function PlanMonthSkeleton() {
+  return (
+    <div aria-hidden data-plan-month-skeleton className="space-y-2 animate-fade-in">
+      <div className="flex justify-end">
+        <Skeleton className="h-9 w-40 rounded-md md:h-6" />
+      </div>
+      <div className="overflow-hidden rounded-xl border border-border/60">
+        <div className="grid grid-cols-7 border-b border-border/60 bg-muted/30 px-2 py-2">
+          {Array.from({ length: 7 }).map((_, i) => (
+            <Skeleton key={i} className="h-3 w-8" />
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {Array.from({ length: 35 }).map((_, i) => (
+            <div
+              key={i}
+              className="min-h-[64px] border-b border-r border-border/60 p-1.5 md:min-h-[104px]"
+            >
+              <Skeleton className="size-5 rounded-full" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function PlanBoard({ assistantId }: { assistantId: string }) {
   const team = useFeedWorkspace();
@@ -164,19 +206,58 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
   // D25. Two views, both over the same slots and the same chip. `?view=` is
   // in the URL for the same reason `?month=` is: a linkable, reload-surviving
   // reading of the month.
+  // Below `md` the seven-column month grid is unreadable at ~49px a cell, so
+  // a phone lands on the List view unless the URL asks otherwise (responsive
+  // contract M1; `isPhoneViewport` is `false` on the server, so SSR and the
+  // first client frame agree on "month" there and only a real phone seeds
+  // "list").
   const viewParam = searchParams.get("view");
-  const [view, setView] = useState<"month" | "list" | "week">(
-    viewParam === "list" ? "list" : viewParam === "week" ? "week" : "month",
+  const [view, setView] = useState<"month" | "list" | "week">(() =>
+    viewParam === "list"
+      ? "list"
+      : viewParam === "week"
+        ? "week"
+        : viewParam === "month" || !isPhoneViewport()
+          ? "month"
+          : "list",
   );
   // The week the Week view is showing. Seeded from the month so switching
   // views lands where the operator was looking, not on today.
   const [weekAnchor, setWeekAnchor] = useState(() => isoDay(today));
 
-  const [slots, setSlots] = useState<PlanSlot[]>([]);
-  const [brief, setBrief] = useState<PlanBrief | null>(null);
-  const [ideas, setIdeas] = useState<FeedIdea[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The month record (slots, brief, open ideas) lives in the surface cache
+  // (instant-navigation N1 / N2): `feed-plan:<wid>:<viewer>:<assistant>:
+  // <month>`, answered from IndexedDB on a cold key and revalidated behind
+  // the paint. Every optimistic edit below writes through `mutateSurfaceCache`
+  // so the row the next visit paints is the row the operator last saw, and
+  // a month switch is a key switch.
+  const planKey = feedPlanCacheKey(team.workspaceId, assistantId, month);
+  const plan = useCachedResource<FeedPlanMonth>(planKey, () =>
+    loadFeedPlanMonth({ assistantId, month, key: planKey }),
+  );
+  const slots = plan.data?.slots ?? NO_SLOTS;
+  const brief = plan.data?.brief ?? null;
+  const ideas = plan.data?.ideas ?? NO_IDEAS;
+  const loading = plan.loading;
+  const patchPlan = useCallback(
+    (updater: (previous: FeedPlanMonth) => FeedPlanMonth) =>
+      mutateSurfaceCache<FeedPlanMonth>(planKey, updater),
+    [planKey],
+  );
+  const setSlots = (next: PlanSlot[] | ((previous: PlanSlot[]) => PlanSlot[])) =>
+    patchPlan((p) => ({
+      ...p,
+      slots: typeof next === "function" ? next(p.slots) : next,
+    }));
+  const setBrief = (next: PlanBrief | null) => patchPlan((p) => ({ ...p, brief: next }));
+  const setIdeas = (next: FeedIdea[] | ((previous: FeedIdea[]) => FeedIdea[])) =>
+    patchPlan((p) => ({
+      ...p,
+      ideas: typeof next === "function" ? next(p.ideas) : next,
+    }));
+  // Action errors are local; a failed slots read rides the record itself.
   const [error, setError] = useState<string | null>(null);
+  const bannerError = error ?? (plan.data?.loadFailed ? tp.loadFailed : null);
   const [busy, setBusy] = useState(false);
   const [rail, setRail] = useState<RailView>({ kind: "chat" });
   // Bumped when the operator asks for a plan; the board watches for the
@@ -229,25 +310,6 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
       ),
     [team.workspaceId, team.profiles],
   );
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    const [nextSlots, nextBrief, nextIdeas] = await Promise.all([
-      fetchPlanSlots(assistantId, month),
-      fetchPlanBrief(assistantId, month),
-      fetchFeedIdeas(assistantId, "open"),
-    ]);
-    if (nextSlots === null) setError(tp.loadFailed);
-    setSlots(nextSlots ?? []);
-    setBrief(nextBrief);
-    setIdeas(nextIdeas ?? []);
-    setLoading(false);
-  }, [assistantId, month, tp.loadFailed]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   const pullProposal = useCallback(async () => {
     setPullingProposals(true);
@@ -367,11 +429,17 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
     setBusy(true);
     setError(null);
     try {
+      // The day rides the same write as the title and time: the peek's date
+      // field is the touch path for a reschedule (drag is desktop-only), and
+      // a day the operator just picked must not be dropped on Save.
       const result = draft.id
         ? await updatePlanSlot(assistantId, draft.id, {
             title,
             brief: draft.brief.trim() || null,
             scheduledMinute: draft.scheduledMinute,
+            ...(selectedSlot && selectedSlot.scheduledFor !== draft.scheduledFor
+              ? { scheduledFor: draft.scheduledFor }
+              : {}),
           })
         : await createPlanSlot(assistantId, {
             platform: draft.platform,
@@ -882,17 +950,49 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
             onDiscardIdea={(idea) => void discardIdea(idea)}
           />
 
-          {error ? (
+          {/* Phone host for the rail's cardboard and quick actions (§6.3:
+              the full rail, nothing trimmed). Below `lg` the chat rail is not
+              mounted (the floating dock hosts the conversation), so the
+              proposal cards, "Accept all", the brief-patch card and the
+              three quick actions render here in the Plan column off the
+              same state the desktop rail reads. */}
+          {canEdit && quickActions.length > 0 ? (
+            <div data-plan-mobile-quick-actions className="lg:hidden">
+              <PlanQuickActions actions={quickActions} />
+            </div>
+          ) : null}
+          {showProposals ? (
+            <div
+              data-plan-mobile-proposals
+              className="rounded-xl border border-border/60 bg-card lg:hidden"
+            >
+              <PlanProposalCardboard
+                proposals={visibleProposals}
+                briefPatch={visibleBriefPatch}
+                canEdit={canEdit}
+                pullingProposals={pullingProposals}
+                acceptingProposalIndex={acceptingProposalIndex}
+                onApplyBriefPatch={applyBriefPatch}
+                onDismissBriefPatch={() => setBriefPatchDismissed(true)}
+                onAcceptProposal={(proposal) => void acceptProposal(proposal)}
+                onAcceptAllProposals={() => void acceptAllProposals()}
+                onDismissProposal={dismissProposal}
+                onRefreshProposals={() => void pullProposal()}
+              />
+            </div>
+          ) : null}
+
+          {bannerError ? (
             <div
               role="alert"
               className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
             >
-              {error}
+              {bannerError}
             </div>
           ) : null}
 
           {loading ? (
-            <div className="h-[520px] animate-pulse rounded-xl border border-border/60 bg-muted/30" />
+            <PlanMonthSkeleton />
           ) : (
             <>
               <div className="mb-2 flex items-center justify-end">
@@ -909,7 +1009,7 @@ function PlanBoard({ assistantId }: { assistantId: string }) {
                       aria-selected={view === key}
                       onClick={() => setView(key)}
                       className={cn(
-                        "h-6 rounded px-2 text-[12.5px] font-medium transition-colors",
+                        "h-9 md:h-6 rounded px-3 md:px-2 text-[12.5px] font-medium transition-colors",
                         view === key
                           ? "bg-foreground text-background"
                           : "text-muted-foreground hover:bg-accent hover:text-foreground",

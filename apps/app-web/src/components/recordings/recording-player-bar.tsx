@@ -69,7 +69,7 @@ export function RecordingPlayerBar({
         onClick={togglePlay}
         disabled={isLoading}
         aria-label={isPlaying ? t.recordings.detailPause : t.recordings.detailPlay}
-        className="shrink-0 rounded-full border border-border px-3 py-1 text-sm disabled:opacity-50"
+        className="inline-flex h-11 shrink-0 items-center rounded-full border border-border px-3 text-sm disabled:opacity-50 sm:h-7"
       >
         {isPlaying ? t.recordings.detailPause : t.recordings.detailPlay}
       </button>
@@ -83,14 +83,17 @@ export function RecordingPlayerBar({
         value={Math.min(currentMs, durationMs || 0)}
         onChange={(e) => seekTo(Number(e.target.value))}
         aria-label={title}
-        className="h-1 min-w-20 flex-1 cursor-pointer"
+        // The element's own height is the touch hit box outside the thumb, so a
+        // 4px track makes seeking by finger a precision drag (M3); the track
+        // only shrinks back to a hairline once a pointer is in play.
+        className="h-6 min-w-20 flex-1 cursor-pointer md:h-1"
       />
       <button
         type="button"
         onClick={() => void copyTimestamp()}
         disabled={isLoading || durationMs <= 0 || copyStatus === "copying"}
         title={t.recordings.copyTimestampHint}
-        className="shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+        className="inline-flex h-9 shrink-0 items-center rounded border border-border px-2 text-xs hover:bg-muted disabled:opacity-50 sm:h-6"
       >
         {t.recordings.copyTimestamp}
       </button>

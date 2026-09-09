@@ -37,11 +37,16 @@
  * Old items age out server-side via the workspace retention window; the panel
  * needs no logic for it, it simply receives fewer rows.
  *
- * Live refresh (T-H8): this component only refetches when it OPENS (see the
- * effect below) — while it's closed, a room mention recorded from another
- * tab, device, or teammate is caught by the sidebar badge listening for
- * `INBOX_REFRESH_EVENT` (`doc-sidebar.tsx`), and the next open reads current
- * truth. No listener is needed here for the closed state.
+ * Data (instant-navigation contract, Phase 3): the payload lives in the
+ * surface cache under `inboxCacheKey(wid)` (`inbox:<wid>:<viewer>`). An open
+ * paints the cached rows on the first frame and revalidates behind them;
+ * only the FIRST open of a session shows the three skeleton rows. The key is
+ * armed on that first open and stays armed, so the rows survive the slide-out
+ * and a server signal while the panel is closed (`INBOX_REFRESH_EVENT` ->
+ * `inbox:<wid>` in the one spine map, `lib/surface-cache-invalidation.ts`)
+ * revalidates behind the closed panel instead of through a listener here.
+ * Before the first open the panel costs no request: the sidebar badge covers
+ * the closed state (`doc-sidebar.tsx`).
  *
  * Spec: `docs/architecture/features/doc-inbox.md`.
  */
@@ -54,11 +59,17 @@ import {
   fetchInbox,
   markInboxRead,
   type InboxMention,
+  type InboxPayload,
   type InboxPendingReply,
 } from "@/lib/api/inbox";
 import { INBOX_CHANGED_EVENT } from "@/lib/inbox-events";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { inboxCacheKey } from "@/lib/surface-prefetch";
 import { Avatar } from "@/components/doc/comment-thread-body";
 import { PreviewMarkdown } from "@/components/doc/preview-markdown";
+
+const EMPTY_PENDING: InboxPendingReply[] = [];
+const EMPTY_MENTIONS: InboxMention[] = [];
 
 type Props = {
   open: boolean;
@@ -83,30 +94,37 @@ export function InboxPanel({
   onOpenRoom,
 }: Props) {
   const t = useT().docPage;
-  const [pending, setPending] = React.useState<InboxPendingReply[]>([]);
-  const [mentions, setMentions] = React.useState<InboxMention[]>([]);
-  const [state, setState] = React.useState<"loading" | "ready" | "error">("loading");
-
-  // Fetch each time the panel OPENS (not on mount — it stays mounted for the
-  // slide animation). Opening only READS now; clearing is per-row, so the badge
-  // nudge here just re-syncs it with what the server actually returned.
+  // The key is armed on the first open and never disarmed: a `null` key while
+  // closed would blank the rows mid slide-out, and an always-on key would
+  // fetch on mount for a panel that may never open.
+  const [armed, setArmed] = React.useState(open);
   React.useEffect(() => {
-    if (!open) return;
-    const controller = new AbortController();
-    setState("loading");
-    fetchInbox(workspaceId, { signal: controller.signal })
-      .then((payload) => {
-        if (controller.signal.aborted) return;
-        setPending(payload.pending);
-        setMentions(payload.mentions);
-        setState("ready");
-        window.dispatchEvent(new Event(INBOX_CHANGED_EVENT));
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setState("error");
-      });
-    return () => controller.abort();
-  }, [open, workspaceId]);
+    if (open) setArmed(true);
+  }, [open]);
+  const key = armed ? inboxCacheKey(workspaceId) : null;
+  const inbox = useCachedResource<InboxPayload>(key, () => fetchInbox(workspaceId));
+  const refresh = inbox.refresh;
+
+  // Revalidate on every OPEN (the store dedupes it into the cold load when
+  // there is one). Opening only READS; clearing is per-row, so the badge nudge
+  // here just re-syncs it with what the server actually returned.
+  React.useEffect(() => {
+    if (!open || !key) return;
+    let live = true;
+    void refresh().then((payload) => {
+      if (live && payload) window.dispatchEvent(new Event(INBOX_CHANGED_EVENT));
+    });
+    return () => {
+      live = false;
+    };
+  }, [open, key, refresh]);
+
+  const pending = inbox.data?.pending ?? EMPTY_PENDING;
+  const mentions = inbox.data?.mentions ?? EMPTY_MENTIONS;
+  // A failed REVALIDATION keeps the cached rows (the store holds the last
+  // good payload); only a failure with nothing cached shows the error line.
+  const state: "loading" | "ready" | "error" =
+    inbox.data !== undefined ? "ready" : inbox.error !== undefined ? "error" : "loading";
 
   // Escape closes the panel (only while open).
   React.useEffect(() => {
@@ -128,13 +146,18 @@ export function InboxPanel({
     onClose();
   };
 
-  // Opening a pending reply clears it. The optimistic local drop matters
-  // because the panel is closing: without it the row is still on screen for the
-  // slide-out, and it would be back on the next open if the request is slow.
-  // The write is fire-and-forget for the same reason — navigation must not wait
-  // on it, and a failure simply leaves the row for next time.
+  // Opening a pending reply clears it. The optimistic drop is written to the
+  // CACHE (the optimistic-update seam): the panel is closing, so without it
+  // the row is still on screen for the slide-out, and it would be back on the
+  // next open if the request is slow. The write is fire-and-forget for the
+  // same reason - navigation must not wait on it, and a failure simply leaves
+  // the row for the next revalidation.
   const openPendingReply = (row: InboxPendingReply) => {
-    setPending((rows) => rows.filter((r) => r.threadId !== row.threadId));
+    mutateSurfaceCache<InboxPayload>(key, (prev) => ({
+      ...prev,
+      pending: prev.pending.filter((r) => r.threadId !== row.threadId),
+      pendingCount: Math.max(0, prev.pendingCount - 1),
+    }));
     void dismissInboxReply(workspaceId, row.threadId).then(() => {
       window.dispatchEvent(new Event(INBOX_CHANGED_EVENT));
     });
@@ -145,7 +168,11 @@ export function InboxPanel({
   // it read IS the dismissal, and the list is unread-only. A room mention
   // opens the room (T-H7) instead of a page.
   const openMention = (m: InboxMention) => {
-    setMentions((rows) => rows.filter((r) => r.id !== m.id));
+    mutateSurfaceCache<InboxPayload>(key, (prev) => ({
+      ...prev,
+      mentions: prev.mentions.filter((r) => r.id !== m.id),
+      unreadMentionCount: Math.max(0, prev.unreadMentionCount - 1),
+    }));
     void markInboxRead(workspaceId, [m.id]).then(() => {
       window.dispatchEvent(new Event(INBOX_CHANGED_EVENT));
     });
@@ -205,7 +232,7 @@ export function InboxPanel({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {state === "loading" ? (
-            <div className="space-y-2" aria-busy>
+            <div className="space-y-2" aria-busy data-inbox-skeleton>
               {[0, 1, 2].map((i) => (
                 <div key={i} className="h-14 animate-pulse rounded-lg bg-muted/60" />
               ))}

@@ -4,12 +4,21 @@
  * Feed workspace context — the app-web replacement for feed-web's
  * `TeamContextProvider` (`apps/feed-web/src/lib/workspace-context.tsx`).
  *
- * feed-web resolved this server-side in its workspace layout; here the fetch
- * is CLIENT-side (an effect over `authFetch`) so the same provider works in
- * the Vite desktop SPA, which has no server layouts
- * (docs/plans/feed-web-consolidation.md §4). `FeedSurfaceShell` gates its
- * children on `status === "ready"`, so ported feed pages keep their original
- * assumption that the context is synchronously populated.
+ * feed-web resolved this server-side in its workspace layout; here the read
+ * is CLIENT-side so the same provider works in the Vite desktop SPA, which
+ * has no server layouts (docs/plans/feed-web-consolidation.md §4).
+ * `FeedSurfaceShell` gates its children on `status === "ready"`, so ported
+ * feed pages keep their original assumption that the context is
+ * synchronously populated.
+ *
+ * The record comes from the surface cache (instant-navigation contract N1 /
+ * N2): `useCachedResource(feedWorkspaceCacheKey(wid))` over
+ * `loadFeedWorkspaceRecord` (`lib/feed-surface-cache.ts`), which answers
+ * from IndexedDB on a cold key and revalidates behind the paint. A revisit
+ * therefore renders the last-known workspace on the first frame instead of
+ * the five-request gate report E named as the app's worst offender; the
+ * workspace event spine marks the key stale (`surface-cache-invalidation.ts`)
+ * so a rename or a new brand voice repairs every open tab.
  *
  * Value shape mirrors feed-web's `WorkspaceContextValue` (workspaceId, name,
  * role, canDraft, me, profiles) plus `refresh()` for post-connect reloads.
@@ -21,186 +30,99 @@
  * [COMP:app-web/feed-profiles-context]
  */
 
-import { fetchWorkspaceBrand } from "@/lib/api/brand";
-import type { BrandRecord } from "@use-brian/shared/brand";
 import {
   createContext,
-  useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
-import { feedCachedJson } from "@/lib/offline/feed-cache";
+import { useCachedResource } from "@/lib/surface-cache";
+import { feedWorkspaceCacheKey } from "@/lib/surface-prefetch";
 import {
-  fetchFeedDistributionAssistants,
-  fetchFeedCloudLink,
-  fetchFeedTeamProfiles,
-  type FeedCloudLink,
-  type FeedProfile,
-} from "@/lib/api/feed";
-import { deploymentCapabilities } from "@/lib/edition";
+  deriveCanDraft,
+  loadFeedWorkspaceRecord,
+  type FeedWorkspaceRecord,
+} from "@/lib/feed-surface-cache";
 
+// The pure permission rule lives beside the loader now; re-exported so the
+// existing callers and tests keep their import.
+export { deriveCanDraft };
 
-export type FeedWorkspaceValue = {
-  workspaceId: string;
-  name: string;
-  role: "owner" | "admin" | "member";
-  /**
-   * Whether this user can interact with the feed/draft-app — create & save
-   * drafts, approve/reject saved drafts. True for owner/admin
-   * unconditionally; for `role === 'member'` it reflects the
-   * `workspace_members.can_draft` column an admin/owner can toggle in the
-   * feed settings members page.
-   */
-  canDraft: boolean;
-  /** Identity of the requesting user — used by collaborative surfaces
-   *  (team-shared draft sessions) to dedupe own-events from bus broadcasts
-   *  and skip presence flicker for self. */
-  me: { id: string };
-  /** Per-platform connection summary; drives the sidebar platform pill and
-   *  every per-platform page's assistant resolution. */
-  profiles: FeedProfile[];
-  /**
-   * The workspace's distribution assistants (`kind='app'`,
-   * `appType='distribution'`) regardless of connection state. The Create
-   * surfaces (drafts / ready / voice) resolve their assistant from HERE, so
-   * a brand voice created without any OAuth connection is fully usable
-   * (docs/plans/feed-create-split.md D7).
-   */
-  assistants: Array<{ id: string; name: string }>;
-  /**
-   * The workspace's APPROVED brand record, or null (feed-revamp-depth D35).
-   * Fetched once here so the preview, the Voice page, and the composer brand
-   * check share one read. Never the draft: a draft is a proposal and an
-   * assistant can write one. Null means "render exactly what shipped before
-   * brand existed" -- no consumer may hard-depend on it.
-   */
-  brand: BrandRecord | null;
-  /** Native hosted capability or verified paid Cloud Link state in OSS. */
-  cloudLink?: FeedCloudLink;
-  /** Re-fetch profiles + membership (after an OAuth connect / disconnect). */
+/**
+ * The cached record plus `refresh()`. Field notes:
+ *  - `canDraft`: whether this user can interact with the feed/draft-app —
+ *    create & save drafts, approve/reject saved drafts. True for owner/admin
+ *    unconditionally; for `role === 'member'` it reflects the
+ *    `workspace_members.can_draft` column an admin/owner can toggle in the
+ *    feed settings members page.
+ *  - `me`: identity of the requesting user — used by collaborative surfaces
+ *    (team-shared draft sessions) to dedupe own-events from bus broadcasts
+ *    and skip presence flicker for self.
+ *  - `profiles`: per-platform connection summary; drives the sidebar
+ *    platform pill and every per-platform page's assistant resolution.
+ *  - `assistants`: the workspace's distribution assistants (`kind='app'`,
+ *    `appType='distribution'`) regardless of connection state. The Create
+ *    surfaces (drafts / ready / voice) resolve their assistant from HERE, so
+ *    a brand voice created without any OAuth connection is fully usable
+ *    (docs/plans/feed-create-split.md D7).
+ *  - `brand`: the workspace's APPROVED brand record, or null
+ *    (feed-revamp-depth D35). Read once here so the preview, the Voice page
+ *    and the composer brand check share it. Never the draft. Null means
+ *    "render exactly what shipped before brand existed" -- no consumer may
+ *    hard-depend on it.
+ *  - `cloudLink`: native hosted capability or verified paid Cloud Link
+ *    state in OSS.
+ *  - `refresh`: re-read the record (after an OAuth connect / disconnect).
+ */
+export type FeedWorkspaceValue = FeedWorkspaceRecord & {
   refresh: () => Promise<void>;
 };
 
 type FeedWorkspaceState =
   | { status: "loading" }
-  | { status: "error" }
+  | { status: "error"; retry: () => void }
   | { status: "ready"; value: FeedWorkspaceValue };
 
-type WorkspaceApiResponse = {
-  id?: string;
-  name?: string;
-  role?: "owner" | "admin" | "member";
-  me?: { id: string };
-  members?: Array<{
-    userId: string;
-    role: "owner" | "admin" | "member";
-    canDraft: boolean;
-  }>;
-};
-
 const FeedWorkspaceContext = createContext<FeedWorkspaceState | null>(null);
-
-/**
- * Effective draft permission: owner/admin always; for 'member' roles look up
- * the requester's row in the members list and read `canDraft` (the list is
- * gated to team members, so it's safe for the requester's own permission).
- * Falls back to false if the row is missing. Pure — unit-tested directly.
- */
-export function deriveCanDraft(team: {
-  role: "owner" | "admin" | "member";
-  myUserId: string;
-  members?: Array<{ userId: string; canDraft: boolean }>;
-}): boolean {
-  if (team.role === "owner" || team.role === "admin") return true;
-  const myMember = team.members?.find((m) => m.userId === team.myUserId);
-  return myMember?.canDraft === true;
-}
-
-async function loadWorkspace(workspaceId: string): Promise<{
-  name: string;
-  role: "owner" | "admin" | "member";
-  myUserId: string;
-  canDraft: boolean;
-}> {
-  const team = await feedCachedJson<WorkspaceApiResponse>(`/api/workspaces/${workspaceId}`);
-  if (!team.id || !team.name || !team.role) {
-    throw new Error("workspace API returned an incomplete payload");
-  }
-  const myUserId = team.me?.id ?? "";
-  const canDraft = deriveCanDraft({
-    role: team.role,
-    myUserId,
-    members: team.members,
-  });
-  return { name: team.name, role: team.role, myUserId, canDraft };
-}
 
 export function FeedProfilesProvider(props: {
   workspaceId: string;
   children: ReactNode;
 }) {
   const { workspaceId } = props;
-  const capabilities = deploymentCapabilities();
-  const [state, setState] = useState<FeedWorkspaceState>({
-    status: "loading",
-  });
+  const key = workspaceId ? feedWorkspaceCacheKey(workspaceId) : null;
+  const resource = useCachedResource<FeedWorkspaceRecord>(key, () =>
+    loadFeedWorkspaceRecord(workspaceId, key as string),
+  );
+  const { data, error, revalidating, refresh } = resource;
 
-  const load = useCallback(async (): Promise<void> => {
-    const [team, profiles, assistants, brand, cloudLink] = await Promise.all([
-      loadWorkspace(workspaceId),
-      // Profiles failure ≠ surface failure: connections are optional to
-      // planning, so render the zero-profile onboarding state instead.
-      fetchFeedTeamProfiles(workspaceId).catch(() => [] as FeedProfile[]),
-      // Same degrade: the Create surfaces just see no brand voice yet.
-      fetchFeedDistributionAssistants(workspaceId).catch(
-        () => [] as Array<{ id: string; name: string }>,
-      ),
-      // A brand read failing must never take down a composer, so this is the
-      // same degrade as profiles: null, and every consumer renders its
-      // pre-brand shape.
-      fetchWorkspaceBrand(workspaceId).catch(() => null),
-      capabilities.managedInfrastructure
-        ? Promise.resolve({ state: "native" as const })
-        : capabilities.hostedUpgradePrompts
-          ? fetchFeedCloudLink(workspaceId).catch(
-              () => ({ state: "unlinked" as const }),
-            )
-          : Promise.resolve({ state: "disabled" as const }),
-    ]);
-    setState({
-      status: "ready",
-      value: {
-        workspaceId,
-        name: team.name,
-        role: team.role,
-        canDraft: team.canDraft,
-        me: { id: team.myUserId },
-        profiles,
-        assistants,
-        brand,
-        cloudLink,
-        refresh: async () => {
-          await load();
+  // The three states the gate reads, derived from the cache entry: a value
+  // (fresh, stale, or a failed revalidation's last-good copy) is ready; an
+  // error with nothing to paint is the error branch and exposes the retry;
+  // everything else is the first load.
+  const value = useMemo<FeedWorkspaceState>(() => {
+    if (data !== undefined) {
+      return {
+        status: "ready",
+        value: {
+          ...data,
+          refresh: async () => {
+            await refresh();
+          },
         },
-      },
-    });
-  }, [capabilities.hostedUpgradePrompts, capabilities.managedInfrastructure, workspaceId]);
+      };
+    }
+    if (error !== undefined && !revalidating) {
+      return {
+        status: "error",
+        retry: () => {
+          void refresh();
+        },
+      };
+    }
+    return { status: "loading" };
+  }, [data, error, revalidating, refresh]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: "loading" });
-    load().catch(() => {
-      if (!cancelled) setState({ status: "error" });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
-
-  const value = useMemo(() => state, [state]);
   return (
     <FeedWorkspaceContext.Provider value={value}>
       {props.children}

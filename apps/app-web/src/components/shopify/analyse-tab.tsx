@@ -254,7 +254,7 @@ Rules:
           value={ask}
           onChange={(e) => setAsk(e.target.value)}
           placeholder={t.shopifyApp.askPlaceholder}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
         />
         <p className="text-[12px] text-muted-foreground">{t.shopifyApp.askHelp}</p>
       </div>

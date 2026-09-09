@@ -15,7 +15,7 @@ export default async function SiteNotFound() {
   const { dict } = await getServerDictionary();
   const t = dict.sharedPage;
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col items-center justify-center gap-3 px-6 text-center">
+    <main className="mx-auto flex min-h-dvh w-full max-w-3xl flex-col items-center justify-center gap-3 px-6 text-center">
       <h1 className="text-2xl font-semibold tracking-tight">{t.siteNotFoundTitle}</h1>
       <p className="text-sm text-muted-foreground">{t.siteNotFoundBody}</p>
     </main>

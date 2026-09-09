@@ -185,6 +185,14 @@ function ToolRow({
         {tool.description && (
           <div className="text-[11px] text-muted-foreground truncate mt-0.5">{tool.description}</div>
         )}
+        {/* The `title=` hint on the greyed control below has no touch path,
+            so the reason is also written inline where hover cannot reach
+            (responsive contract M2). */}
+        {grants !== undefined && isWrite && !granted && !floorBlocked && (
+          <div data-not-granted-hint className="text-[10px] text-muted-foreground mt-0.5 md:hidden">
+            {t.connectorToolList.notGranted}
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {grants && (
@@ -199,7 +207,7 @@ function ToolRow({
               title={!isWrite ? t.connectorToolList.alwaysAvailable : undefined}
               data-grant-toggle={connectorId ? `${connectorId}:${tool.name}` : undefined}
               onClick={() => isWrite && grants.onToggle(tool.name)}
-              className={`text-[11px] font-medium px-2 py-0.5 rounded transition-colors ${
+              className={`h-9 sm:h-6 text-[11px] font-medium px-2 py-0.5 rounded transition-colors ${
                 granted
                   ? `bg-background shadow-sm text-emerald-600 dark:text-emerald-400 ${!isWrite ? "opacity-60 cursor-default" : ""}`
                   : grants.saving
@@ -233,7 +241,7 @@ function ToolRow({
                   disabled={disabled}
                   aria-pressed={active}
                   onClick={() => onPolicyChange(tool.name, p)}
-                  className={`text-[11px] font-medium px-2 py-0.5 rounded transition-colors ${
+                  className={`h-9 sm:h-6 text-[11px] font-medium px-2 py-0.5 rounded transition-colors ${
                     active && !rowPolicyDisabled
                       ? `bg-background shadow-sm ${
                           p === "allow" ? "text-emerald-600 dark:text-emerald-400"

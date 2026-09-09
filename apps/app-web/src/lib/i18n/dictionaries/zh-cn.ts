@@ -488,6 +488,13 @@ export const zhCN: Dictionary = {
     continueBrowsing: "继续浏览",
   },
   workspaceSwitcher: {
+    deploymentCloud: "云端",
+    deploymentLocal: "本机",
+    deploymentSelfHosted: "自行托管",
+    deploymentSource: "来自 {url} 的账户",
+    useOwnDeployment: "使用自己的部署",
+    openCloudAccount: "打开云端账户",
+
     loading: "正在加载工作空间…",
     loadError: "无法加载工作空间",
     empty: "尚无工作空间",
@@ -1676,6 +1683,8 @@ export const zhCN: Dictionary = {
       propertyDragAria: "重新排序 {name}",
       close: "关闭",
       apply: "套用",
+      viewOptions: "视图选项",
+      viewOptionsAria: "显示视图选项",
     },
     tableMenu: {
       sortAsc: "升序排序",
@@ -1758,6 +1767,8 @@ export const zhCN: Dictionary = {
       collabOfflineUnavailableTitle: "此页面无法离线使用",
       collabOfflineUnavailableBody: "此设备尚未打开过此页面。恢复连接后将自动加载。",
     },
+    topbarTabsMenu: "{count} 个分页",
+    topbarTabsMenuAria: "打开的分页",
   },
   settings: {
     nav: {
@@ -2529,6 +2540,7 @@ export const zhCN: Dictionary = {
       wsManageError: "无法更新此连接器。请重试。",
       wsToolPolicyTitle: "工作空间工具权限",
       wsToolPolicyDesc: "为整个工作空间允许、询问或阻止每个工具。团队助理会遵循这些设置。",
+      backToList: "所有连接器",
     },
   },
   chrome: {
@@ -2833,6 +2845,7 @@ export const zhCN: Dictionary = {
     revokeInviteConfirmBody: "发给 {email} 的链接将失效。之后可以重新发送邀请。",
     revokeInviteConfirm: "撤销邀请",
     resend: "重新发送",
+    rowActionsAria: "{name} 的操作",
   },
   workspaceLlmKey: {
     heading: "Gemini API 密钥",
@@ -3325,6 +3338,9 @@ export const zhCN: Dictionary = {
         failed: "失败",
         skipped: "已略过",
       },
+      editLayout: "编辑布局",
+      editLayoutHint:
+        "开启：拖动可移动步骤。关闭：点按选中步骤，拖动则滚动画布。",
     },
     builder: {
       newPageTitle: "新工作流程",
@@ -3718,6 +3734,18 @@ export const zhCN: Dictionary = {
         sectionEmpty: "（无）",
       },
       runRowDuration: "{value}",
+      connectToLabel: "连接到",
+      connectToPlaceholder: "添加下一个步骤",
+      connectToSearchPlaceholder: "搜索步骤",
+      connectToEmpty: "没有其他可连接的步骤",
+      connectToTrueLabel: "为 true 时连接到",
+      connectToFalseLabel: "为 false 时连接到",
+      connectToCurrent: "当前：{names}",
+      enabledSwitch: "已启用",
+      timezoneSearchPlaceholder: "搜索时区",
+      timezoneEmpty: "没有匹配的时区",
+      timezoneDefaultOption: "默认 (UTC)",
+      timezoneCreate: "使用“{query}”",
     },
   },
   brainPage: {
@@ -4370,6 +4398,7 @@ export const zhCN: Dictionary = {
       filtersMany: "{count} 个筛选条件",
       clearFilters: "清除",
       suggestedCount: "{count} 个待确认",
+      skillActionsAria: "技能操作",
     },
     emptyState: {
       nudge: {
@@ -4836,6 +4865,7 @@ export const zhCN: Dictionary = {
       validation: "Token 须以 xoxb- 开头，Secret 须为 16 个字符以上",
       show: "显示",
       hide: "隐藏",
+      close: "关闭 Slack 设置",
     },
   },
   operatorBar: {
@@ -5831,6 +5861,9 @@ export const zhCN: Dictionary = {
     typeTitleToDelete: "请输入以下完整标题，以确认永久删除：",
     titleConfirmationPlaceholder: "输入上方显示的标题",
     deprecateTemplate: "弃用范本",
+    editorActions: "编辑器操作",
+    compactTextTools: "文本",
+    editText: "编辑文本",
   },
   homeApps: {
     fallbackName: "应用",
@@ -6778,6 +6811,7 @@ export const zhCN: Dictionary = {
       discardIdeaBody: "“{text}”将从待办清单中移除。",
       discardIdeaConfirm: "丢弃灵感",
       ideaSaveFailed: "无法保存这条灵感。",
+      dateLabel: "日期",
     },
     postEditor: {
       savedLocally: "已保存在此设备，等待同步。",
@@ -6892,6 +6926,7 @@ export const zhCN: Dictionary = {
       articleDescriptionPlaceholder: "链接卡片的简短摘要",
       articleFallbackTitle: "文章标题",
       articleFallbackDescription: "文章描述会显示在这里。",
+      refineOpenAria: "打开修订对话",
     },
     posts: {
       filterAria: "按状态筛选帖子",
@@ -7930,6 +7965,7 @@ export const zhCN: Dictionary = {
         budgetLabel: "每周提案额度",
         budgetHelp: "滚动 7 天内的提案上限。达到上限后代理会暂停，直到时间窗前进。",
       },
+      backToList: "所有来源",
     },
     ingestRules: {
       statusNote: "激活来源后会立即暂存其路由规则。实时事件传递仍在逐一来源推出中；在功能上线前，已激活的来源仅为暂存状态，尚未从中截取任何内容。",
@@ -8163,6 +8199,7 @@ export const zhCN: Dictionary = {
           unknown: "无法保存规则，请再试一次。",
         },
       },
+      backToList: "所有来源",
     },
     channels: {
       whatsappOfficial: {
@@ -8590,6 +8627,7 @@ export const zhCN: Dictionary = {
       saving: "保存中…",
       saveError: "无法保存，请再试一次。",
       clearanceTooHighError: "无法将管道机密层级设置为高于您的成员机密层级。",
+      backToList: "所有管道",
     },
     assistants: {
       newCta: "添加助理",
@@ -8627,6 +8665,8 @@ export const zhCN: Dictionary = {
       createSubmitting: "正在创建…",
       createCancel: "取消",
       createError: "无法创建助理。请再试一次。",
+      loadError: "无法加载助理。请刷新后再试一次。",
+      backToList: "所有助理",
     },
   },
   programmaticAccess: {
@@ -8800,6 +8840,7 @@ export const zhCN: Dictionary = {
     adding: "添加中…",
     byAuthor: "作者：",
     requiresPrefix: "需要：",
+    close: "关闭目录",
   },
   connectorToolList: {
     discovering: "正在探索工具…",
@@ -9317,13 +9358,13 @@ export const zhCN: Dictionary = {
     liveTranscriptLoading: "正在加载实时转录文稿...",
     liveTranscriptGap: "此处有{count}个实时转录文稿窗口不可用。",
     transcriptPending: "录音处理完成后,转录文稿会显示在这里。",
+    statusStagedTitle: "可以播放了",
+    statusStagedBody: "上传已完成。你可以播放并在笔记中添加时间戳。需要转录时，请让 Brian 处理。",
     statusProcessingTitle: "正在处理此录音",
     statusProcessingBody: "转录正在后台运行。完成后，转录文稿和行动项会显示在这里。",
     statusFailedTitle: "处理失败",
     statusFailedBody: "无法处理此录音。请打开录音重试。",
     statusFailedBodyDetail: "无法处理此录音: {detail}",
-    statusStagedTitle: "可以播放了",
-    statusStagedBody: "上传已完成。你可以播放并在笔记中添加时间戳。需要转录时，请让 Brian 处理。",
     statusAwaitingUploadTitle: "正在等待音频",
     statusAwaitingUploadBody: "录音的音频尚未完成上传。如果录音保存在你的设备上,请从录音器再次保存。",
     speakersLabel: "说话人:",
@@ -9373,8 +9414,8 @@ export const zhCN: Dictionary = {
     meetingRecording: "会议录音",
     micAndComputerAudio: "麦克风 + 电脑音频",
     finishing: "保存中...",
-    pause: "暂停",
     savingBackground: "正在后台保存录音或录像（{count} 个）。你可以继续聊天或开始下一段录制。",
+    pause: "暂停",
     resume: "继续",
     stop: "停止",
     discard: "丢弃",
@@ -9471,7 +9512,7 @@ export const zhCN: Dictionary = {
       railEmpty: "尚无实时会话",
       liveCount: "{count} 个运行中",
       selectTitle: "观看实时浏览器",
-      selectHint: "在左侧选择一个会话来观看或接管，或等待助理打开浏览器。",
+      selectHint: "选择一个实时会话来观看或接管，或等待助理打开浏览器。",
       liveView: "实时浏览器",
       profilesView: "浏览器身分",
       viewSwitcherAria: "浏览器查看",
@@ -9625,5 +9666,6 @@ export const zhCN: Dictionary = {
       proxyInvalid: "请输入有效的网址，或留空。",
       proxySave: "保存",
     },
+    typeIntoPage: "在页面中输入",
   },
 };

@@ -333,14 +333,15 @@ export function SuggestedView({
           placeholder={t.buildPlaceholder}
           /* The wrapping bar draws the focus ring (focus-within); the inner
              input opts out of the global :focus-visible box-shadow —
-             `outline-none` alone never silences it (globals.css → ":focus-visible"). */
-          className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
+             `outline-none` alone never silences it (globals.css → ":focus-visible").
+             16px on a phone (iOS zooms a smaller field on focus, M4). */
+          className="min-w-0 flex-1 bg-transparent text-[16px] text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground md:text-sm"
         />
         <button
           type="submit"
           disabled={!q.trim() || !selectedAssistantId}
           aria-label={tChat.send}
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground md:size-7"
         >
           <ArrowUp className="size-4" aria-hidden />
         </button>
@@ -362,7 +363,8 @@ export function SuggestedView({
                   type="button"
                   aria-label="Dismiss"
                   onClick={() => setNoteDismissed(true)}
-                  className="absolute right-2.5 top-2.5 grid size-6 place-items-center rounded-md text-muted-foreground/40 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                  // Always visible on touch, hover-revealed from `md` (M2); 36px on a phone.
+                  className="absolute right-2.5 top-2.5 grid size-9 place-items-center rounded-md text-muted-foreground/40 opacity-100 transition-opacity hover:bg-accent hover:text-foreground md:size-6 md:opacity-0 md:group-hover:opacity-100"
                 >
                   <X className="size-3.5" aria-hidden />
                 </button>

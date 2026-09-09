@@ -344,7 +344,7 @@ export function BrainSurfaceSkeleton() {
  */
 export function AppShellSkeleton() {
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background animate-fade-in">
+    <div className="flex h-dvh w-full overflow-hidden bg-background animate-fade-in">
       <aside className="hidden h-full w-64 shrink-0 flex-col gap-1 border-r border-sidebar-border doc-sidebar-surface p-2 md:flex">
         <div className="flex items-center gap-2 px-1 pb-2 pt-1">
           <Skeleton className="size-6 rounded-md" />

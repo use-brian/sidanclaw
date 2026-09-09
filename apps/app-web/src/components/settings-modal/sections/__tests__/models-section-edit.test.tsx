@@ -57,6 +57,7 @@ vi.mock("../llm-key-block", () => ({
 import { I18nProvider } from "@/lib/i18n/client";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 import { en } from "@/lib/i18n/dictionaries/en";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 import { ModelsSection } from "../models-section";
 
 const profile = {
@@ -99,6 +100,9 @@ function changeInput(input: HTMLInputElement, value: string): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The section paints from the module-level surface cache: each render
+  // below must fetch fresh, not paint the previous render's rows.
+  resetSurfaceCache();
   fetchModelMenu.mockResolvedValue({
     classes: {},
     defaults: [],
@@ -117,6 +121,7 @@ describe("[COMP:app-web/models-settings] custom profile editing", () => {
   // re-saving the profile is what re-runs the probe.
   it("says whether the endpoint reads images, and how to re-check", async () => {
     const render = async () => {
+      resetSurfaceCache();
       const container = document.createElement("div");
       const root = createRoot(container);
       await act(async () => {

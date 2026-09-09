@@ -29,7 +29,14 @@ import { BarChart3, CalendarDays, ChevronDown, ChevronUp, Inbox, Kanban, Mail, R
 import { OperatorTopbar } from "@/components/operator/operator-topbar";
 import { cn } from "@/lib/utils";
 import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
-import { crmConfigCacheKey, surfaceDataKey } from "@/lib/surface-prefetch";
+import {
+  approvalsCacheKey,
+  crmConfigCacheKey,
+  crmRegionCacheKey,
+} from "@/lib/surface-prefetch";
+import { useSurfaceContentCache } from "@/lib/offline/surface-content-cache";
+import { Skeleton } from "@/components/skeleton";
+import { OperatorBoardSkeleton } from "@/components/operator/operator-skeletons";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,11 +62,12 @@ import {
 import {
   fetchCrmDealBoardPages,
   fetchCrmEmailDrafts,
-  fetchCrmLookup,
   fetchCrmRecord,
   fetchCrmRecordPage,
   fetchCrmConfig,
+  fetchCrmDirectories,
   fetchCrmSummary,
+  isCrmConfigValue,
   isOpenStage,
   setCrmPipelineStage,
   setCrmRecordArchived,
@@ -70,6 +78,7 @@ import {
   type CrmData,
   type CrmDealBoardPages,
   type CrmDealRow,
+  type CrmDirectories,
   type CrmEmailDraft,
   type CrmFieldDefinition,
   type CrmPipeline,
@@ -88,6 +97,7 @@ import {
   contactNameById,
   crmColumnRegistry,
   crmCollectionHref,
+  crmDataFromDirectories,
   crmPageQuery,
   crmRecordHref,
   crmRecordMatchesRoute,
@@ -100,6 +110,7 @@ import {
   legacyStageForPipelineStage,
   normalizeCrmColumns,
   resolveDealPipelineStage,
+  resolveSelectedPipeline,
   searchFromCrmView,
   sortDeals,
   crmViewFromSearch,
@@ -117,10 +128,6 @@ import {
   listApprovals,
   type PendingApprovalRow,
 } from "@/lib/api/approvals";
-import {
-  APPROVALS_REFRESH_EVENT,
-  type ApprovalsRefreshDetail,
-} from "@/lib/approvals-events";
 import { crmEmailApprovalQueue } from "@/lib/crm-r2";
 import {
   AmountCell,
@@ -147,7 +154,7 @@ import { CrmActions } from "./crm-actions";
 import { CrmConfigDialog } from "./crm-config";
 import { CrmReportingDialog } from "./crm-reporting";
 import { CrmSavedViews } from "./crm-saved-views";
-import { CrmEmailReviewWorkspace } from "./crm-email-review";
+import { CrmEmailReviewSkeleton, CrmEmailReviewWorkspace } from "./crm-email-review";
 import { CrmMobileActions } from "./crm-mobile-actions";
 import { CrmSubmissionInbox } from "./operations/submission-inbox";
 import { CrmSegmentsPanel } from "./operations/segments-panel";
@@ -173,11 +180,22 @@ type CrmCollectionPayload = {
   boardPages: CrmDealBoardPages | null;
 };
 
-type CrmDirectories = {
-  contacts: Awaited<ReturnType<typeof fetchCrmLookup>>;
-  companies: Awaited<ReturnType<typeof fetchCrmLookup>>;
-  deals: Awaited<ReturnType<typeof fetchCrmLookup>>;
-};
+/** Stable empty queue, so a cold approvals slot does not re-key every memo. */
+const EMPTY_APPROVALS: PendingApprovalRow[] = [];
+
+/** Shape guard for a persisted collection copy (`surface-content-cache.ts`). */
+function isCrmCollectionPayload(value: unknown): value is CrmCollectionPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as Partial<CrmCollectionPayload>;
+  if (!CRM_SECTIONS.includes(payload.section as CrmSection)) return false;
+  if (!payload.query || typeof payload.query !== "object") return false;
+  const pageOk = payload.page === null
+    || (!!payload.page && typeof payload.page === "object" && Array.isArray(payload.page.items));
+  const boardOk = payload.boardPages === null
+    || (!!payload.boardPages && typeof payload.boardPages === "object"
+      && Object.values(payload.boardPages).every((page) => !!page && Array.isArray(page.items)));
+  return pageOk && boardOk && (payload.page !== null || payload.boardPages !== null);
+}
 
 function collectionRecords(payload: CrmCollectionPayload | null): CrmPublicRecord[] {
   if (!payload) return [];
@@ -196,25 +214,6 @@ function dataFromRecords(records: readonly CrmPublicRecord[]): CrmData {
     deals: records.filter((row): row is Extract<CrmPublicRecord, { kind: "deal" }> => row.kind === "deal"),
     contacts: records.filter((row): row is Extract<CrmPublicRecord, { kind: "contact" }> => row.kind === "contact"),
     companies: records.filter((row): row is Extract<CrmPublicRecord, { kind: "company" }> => row.kind === "company"),
-  };
-}
-
-function directoryData(directories: CrmDirectories | null): CrmData {
-  if (!directories) return { deals: [], contacts: [], companies: [] };
-  return {
-    contacts: directories.contacts.map((row) => ({
-      id: row.id, name: row.name, email: row.hint, phone: null, companyId: null,
-      tags: [], ownerId: null, customFields: {}, archivedAt: null, updatedAt: "",
-    })),
-    companies: directories.companies.map((row) => ({
-      id: row.id, name: row.name, domain: row.hint, tags: [], ownerId: null,
-      customFields: {}, archivedAt: null, updatedAt: "",
-    })),
-    deals: directories.deals.map((row) => ({
-      id: row.id, name: row.name, stage: "lead", amount: null, closeDate: null,
-      contactId: null, companyId: null, ownerId: null, source: row.hint,
-      customFields: {}, archivedAt: null, updatedAt: "",
-    })),
   };
 }
 
@@ -262,18 +261,28 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
   );
 
   // ── Independently cached data regions ─────────────────────────────────
-  const crmKey = surfaceDataKey("crm", workspaceId);
-  // Built in `surface-prefetch.ts` so the rail hover warms THIS key: the old
-  // warm filled the bare `crm:<wid>` slot, which nothing read.
+  // Every key is built in `surface-prefetch.ts` so the rail hover warms the
+  // string this mount reads (the old warm filled the bare `crm:<wid>` slot,
+  // which nothing read) and so the sidebar panel reads the SAME summary /
+  // lookups / drafts slots instead of fetching its own copy (N2).
   const configKey = crmConfigCacheKey(workspaceId);
-  const configResource = useCachedResource(configKey, () => fetchCrmConfig(workspaceId));
+  // Disk tier (plan §6.4): the config and the current collection survive a
+  // reload, so a cold load paints the last table under its real header while
+  // the network revalidates. Declared ABOVE the `useCachedResource` calls that
+  // read the same keys - the hook claims the key first.
+  const fetchConfig = useSurfaceContentCache({
+    key: configKey,
+    workspaceId,
+    resource: "crm:config",
+    isValue: isCrmConfigValue,
+    fetch: () => fetchCrmConfig(workspaceId),
+  });
+  const configResource = useCachedResource(configKey, fetchConfig);
   const config = configResource.data ?? null;
-  const selectedPipeline = useMemo<CrmPipeline | null>(() => {
-    if (!config || config.pipelines.length === 0) return null;
-    return config.pipelines.find((pipeline) => pipeline.id === view.pipeline)
-      ?? config.pipelines.find((pipeline) => pipeline.isDefault)
-      ?? config.pipelines[0];
-  }, [config, view.pipeline]);
+  const selectedPipeline = useMemo<CrmPipeline | null>(
+    () => resolveSelectedPipeline(config?.pipelines, view.pipeline),
+    [config, view.pipeline],
+  );
 
   const debouncedSearch = useDebouncedValue(view.q, 250);
   const openStageIds = useMemo(
@@ -296,24 +305,40 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
       .filter((stage) => view.closed || stage.category === "open")
       .map((stage) => stage.id);
   }, [selectedPipeline, view.closed, view.stages]);
-  const collectionKey = `${crmKey}:collection:${view.section}:${isBoardCollection ? "board" : "table"}:${JSON.stringify(collectionQuery)}:${boardStageIds.join(",")}`;
-  const collectionResource = useCachedResource<CrmCollectionPayload>(collectionKey, async () => {
-    if (isBoardCollection) {
-      const { kind: _kind, stage: _stage, cursor: _cursor, ...boardQuery } = collectionQuery;
+  const collectionKey = crmRegionCacheKey(
+    workspaceId,
+    "collection",
+    view.section,
+    isBoardCollection ? "board" : "table",
+    JSON.stringify(collectionQuery),
+    boardStageIds.join(","),
+  );
+  // ONE disk slot for the current collection: the envelope records the memory
+  // key, so a reload hydrates only the filter it was written under.
+  const fetchCollection = useSurfaceContentCache<CrmCollectionPayload>({
+    key: collectionKey,
+    workspaceId,
+    resource: "crm:collection",
+    isValue: isCrmCollectionPayload,
+    fetch: async () => {
+      if (isBoardCollection) {
+        const { kind: _kind, stage: _stage, cursor: _cursor, ...boardQuery } = collectionQuery;
+        return {
+          section: view.section,
+          query: collectionQuery,
+          page: null,
+          boardPages: await fetchCrmDealBoardPages(workspaceId, boardQuery, boardStageIds),
+        };
+      }
       return {
         section: view.section,
         query: collectionQuery,
-        page: null,
-        boardPages: await fetchCrmDealBoardPages(workspaceId, boardQuery, boardStageIds),
+        page: await fetchCrmRecordPage(workspaceId, collectionQuery),
+        boardPages: null,
       };
-    }
-    return {
-      section: view.section,
-      query: collectionQuery,
-      page: await fetchCrmRecordPage(workspaceId, collectionQuery),
-      boardPages: null,
-    };
+    },
   });
+  const collectionResource = useCachedResource<CrmCollectionPayload>(collectionKey, fetchCollection);
   const [retainedCollection, setRetainedCollection] = useState<CrmCollectionPayload | null>(null);
   useEffect(() => {
     if (collectionResource.data) setRetainedCollection(collectionResource.data);
@@ -321,21 +346,17 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
   const collection = collectionResource.data
     ?? (retainedCollection?.section === view.section ? retainedCollection : null);
 
-  const directoriesResource = useCachedResource<CrmDirectories>(`${crmKey}:lookups`, async () => {
-    const [contacts, companies, deals] = await Promise.all([
-      fetchCrmLookup(workspaceId, "contact"),
-      fetchCrmLookup(workspaceId, "company"),
-      fetchCrmLookup(workspaceId, "deal"),
-    ]);
-    return { contacts, companies, deals };
-  });
-  const summaryKey = `${crmKey}:summary:${selectedPipeline?.id ?? "all"}`;
+  const directoriesResource = useCachedResource<CrmDirectories>(
+    crmRegionCacheKey(workspaceId, "lookups"),
+    () => fetchCrmDirectories(workspaceId),
+  );
+  const summaryKey = crmRegionCacheKey(workspaceId, "summary", selectedPipeline?.id ?? "all");
   const summaryResource = useCachedResource<CrmSummary>(
     summaryKey,
     () => fetchCrmSummary(workspaceId, selectedPipeline?.id),
   );
   const emailContextResource = useCachedResource<CrmData>(
-    view.review === "email" ? `${crmKey}:email-context` : null,
+    view.review === "email" ? crmRegionCacheKey(workspaceId, "email-context") : null,
     async () => {
       const [contacts, companies, deals] = await Promise.all([
         fetchCrmRecordPage<Extract<CrmPublicRecord, { kind: "contact" }>>(workspaceId, { kind: "contact", limit: 100 }),
@@ -346,17 +367,17 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
     },
   );
   const emailDraftsResource = useCachedResource<CrmEmailDraft[]>(
-    `${crmKey}:email-drafts`,
+    crmRegionCacheKey(workspaceId, "email-drafts"),
     () => fetchCrmEmailDrafts(workspaceId),
   );
   const pageData = useMemo(() => dataFromRecords(collectionRecords(collection)), [collection]);
   const mergedData = useMemo(() => mergeCrmData(
-    mergeCrmData(directoryData(directoriesResource.data ?? null), emailContextResource.data ?? { deals: [], contacts: [], companies: [] }),
+    mergeCrmData(crmDataFromDirectories(directoriesResource.data), emailContextResource.data ?? { deals: [], contacts: [], companies: [] }),
     pageData,
   ), [directoriesResource.data, emailContextResource.data, pageData]);
   const data: CrmData | null = collection || emailContextResource.data ? mergedData : null;
 
-  const recordKey = `${crmKey}:record:${routeRecord?.id ?? "none"}`;
+  const recordKey = crmRegionCacheKey(workspaceId, "record", routeRecord?.id ?? "none");
   const recordResource = useCachedResource(
     recordKey,
     () => routeRecord ? fetchCrmRecord(workspaceId, routeRecord.id) : Promise.resolve(null),
@@ -372,9 +393,24 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
     void directoriesResource.refresh();
   }, [refreshCrm, configResource.refresh, directoriesResource.refresh, summaryResource.refresh]);
 
-  const [pendingApprovals, setPendingApprovals] = useState<PendingApprovalRow[]>([]);
-  const [approvalsLoading, setApprovalsLoading] = useState(true);
-  const [approvalsError, setApprovalsError] = useState(false);
+  // The approvals queue rides the shared `approvals:<wid>` slot: the sidebar
+  // panel and the Approvals surface read the same key, and the spine map marks
+  // it stale on APPROVALS_REFRESH_EVENT, so no listener of its own is needed.
+  const approvalsKey = approvalsCacheKey(workspaceId);
+  const approvalsResource = useCachedResource<PendingApprovalRow[]>(
+    approvalsKey,
+    () => listApprovals(workspaceId, { throwOnError: true }),
+  );
+  const pendingApprovals = approvalsResource.data ?? EMPTY_APPROVALS;
+  const approvalsLoading = approvalsResource.loading;
+  const approvalsError = approvalsResource.data === undefined && approvalsResource.error !== undefined;
+  const reloadApprovals = approvalsResource.refresh;
+  const setPendingApprovals = useCallback(
+    (updater: (previous: PendingApprovalRow[]) => PendingApprovalRow[]) => {
+      mutateSurfaceCache<PendingApprovalRow[]>(approvalsKey, updater);
+    },
+    [approvalsKey],
+  );
   const [roster, setRoster] = useState<FeedWorkspaceMember[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -383,29 +419,6 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
       .catch(() => { if (!cancelled) setRoster([]); });
     return () => { cancelled = true; };
   }, [workspaceId]);
-  const reloadApprovals = useCallback(async () => {
-    setApprovalsLoading(true);
-    setApprovalsError(false);
-    try {
-      setPendingApprovals(await listApprovals(workspaceId, { throwOnError: true }));
-    } catch {
-      setApprovalsError(true);
-    } finally {
-      setApprovalsLoading(false);
-    }
-  }, [workspaceId]);
-  useEffect(() => {
-    void reloadApprovals();
-    const handleRefresh = (event: Event) => {
-      const detail = (event as CustomEvent<ApprovalsRefreshDetail>).detail;
-      if (!detail?.workspaceId || detail.workspaceId === workspaceId) {
-        void reloadApprovals();
-      }
-    };
-    window.addEventListener(APPROVALS_REFRESH_EVENT, handleRefresh);
-    return () => window.removeEventListener(APPROVALS_REFRESH_EVENT, handleRefresh);
-  }, [reloadApprovals, workspaceId]);
-
   /** Optimistic patch against only the loaded keysets. */
   const setData = useCallback(
     (updater: (previous: CrmData) => CrmData) => {
@@ -1030,7 +1043,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
           >
             <DropdownMenu>
               <DropdownMenuTrigger
-                className="inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md bg-sidebar-accent/60 px-2 text-[12.5px] text-sidebar-accent-foreground md:hidden"
+                className="inline-flex h-11 max-w-40 items-center gap-1.5 rounded-md bg-sidebar-accent/60 px-2 text-[12.5px] text-sidebar-accent-foreground sm:h-7 md:hidden"
               >
                 {view.review === "email" && (
                   <Mail className="size-3.5 shrink-0" aria-hidden />
@@ -1252,7 +1265,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                 >
                   <SelectTrigger
                     aria-label={t.r2.pipeline}
-                    className="hidden h-7 w-36 border-sidebar-border bg-sidebar-accent/40 text-[12.5px] shadow-none sm:flex"
+                    className="hidden h-7 w-36 border-sidebar-border bg-sidebar-accent/40 text-[16px] shadow-none sm:flex md:text-[12.5px]"
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -1278,7 +1291,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                 aria-label={t.viewBoard}
                 onClick={() => setView({ view: "board" })}
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-7 max-sm:justify-center max-sm:px-0",
+                  "inline-flex h-11 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-11 max-sm:justify-center max-sm:px-0 sm:h-7",
                   view.view === "board"
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60",
@@ -1293,7 +1306,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                 aria-label={t.viewTable}
                 onClick={() => setView({ view: "table" })}
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-7 max-sm:justify-center max-sm:px-0",
+                  "inline-flex h-11 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-11 max-sm:justify-center max-sm:px-0 sm:h-7",
                   view.view === "table"
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60",
@@ -1385,8 +1398,8 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
 
         {view.review === "email" ? (
           data === null ? (
-            <div className="p-6 text-sm text-muted-foreground">
-              {emailContextResource.error !== undefined ? (
+            emailContextResource.error !== undefined ? (
+              <div className="p-6 text-sm text-muted-foreground">
                 <span>
                   {t.loadFailed}{" "}
                   <button
@@ -1401,8 +1414,12 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                     {t.retry}
                   </button>
                 </span>
-              ) : t.loading}
-            </div>
+              </div>
+            ) : (
+              // Cold entry paints the review's two-region geometry, never a
+              // sentence (instant-navigation contract N4).
+              <CrmEmailReviewSkeleton />
+            )
           ) : (
             <CrmEmailReviewWorkspace
               workspaceId={workspaceId}
@@ -1501,7 +1518,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                 owner: view.owner.length === 1 && view.owner[0] === me.id ? [] : [me.id],
               })}
               className={cn(
-                "inline-flex h-7 items-center rounded-full border px-2.5 text-xs transition-colors",
+                "inline-flex h-9 items-center rounded-full border px-2.5 text-xs transition-colors md:h-7",
                 view.owner.length === 1 && view.owner[0] === me.id
                   ? "border-foreground bg-foreground text-background"
                   : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -1522,7 +1539,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                     setView({ quick: active ? null : f, stages: [] })
                   }
                   className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors",
+                    "inline-flex h-9 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors md:h-7",
                     active
                       ? "border-foreground bg-foreground text-background"
                       : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -1650,11 +1667,16 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
           </div>
         )}
 
-        {/* Body. */}
-        <div className="min-h-0 flex-1 overflow-auto">
+        {/* Body. On a phone the board's 288px columns snap one per swipe. */}
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-auto",
+            view.section === "deals" && view.view === "board" && "max-md:snap-x max-md:snap-mandatory",
+          )}
+        >
           {collection === null ? (
-            <div className="p-6 text-sm text-muted-foreground">
-              {loadError ? (
+            loadError ? (
+              <div className="p-6 text-sm text-muted-foreground">
                 <span>
                   {t.loadFailed}{" "}
                   <button
@@ -1665,16 +1687,26 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
                     {t.retry}
                   </button>
                 </span>
-              ) : (
-                t.loading
-              )}
-            </div>
+              </div>
+            ) : view.section === "deals" && view.view === "board" ? (
+              // A cold collection (first entry, or a section switch - every
+              // filter within a section keeps the retained rows) paints
+              // skeleton rows inside the header that is already on screen,
+              // never a "Loading..." sentence (N4 / N5).
+              <OperatorBoardSkeleton />
+            ) : (
+              <CrmTableSkeleton columns={activeColumns} />
+            )
           ) : view.section === "deals" && view.view === "board" && !selectedPipeline ? (
-            <div className="p-6 text-sm text-muted-foreground">
-              {configResource.error !== undefined ? (
+            configResource.error !== undefined ? (
+              <div className="p-6 text-sm text-muted-foreground">
                 <span>{t.r2.configLoadFailed} <button type="button" className="underline" onClick={() => void configResource.refresh()}>{t.retry}</button></span>
-              ) : config === null ? t.r2.configLoading : t.r2.noPipelines}
-            </div>
+              </div>
+            ) : config === null ? (
+              <OperatorBoardSkeleton />
+            ) : (
+              <div className="p-6 text-sm text-muted-foreground">{t.r2.noPipelines}</div>
+            )
           ) : view.section === "deals" && view.view === "board" && !selectedGroupField ? (
             (summaryResource.data?.totals.deals ?? 0) === 0 ? (
               <div className="p-6 text-sm text-muted-foreground">{t.emptyDeals}</div>
@@ -1784,7 +1816,7 @@ export function CrmSurface({ workspaceId, routeRecord = null }: {
               onSecondary={closeRecord}
             />
           ) : recordBundle === undefined ? (
-            <RecordRouteState title={t.loading} />
+            <RecordRouteSkeleton />
           ) : recordBundle === null || !record ? (
             <RecordRouteState
               title={t.r2.recordNotFound}
@@ -1975,6 +2007,15 @@ function CrmGroupedRows<T extends { id: string; customFields?: Record<string, un
   </section>)}</div>;
 }
 
+/**
+ * Below `md` the table pans inside its box, so the Name cell (and its header)
+ * freezes at the left edge - past the 16px row padding and the 28px checkbox
+ * column - and row identity survives a scroll to Amount / Close / Owner.
+ * Desktop keeps the plain grid: a frozen cell there would punch a hole in the
+ * row's hover tint for no reach benefit.
+ */
+const STICKY_NAME_CELL = "max-md:sticky max-md:left-12 max-md:z-[1] max-md:bg-background";
+
 function crmGrid(columns: readonly CrmColumnDefinition[]): React.CSSProperties {
   return {
     gridTemplateColumns: `28px ${columns.map((column) =>
@@ -1997,7 +2038,10 @@ function TableHead({ columns, fields }: {
       {columns.map((column) => (
         <span
           key={column.key}
-          className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground/60"
+          className={cn(
+            "truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground/60",
+            column.key === "name" && STICKY_NAME_CELL,
+          )}
         >
           {crmColumnLabel(column.key, fields, t)}
         </span>
@@ -2086,7 +2130,7 @@ function DealsTable({
             />
             {columns.map((column) => {
               if (column.source === "custom") return <CustomValue key={column.key} row={row} column={column} referenceNames={referenceNames} />;
-              if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className="truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline">{row.name}</button>;
+              if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className={cn("truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline", STICKY_NAME_CELL)}>{row.name}</button>;
               if (column.key === "stage") return <PipelineStageCell key={column.key} stageId={resolveDealPipelineStage(row, pipeline)?.id ?? null} stages={pipeline.stages} onCommit={commits.dealPipelineStage(row)} />;
               if (column.key === "company") return <span key={column.key} className="truncate text-[12.5px] text-muted-foreground">{row.companyId ? companyNames.get(row.companyId) ?? "" : ""}</span>;
               if (column.key === "contact") return <span key={column.key} className="truncate text-[12.5px] text-muted-foreground">{row.contactId ? contactNames.get(row.contactId) ?? "" : ""}</span>;
@@ -2159,7 +2203,7 @@ function ContactsTable({
           />
           {columns.map((column) => {
             if (column.source === "custom") return <CustomValue key={column.key} row={row} column={column} referenceNames={referenceNames} />;
-            if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className="truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline">{row.name}</button>;
+            if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className={cn("truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline", STICKY_NAME_CELL)}>{row.name}</button>;
             if (column.key === "email") return <TextFieldCell key={column.key} value={row.email} placeholder={t.noValue} ariaLabel={t.emailLabel} inputType="email" onCommit={commits.contactEmail(row)} />;
             if (column.key === "phone") return <TextFieldCell key={column.key} value={row.phone} placeholder={t.noValue} ariaLabel={t.phoneLabel} inputType="tel" onCommit={commits.contactPhone(row)} />;
             if (column.key === "company") return <CompanyCell key={column.key} companyId={row.companyId} companies={companies} onCommit={commits.contactCompany(row)} />;
@@ -2227,7 +2271,7 @@ function CompaniesTable({
             />
             {columns.map((column) => {
               if (column.source === "custom") return <CustomValue key={column.key} row={row} column={column} referenceNames={referenceNames} />;
-              if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className="truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline">{row.name}</button>;
+              if (column.key === "name") return <button key={column.key} type="button" onClick={() => onOpenRecord(row)} title={t.openRecord} className={cn("truncate py-1 text-left text-[13.5px] font-medium text-foreground hover:underline", STICKY_NAME_CELL)}>{row.name}</button>;
               if (column.key === "domain") return <TextFieldCell key={column.key} value={row.domain} placeholder={t.noValue} ariaLabel={t.domainLabel} onCommit={commits.companyDomain(row)} />;
               if (column.key === "tags") return <TagsCell key={column.key} tags={row.tags} onCommit={commits.companyTags(row)} />;
               if (column.key === "owner") return <span key={column.key} className="truncate px-1.5 text-[12.5px] text-muted-foreground">{row.ownerId ? ownerNames.get(row.ownerId) ?? t.r2.memberUnavailable : t.r2.unassigned}</span>;
@@ -2247,6 +2291,76 @@ function CompaniesTable({
 
 // ── Shared bits ─────────────────────────────────────────────────────────
 
+/**
+ * Cold fallback for the table body (instant-navigation contract N4): rows on
+ * the SAME `crmGrid` the real rows use, so the swap-in is a fill, not a
+ * reflow. Rendered inside the surface chrome, which stays on screen.
+ */
+function CrmTableSkeleton({
+  columns,
+  rows = 8,
+}: {
+  columns: readonly CrmColumnDefinition[];
+  rows?: number;
+}) {
+  return (
+    <div className="min-w-max pb-2 animate-fade-in" aria-hidden data-crm-skeleton="table">
+      <div
+        className="grid items-center gap-1 border-b border-border/60 px-4 py-2"
+        style={crmGrid(columns)}
+      >
+        <span />
+        {columns.map((column) => (
+          <Skeleton key={column.key} className="h-2.5 w-14" />
+        ))}
+      </div>
+      {Array.from({ length: rows }).map((_, i) => (
+        <div
+          key={i}
+          className="grid items-center gap-1 px-4 py-2"
+          style={crmGrid(columns)}
+        >
+          <Skeleton className="size-5 rounded-[5px] md:size-4" />
+          {columns.map((column, c) => (
+            <Skeleton
+              key={column.key}
+              className="h-3.5"
+              style={{
+                width: `${c === 0 ? 48 + ((i * 13) % 40) : 30 + ((i * 7 + c * 11) % 45)}%`,
+              }}
+            />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Cold fallback for the record peek: the aside's frame with property rows. */
+function RecordRouteSkeleton() {
+  return (
+    <aside
+      aria-hidden
+      data-crm-skeleton="record"
+      className="absolute inset-y-0 right-0 z-20 flex w-full flex-col border-l border-border/60 bg-background shadow-xl animate-fade-in lg:max-w-[min(42rem,92vw)]"
+    >
+      <div className="flex items-center justify-end gap-1 border-b border-border/60 px-3 py-2">
+        <Skeleton className="size-7 rounded-md" />
+        <Skeleton className="size-7 rounded-md" />
+      </div>
+      <div className="space-y-4 px-5 py-4">
+        <Skeleton className="h-6 w-2/3" />
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-2">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3.5" style={{ width: `${40 + ((i * 19) % 50)}%` }} />
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 function RowCheckbox({
   checked,
   name,
@@ -2262,10 +2376,12 @@ function RowCheckbox({
       checked={checked}
       onCheckedChange={onToggle}
       aria-label={format(t.selectRowAria, { name })}
+      // Visible on touch, hover-revealed from `md` (responsive contract M2),
+      // and a 20px box below `md` so the bulk bar is reachable by sight.
       className={cn(
-        "transition-opacity",
+        "size-5 transition-opacity md:size-4",
         !checked &&
-          "opacity-0 group-hover/crm:opacity-100 group-focus-within/crm:opacity-100",
+          "opacity-100 md:opacity-0 md:group-hover/crm:opacity-100 md:group-focus-within/crm:opacity-100",
       )}
     />
   );
@@ -2386,7 +2502,7 @@ function BulkBar({
               <button
                 type="button"
                 disabled={busy}
-                className="inline-flex h-7 items-center rounded-md border border-border px-2 text-[12.5px] font-medium hover:bg-accent/60 disabled:opacity-50"
+                className="inline-flex h-9 items-center rounded-md border border-border px-2 text-[12.5px] font-medium hover:bg-accent/60 disabled:opacity-50 md:h-7"
               >
                 {t.bulkAddTag}
               </button>
@@ -2412,7 +2528,7 @@ function BulkBar({
                     if (name.length > 0) onAddTag(name);
                   }
                 }}
-                className="h-7 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+                className="h-9 w-full rounded-md border border-border bg-background px-2 text-[16px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40 md:h-7 md:text-[13px]"
               />
             </div>
           </DropdownMenuContent>
@@ -2422,7 +2538,7 @@ function BulkBar({
         type="button"
         aria-label={t.bulkClear}
         onClick={onClear}
-        className="ml-auto inline-flex h-7 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-accent/60"
+        className="ml-auto inline-flex h-9 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-accent/60 md:h-7"
       >
         {t.bulkClear}
       </button>
@@ -2455,7 +2571,7 @@ function BulkMenu({
           <button
             type="button"
             disabled={disabled}
-            className="inline-flex h-7 items-center rounded-md border border-border px-2 text-[12.5px] font-medium hover:bg-accent/60 disabled:opacity-50"
+            className="inline-flex h-9 items-center rounded-md border border-border px-2 text-[12.5px] font-medium hover:bg-accent/60 disabled:opacity-50 md:h-7"
           >
             {label}
           </button>

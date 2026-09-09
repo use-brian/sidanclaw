@@ -201,7 +201,7 @@ export function DocFindBar({ editor }: { editor: Editor | null }) {
             step(e.shiftKey ? -1 : 1);
           }
         }}
-        className="h-7 w-44 bg-transparent px-1.5 text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground sm:w-56"
+        className="h-9 w-44 bg-transparent px-1.5 text-[16px] text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground sm:w-56 md:h-7 md:text-sm"
       />
       <span
         aria-live="polite"

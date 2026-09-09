@@ -20,13 +20,21 @@
  *
  * Mobile: the sidebar toggle is hidden (the shell's fixed hamburger drives
  * the drawer there); a leading spacer keeps the strip clear of it. The
- * history arrows + tab strip stay, the strip scrolling horizontally.
+ * history arrows stay at 44px, so ~160px remain for tabs at 360px — a chip
+ * per tab is unreadable past two (responsive contract M8: the top bar must
+ * survive 360px). Below `md` the strip therefore shows label chips up to
+ * `PHONE_TAB_CHIPS` tabs, then collapses to the ACTIVE chip plus an
+ * "N tabs" menu listing every tab (switch / close). `collapseTabStrip` is
+ * the pure rule. Both strips render and CSS picks one, so the SSR markup
+ * never depends on the viewport.
  *
  * [COMP:app-web/doc-topbar]
  */
 
 import {
+  Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -38,6 +46,12 @@ import {
   X,
 } from "lucide-react";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   derivePageIcon,
   type NameOrigin,
   type ViewEntity,
@@ -45,7 +59,24 @@ import {
 } from "@/lib/api/views";
 import { PageIcon } from "./page-icon";
 import { type PanelId } from "@/lib/doc-page-url";
-import { useT } from "@/lib/i18n/client";
+import { format, useT } from "@/lib/i18n/client";
+
+/** Label chips the phone strip keeps before collapsing into the tabs menu. */
+export const PHONE_TAB_CHIPS = 2;
+
+/**
+ * The phone strip's collapse rule (pure). Up to `max` tabs render as label
+ * chips; past that only the ACTIVE tab keeps a chip and every tab (the active
+ * one included, so the list reads as the full set) moves into the menu.
+ */
+export function collapseTabStrip<T extends { isActive: boolean }>(
+  tabs: readonly T[],
+  max = PHONE_TAB_CHIPS,
+): { chips: T[]; menu: T[] } {
+  if (tabs.length <= max) return { chips: [...tabs], menu: [] };
+  const active = tabs.find((tab) => tab.isActive) ?? tabs[0];
+  return { chips: active ? [active] : [], menu: [...tabs] };
+}
 
 /** Permanent right-edge mist on every tab title: the tail dissolves into the
  *  tab over its last ~1.75rem so the text softens toward the edge instead of
@@ -159,18 +190,33 @@ export function DocTopBar({
           vertically clip the active tab's 1px merge overhang) — tabs shrink +
           fade their title instead of scrolling. */}
       <div className="flex min-w-0 flex-1 items-end self-stretch gap-1">
-        {tabs.map((tab) => (
-          <TabChip
-            key={tab.key}
-            tab={tab}
-            closable={tabs.length > 1}
-            onSwitch={() => onSwitchTab(tab.key)}
-            onClose={() => onCloseTab(tab.key)}
-            untitledLabel={t.breadcrumbUntitled}
-            newTabLabel={t.topbarNewTabLabel}
-            closeAria={t.topbarCloseTabAria}
-          />
-        ))}
+        {/* Desktop strip: one chip per tab. */}
+        <div className="hidden min-w-0 flex-1 items-end gap-1 self-stretch md:flex">
+          {tabs.map((tab) => (
+            <TabChip
+              key={tab.key}
+              tab={tab}
+              closable={tabs.length > 1}
+              onSwitch={() => onSwitchTab(tab.key)}
+              onClose={() => onCloseTab(tab.key)}
+              untitledLabel={t.breadcrumbUntitled}
+              newTabLabel={t.topbarNewTabLabel}
+              closeAria={t.topbarCloseTabAria}
+            />
+          ))}
+        </div>
+        {/* Phone strip: label chips up to PHONE_TAB_CHIPS, then the active chip
+            + an "N tabs" menu (responsive contract M8). */}
+        <PhoneTabStrip
+          tabs={tabs}
+          onSwitchTab={onSwitchTab}
+          onCloseTab={onCloseTab}
+          untitledLabel={t.breadcrumbUntitled}
+          newTabLabel={t.topbarNewTabLabel}
+          closeAria={t.topbarCloseTabAria}
+          menuLabel={format(t.topbarTabsMenu, { count: tabs.length })}
+          menuAria={t.topbarTabsMenuAria}
+        />
         <button
           type="button"
           onClick={onNewTab}
@@ -185,10 +231,119 @@ export function DocTopBar({
   );
 }
 
+/** Resolve a tab's display label (panel label, page title, or the blank-tab name). */
+function tabLabel(tab: TabView, untitledLabel: string, newTabLabel: string): string {
+  return tab.panel
+    ? (tab.title ?? "")
+    : tab.pageId
+      ? tab.title?.trim() || untitledLabel
+      : newTabLabel;
+}
+
+/**
+ * The below-`md` strip. Hidden on desktop by CSS (`md:hidden`), so the two
+ * strips coexist in the markup and hydration never depends on a media query.
+ */
+function PhoneTabStrip({
+  tabs,
+  onSwitchTab,
+  onCloseTab,
+  untitledLabel,
+  newTabLabel,
+  closeAria,
+  menuLabel,
+  menuAria,
+}: {
+  tabs: TabView[];
+  onSwitchTab: (key: string) => void;
+  onCloseTab: (key: string) => void;
+  untitledLabel: string;
+  newTabLabel: string;
+  closeAria: string;
+  menuLabel: string;
+  menuAria: string;
+}) {
+  const { chips, menu } = collapseTabStrip(tabs);
+  return (
+    <div
+      data-doc-tab-strip="phone"
+      className="flex min-w-0 flex-1 items-end gap-1 self-stretch md:hidden"
+    >
+      {chips.map((tab) => (
+        <TabChip
+          key={tab.key}
+          tab={tab}
+          compact
+          closable={tabs.length > 1}
+          onSwitch={() => onSwitchTab(tab.key)}
+          onClose={() => onCloseTab(tab.key)}
+          untitledLabel={untitledLabel}
+          newTabLabel={newTabLabel}
+          closeAria={closeAria}
+        />
+      ))}
+      {menu.length > 0 ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                data-no-drag
+                data-doc-tabs-menu
+                aria-label={menuAria}
+                title={menuAria}
+                className="inline-flex h-11 shrink-0 items-center gap-1 self-center rounded-md px-2 text-sm font-medium text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground aria-expanded:bg-sidebar-accent"
+              >
+                <span className="whitespace-nowrap">{menuLabel}</span>
+                <ChevronDown className="size-4" aria-hidden />
+              </button>
+            }
+          />
+          <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-1rem))]">
+            {menu.map((tab) => (
+              <DropdownMenuItem
+                key={tab.key}
+                className="min-h-11 gap-2"
+                onClick={() => onSwitchTab(tab.key)}
+              >
+                <span className="grid size-4 shrink-0 place-items-center text-[14px] leading-none">
+                  <TabIcon tab={tab} />
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  {tabLabel(tab, untitledLabel, newTabLabel)}
+                </span>
+                {tab.isActive ? (
+                  <Check className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                ) : null}
+                {tabs.length > 1 ? (
+                  <button
+                    type="button"
+                    aria-label={closeAria}
+                    title={closeAria}
+                    onClick={(e) => {
+                      // A row click switches; the ✕ inside it closes instead.
+                      e.stopPropagation();
+                      onCloseTab(tab.key);
+                    }}
+                    className="grid size-9 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+                  >
+                    <X className="size-3.5" aria-hidden />
+                  </button>
+                ) : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : null}
+    </div>
+  );
+}
+
 /** A single tab chip: leading icon, label, and a hover-revealed close ✕. */
 function TabChip({
   tab,
   closable,
+  compact = false,
   onSwitch,
   onClose,
   untitledLabel,
@@ -197,17 +352,15 @@ function TabChip({
 }: {
   tab: TabView;
   closable: boolean;
+  /** Phone-strip sizing: share the row instead of the fixed 200px width. */
+  compact?: boolean;
   onSwitch: () => void;
   onClose: () => void;
   untitledLabel: string;
   newTabLabel: string;
   closeAria: string;
 }) {
-  const label = tab.panel
-    ? (tab.title ?? "")
-    : tab.pageId
-      ? tab.title?.trim() || untitledLabel
-      : newTabLabel;
+  const label = tabLabel(tab, untitledLabel, newTabLabel);
 
   return (
     <div
@@ -215,11 +368,15 @@ function TabChip({
       // chip must stay clickable (switch / close), so it opts out of the drag.
       data-no-drag
       className={[
-        // Every tab is the SAME fixed width (`w-[200px]`) regardless of title
-        // length — short and long names get identical chips, the title fades at
-        // the edge via TITLE_FADE_MASK. `min-w-0` + default flex-shrink lets
-        // them compress equally (staying uniform) when the strip gets crowded.
-        "group/tab flex h-9 w-[200px] min-w-0 items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 text-sm",
+        // Every desktop tab is the SAME fixed width (`w-[200px]`) regardless of
+        // title length — short and long names get identical chips, the title
+        // fades at the edge via TITLE_FADE_MASK. `min-w-0` + default flex-shrink
+        // lets them compress equally (staying uniform) when the strip gets
+        // crowded. The phone chip shares the row instead (`flex-1`), capped so a
+        // lone active chip does not stretch across the whole bar.
+        compact
+          ? "group/tab flex h-9 min-w-0 flex-1 basis-0 max-w-[14rem] items-center gap-1.5 rounded-t-lg pl-2.5 pr-1 text-sm"
+          : "group/tab flex h-9 w-[200px] min-w-0 items-center gap-1.5 rounded-t-lg pl-3 pr-1.5 text-sm",
         tab.isActive
           ? // White tab with a top/side outline and NO bottom — pulled down 1px
             // (`-mb-px`) so it covers the bar's `border-b` and its white floor
@@ -250,8 +407,14 @@ function TabChip({
             onClose();
           }}
           className={[
-            "grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:opacity-100",
-            tab.isActive ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100",
+            // 32px on a phone (a secondary chip control, report B row 51), the
+            // desktop 20px glyph from `md`. An INACTIVE tab's ✕ is dimmed on
+            // touch rather than hidden (responsive contract M2: the hover
+            // reveal stays behind `md:`), so it is always tappable.
+            "grid size-8 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/10 hover:text-foreground focus-visible:opacity-100 md:size-5",
+            tab.isActive
+              ? "opacity-100"
+              : "opacity-60 md:opacity-0 md:group-hover/tab:opacity-100",
           ].join(" ")}
         >
           <X className="size-3.5" aria-hidden />

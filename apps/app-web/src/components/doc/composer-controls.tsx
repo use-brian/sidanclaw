@@ -191,7 +191,7 @@ export function ComposerControls({
           aria-pressed={researchMode}
           title={researchExhausted ? t.researchHintExhausted : t.researchHint}
           className={cn(
-            "inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40",
+            "inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-40 max-md:py-2.5",
             researchExhausted
               ? "bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 dark:text-amber-400"
               : researchMode
@@ -233,7 +233,7 @@ export function ComposerControls({
           size="sm"
           aria-label={t.modelLabel}
           disabled={aiTurnDisabled}
-          className="gap-1.5 border-transparent bg-muted/60 text-xs hover:bg-muted disabled:pointer-events-none disabled:opacity-40"
+          className="gap-1.5 border-transparent bg-muted/60 text-[16px] hover:bg-muted disabled:pointer-events-none disabled:opacity-40 md:text-xs"
         >
           <span className="font-medium">
             {customSelectedKey

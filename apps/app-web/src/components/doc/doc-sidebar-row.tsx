@@ -161,14 +161,16 @@ export function DocSidebarRow({
               e.stopPropagation();
               setMenuOpen((v) => !v);
             }}
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 hover:bg-muted hover:text-foreground group-hover/row:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
+            // Always visible at 32px below `md` (responsive contract M2: a
+            // finger has no hover), hover-revealed at 24px from `md`.
+            className="flex size-8 items-center justify-center rounded text-muted-foreground opacity-100 hover:bg-muted hover:text-foreground md:size-6 md:opacity-0 md:group-hover/row:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
             aria-expanded={menuOpen}
           >
             <MoreIcon />
           </button>
           {menuOpen && (
             <div
-              className="absolute right-0 top-7 z-20 min-w-[160px] overflow-hidden rounded-md border border-border bg-popover py-1 text-sm shadow-md"
+              className="absolute right-0 top-9 z-20 min-w-[160px] overflow-hidden rounded-md border border-border bg-popover py-1 text-sm shadow-md md:top-7"
               role="menu"
             >
               {row.state === "draft" && !inSavedSubtree && onSave && (

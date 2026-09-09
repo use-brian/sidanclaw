@@ -87,7 +87,7 @@ function FileAttachmentCard({ attachment }: { attachment: ChatFileAttachment }) 
         <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden />
       ) : (
         <Download
-          className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/file:opacity-100"
+          className="size-3.5 shrink-0 text-muted-foreground opacity-100 transition-opacity md:opacity-0 md:group-hover/file:opacity-100"
           aria-hidden
         />
       )}

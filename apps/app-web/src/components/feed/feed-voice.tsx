@@ -64,6 +64,7 @@ import {
   type FeedPlatform,
 } from "@/lib/feed-nav";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 import { format } from "@/lib/i18n/format";
 
 type FeedPageDict = ReturnType<typeof useT>["feedPage"];
@@ -771,7 +772,7 @@ export function FeedVoice({ scope }: { scope: VoiceScope }) {
             <div className="grid items-start gap-4 pb-4 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] xl:gap-6">
               <nav
                 aria-label={t.ruleNavigatorAria}
-                className="max-h-[50vh] space-y-5 overflow-y-auto pr-1 lg:sticky lg:top-5 lg:max-h-none lg:overflow-visible lg:pr-0"
+                className="max-h-[50dvh] space-y-5 overflow-y-auto pr-1 lg:sticky lg:top-5 lg:max-h-none lg:overflow-visible lg:pr-0"
               >
                 {voicePlatform !== "company" ? (
                   <section className="space-y-2">
@@ -917,7 +918,7 @@ function VoiceForm({
           rows={2}
           maxLength={500}
           placeholder={t.summaryPlaceholder}
-          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
         />
       </div>
 
@@ -928,7 +929,7 @@ function VoiceForm({
           onChange={set("detail")}
           rows={3}
           placeholder={t.detailPlaceholder}
-          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
         />
       </div>
 
@@ -1004,7 +1005,7 @@ function VoiceForm({
           value={form.tags}
           onChange={set("tags")}
           placeholder={t.tagsPlaceholder}
-          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
       </div>
 
@@ -1371,10 +1372,10 @@ function ImportHandleContent({
     <div className="space-y-3">
       <input
         type="text"
-        autoFocus
+        autoFocus={!isPhoneViewport()}
         placeholder={t.importHandlePlaceholder}
         onChange={(e) => onHandleChange(e.target.value)}
-        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none"
+        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none"
       />
       <div className="space-y-1">
         <div className="text-xs text-muted-foreground">{t.importSamplesPlatformLabel}</div>
@@ -1421,7 +1422,7 @@ function ImportSamplesContent({
         rows={8}
         placeholder={t.importSamplesPlaceholder}
         onChange={(e) => onSamplesChange(e.target.value)}
-        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none resize-y"
+        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none resize-y"
       />
       <div className="space-y-1">
         <div className="text-xs text-muted-foreground">{t.importSamplesPlatformLabel}</div>

@@ -494,6 +494,13 @@ export const en = {
     continueBrowsing: "Continue browsing",
   },
   workspaceSwitcher: {
+    deploymentCloud: "Cloud",
+    deploymentLocal: "Local",
+    deploymentSelfHosted: "Self-hosted",
+    deploymentSource: "Account from {url}",
+    useOwnDeployment: "Use own deployment",
+    openCloudAccount: "Open cloud account",
+
     loading: "Loading workspaces…",
     loadError: "Couldn't load workspaces.",
     empty: "No workspaces.",
@@ -1886,6 +1893,9 @@ export const en = {
       // Common
       close: "Close",
       apply: "Apply",
+      // Phone: the five controls collapse behind one button below `md`.
+      viewOptions: "View options",
+      viewOptionsAria: "Show view options",
     },
     // Notion-database column / row header menus (doc table). Passed into
     // the pure renderer as `tableLabels`; mirror of Table.tsx ColumnMenuLabels.
@@ -1980,6 +1990,10 @@ export const en = {
       collabOfflineUnavailableBody:
         "It hasn't been opened on this device yet. It will load when you're back online.",
     },
+    // Phone tab strip: past two tabs the strip collapses to the active chip
+    // plus an "N tabs" menu (doc-topbar.tsx).
+    topbarTabsMenu: "{count} tabs",
+    topbarTabsMenuAria: "Open tabs",
   },
   // ── Settings surface ─────────────────────────────────────────
   // Ported verbatim from apps/web's `settings` subtree so the
@@ -2797,6 +2811,7 @@ export const en = {
       wsManageError: "Could not update this connector. Try again.",
       wsToolPolicyTitle: "Workspace tool permissions",
       wsToolPolicyDesc: "Allow, ask, or block each tool for the whole workspace. The team assistant follows these settings.",
+      backToList: "All connectors",
     },
   },
   // ── Settings modal shell ─────────────────────────────────────
@@ -3112,6 +3127,7 @@ export const en = {
     revokeInviteConfirmBody: "The link sent to {email} stops working. You can send a new invitation later.",
     revokeInviteConfirm: "Revoke invitation",
     resend: "Resend",
+    rowActionsAria: "Actions for {name}",
   },
   // ── Workspace LLM provider key (BYO Gemini) ──────────────────
   // workspaceLlmKey — used by WorkspaceLlmKeySection in
@@ -3639,6 +3655,9 @@ export const en = {
         failed: "Failed",
         skipped: "Skipped",
       },
+      editLayout: "Edit layout",
+      editLayoutHint:
+        "On: drag moves steps. Off: tap selects a step and drag scrolls the board.",
     },
     builder: {
       newPageTitle: "New workflow",
@@ -4088,6 +4107,19 @@ export const en = {
       },
       // ── Match form caps (interpolated) ───────────────────────────────
       runRowDuration: "{value}",
+      // ── Non-drag wiring + phone controls (responsive contract M9) ────
+      connectToLabel: "Connect to",
+      connectToPlaceholder: "Add a next step",
+      connectToSearchPlaceholder: "Search steps",
+      connectToEmpty: "No other steps to connect",
+      connectToTrueLabel: "When true, connect to",
+      connectToFalseLabel: "When false, connect to",
+      connectToCurrent: "Currently: {names}",
+      enabledSwitch: "Enabled",
+      timezoneSearchPlaceholder: "Search time zones",
+      timezoneEmpty: "No matching time zone",
+      timezoneDefaultOption: "Default (UTC)",
+      timezoneCreate: "Use \"{query}\"",
     },
   },
   brainPage: {
@@ -4781,6 +4813,7 @@ export const en = {
       filtersMany: "{count} filters",
       clearFilters: "Clear",
       suggestedCount: "{count} suggested",
+      skillActionsAria: "Skill actions",
     },
     emptyState: {
       nudge: {
@@ -5271,6 +5304,7 @@ export const en = {
       validation: "Token must start with xoxb- and secret must be 16+ chars",
       show: "Show",
       hide: "Hide",
+      close: "Close Slack setup",
     },
   },
   // ── Home operator app-bar (tasks-operator-surface §2) ──
@@ -6244,6 +6278,9 @@ export const en = {
     typeTitleToDelete: "Type this exact title to confirm permanent deletion:",
     titleConfirmationPlaceholder: "Enter the title shown above",
     deprecateTemplate: "Deprecate template",
+    editorActions: "Editor actions",
+    compactTextTools: "Text",
+    editText: "Edit text",
   },
   // ── Chat operator app ([COMP:app-web/chat-surface]) ──
   // ── Custom Home apps ([COMP:app-web/home-app-frame]) ──
@@ -6951,6 +6988,7 @@ export const en = {
       discardIdeaBody: "\"{text}\" leaves the backlog.",
       discardIdeaConfirm: "Discard idea",
       ideaSaveFailed: "Couldn't save the idea.",
+      dateLabel: "Date",
     },
     postEditor: {
       savedLocally: "Saved on this device. Sync pending.",
@@ -7065,6 +7103,7 @@ export const en = {
       articleDescriptionPlaceholder: "A short summary for the link card",
       articleFallbackTitle: "Article title",
       articleFallbackDescription: "Your article description will appear here.",
+      refineOpenAria: "Open the refine chat",
     },
     posts: {
       filterAria: "Filter posts by status",
@@ -8114,6 +8153,7 @@ export const en = {
         budgetLabel: "Weekly proposal budget",
         budgetHelp: "Hard cap on proposals per rolling 7 days. The agent stops until the window slides.",
       },
+      backToList: "All sources",
     },
     ingestRules: {
       statusNote: "Enabling a source stages its routing rules now. Live event delivery is still rolling out per source. Until it lands, an enabled source is staged but nothing from it is ingested yet.",
@@ -8348,6 +8388,7 @@ export const en = {
           unknown: "Couldn't save the rule. Try again.",
         },
       },
+      backToList: "All sources",
     },
     channels: {
       whatsappOfficial: {
@@ -8762,6 +8803,7 @@ export const en = {
       saving: "Saving…",
       saveError: "Couldn't save. Try again.",
       clearanceTooHighError: "You can't set the channel's clearance higher than your own member clearance.",
+      backToList: "All channels",
     },
     assistants: {
       newCta: "New assistant",
@@ -8784,6 +8826,8 @@ export const en = {
       createSubmitting: "Creating…",
       createCancel: "Cancel",
       createError: "Couldn't create the assistant. Try again.",
+      loadError: "Couldn't load assistants. Refresh to try again.",
+      backToList: "All assistants",
     },
   },
   programmaticAccess: {
@@ -8967,6 +9011,7 @@ export const en = {
     adding: "Adding...",
     byAuthor: "by",
     requiresPrefix: "Requires:",
+    close: "Close directory",
   },
 
   connectorToolList: {
@@ -9520,13 +9565,13 @@ export const en = {
     liveTranscriptLoading: "Loading the live transcript...",
     liveTranscriptGap: "{count} live transcript window(s) were unavailable here.",
     transcriptPending: "The transcript will appear here once the recording finishes processing.",
+    statusStagedTitle: "Ready to play",
+    statusStagedBody: "The upload is complete. You can play it and add timestamps to your notes. Ask Brian to process it when you want a transcript.",
     statusProcessingTitle: "Processing this recording",
     statusProcessingBody:
       "Transcription is running in the background. The transcript and action items appear here when it finishes.",
     statusFailedTitle: "Processing failed",
     statusFailedBody: "This recording could not be processed. Open the recording to retry.",
-    statusStagedTitle: "Ready to play",
-    statusStagedBody: "The upload is complete. You can play it and add timestamps to your notes. Ask Brian to process it when you want a transcript.",
     statusFailedBodyDetail: "This recording could not be processed: {detail}",
     statusAwaitingUploadTitle: "Waiting for the audio",
     statusAwaitingUploadBody:
@@ -9585,8 +9630,8 @@ export const en = {
     meetingRecording: "Meeting recording",
     micAndComputerAudio: "Mic + computer audio",
     finishing: "Saving...",
-    pause: "Pause",
     savingBackground: "Saving recordings in the background ({count}). You can keep chatting or record again.",
+    pause: "Pause",
     resume: "Resume",
     stop: "Stop",
     discard: "Discard",
@@ -9703,7 +9748,7 @@ export const en = {
       liveCount: "{count} live",
       selectTitle: "Watch a live browser",
       selectHint:
-        "Pick a session on the left to watch or take over, or wait for an assistant to open one.",
+        "Pick a live session to watch or take over, or wait for an assistant to open one.",
       liveView: "Live browser",
       profilesView: "Browser profiles",
       viewSwitcherAria: "Browser view",
@@ -9884,6 +9929,7 @@ export const en = {
       proxyInvalid: "Enter a valid URL, or leave this blank.",
       proxySave: "Save",
     },
+    typeIntoPage: "Type into the page",
   },
 };
 

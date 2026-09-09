@@ -188,7 +188,10 @@ describe("[COMP:app-web/crm-email-review] dedicated review workspace", () => {
     expect([...contextRail.querySelectorAll("[data-email-crm-profile], [data-email-draft-list]")])
       .toEqual([profile, draftList]);
     expect(profile.classList.contains("lg:flex-1")).toBe(false);
-    expect(reviewActions.classList.contains("pb-20")).toBe(true);
+    // Pinned to the bottom below `lg` (safe-area padding); in flow with the
+    // dock-clearing `pb-20` from `lg`.
+    expect(reviewActions.classList.contains("sticky")).toBe(true);
+    expect(reviewActions.classList.contains("lg:pb-20")).toBe(true);
     expect(reviewMain.textContent).toContain("Project update");
     expect(reviewMain.textContent).toContain("Could we start next week?");
     expect(reviewMain.querySelector('[role="separator"][aria-orientation="vertical"]')).toBeTruthy();

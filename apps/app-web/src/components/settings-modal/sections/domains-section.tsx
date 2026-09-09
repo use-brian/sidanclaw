@@ -23,6 +23,9 @@ import { Dices, Globe, Mail } from "lucide-react";
 import { useT, format } from "@/lib/i18n/client";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Skeleton } from "@/components/skeleton";
+import { useCachedResource } from "@/lib/surface-cache";
+import { settingsDomainsCacheKey } from "@/lib/surface-prefetch";
 import {
   checkSubdomainAvailability,
   checkWorkspaceDomain,
@@ -261,7 +264,7 @@ export function SubdomainRow({
                 }
               }}
               aria-label={t.subdomainHeading}
-              className="min-w-0 flex-1 bg-transparent px-2 py-1 text-sm outline-none focus-visible:shadow-none"
+              className="min-w-0 flex-1 bg-transparent px-2 py-1 text-[16px] outline-none focus-visible:shadow-none md:text-sm"
             />
             <span className="shrink-0 pr-2 text-sm text-muted-foreground">{apexSuffix}</span>
           </div>
@@ -284,7 +287,7 @@ export function SubdomainRow({
               type="button"
               onClick={() => void save()}
               disabled={state === "saving" || state === "checking" || state === "taken" || state === "reserved" || state === "invalid"}
-              className="rounded px-2 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3font-medium hover:bg-muted disabled:opacity-50"
             >
               {t.save}
             </button>
@@ -295,7 +298,7 @@ export function SubdomainRow({
                 setLabel(row.subdomainLabel ?? "");
                 setErr(null);
               }}
-              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-muted-foreground hover:bg-muted"
             >
               {t.cancel}
             </button>
@@ -305,21 +308,21 @@ export function SubdomainRow({
             <button
               type="button"
               onClick={() => setEditing(true)}
-              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               {t.rename}
             </button>
             <button
               type="button"
               onClick={() => void reset()}
-              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               {t.reset}
             </button>
             <button
               type="button"
               onClick={() => void release()}
-              className="rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-destructive hover:bg-destructive/10"
             >
               {t.release}
             </button>
@@ -438,7 +441,7 @@ export function SubdomainClaim({
               }
             }}
             aria-label={t.subdomainHeading}
-            className="min-w-0 flex-1 bg-transparent px-3 py-1.5 text-sm outline-none focus-visible:shadow-none"
+            className="min-w-0 flex-1 bg-transparent px-3 py-1.5 text-[16px] outline-none focus-visible:shadow-none md:text-sm"
           />
           <span className="shrink-0 pr-2 text-sm text-muted-foreground">.{apex}</span>
           <button
@@ -524,7 +527,7 @@ export function CustomDomainRow({
               type="button"
               onClick={() => void check()}
               disabled={checking}
-              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
             >
               {checking ? shareT.site.checking : shareT.site.recheck}
             </button>
@@ -532,7 +535,7 @@ export function CustomDomainRow({
           <button
             type="button"
             onClick={() => void remove()}
-            className="rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+            className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-destructive hover:bg-destructive/10"
           >
             {shareT.site.removeDomain}
           </button>
@@ -606,7 +609,7 @@ export function ConnectDomainForm({
             }
           }}
           placeholder={shareT.site.domainPlaceholder}
-          className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none"
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-[16px] outline-none md:text-sm"
         />
         <button
           type="button"
@@ -729,7 +732,7 @@ export function EmailDomainRow({
               type="button"
               onClick={() => void verify()}
               disabled={busy !== null}
-              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+              className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
             >
               {busy === "verify" ? t.emailVerifying : t.emailVerify}
             </button>
@@ -738,7 +741,7 @@ export function EmailDomainRow({
             type="button"
             onClick={() => void remove()}
             disabled={busy !== null}
-            className="rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+            className="rounded px-2 py-1 text-xs max-sm:min-h-11 max-sm:px-3text-destructive hover:bg-destructive/10 disabled:opacity-50"
           >
             {busy === "remove" ? t.emailRemoving : t.emailRemove}
           </button>
@@ -808,7 +811,7 @@ export function EmailDomainsPanel({
             }}
             aria-label={t.emailHeading}
             placeholder={t.emailPlaceholder}
-            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none"
+            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-[16px] outline-none md:text-sm"
           />
           <button
             type="button"
@@ -847,34 +850,54 @@ export function DomainsSection() {
   const t = useT().chrome.settingsModal.domains;
   const params = useParams<{ workspaceId?: string }>();
   const workspaceId = params?.workspaceId ?? "";
-  const [state, setState] = useState<LoadState>({ kind: "loading" });
-
-  const reload = useCallback(async () => {
-    if (!workspaceId) return;
-    try {
+  // Paints from the surface cache (instant-navigation contract N1): reopening
+  // the section renders the last-known rows on its first frame and
+  // revalidates behind them; only a cold open shows the skeleton. Domains,
+  // pages and the email probe load in parallel inside ONE fetcher (N7). No
+  // spine primitive names a domain, so every mutation below awaits
+  // `refresh()` (the authoritative reload into the same key).
+  const resource = useCachedResource(
+    workspaceId ? settingsDomainsCacheKey(workspaceId) : null,
+    async () => {
       const [r, pages, emailProbe] = await Promise.all([
         listWorkspaceDomains(workspaceId),
         listViews({ workspaceId, state: "saved" }).catch(() => [] as ViewListRow[]),
         probeEmailInboxes(workspaceId).catch(() => ({ configured: false }) as const),
       ]);
-      setState({
-        kind: "ready",
+      return {
         domains: r.domains,
         subdomainApex: r.subdomainApex,
         pages,
         emailDomains: emailProbe.configured ? emailProbe.domains : null,
-      });
-    } catch {
-      setState({ kind: "error" });
-    }
-  }, [workspaceId]);
+      };
+    },
+  );
+  const { refresh } = resource;
+  const state: LoadState = resource.data
+    ? { kind: "ready", ...resource.data }
+    : resource.error !== undefined
+      ? { kind: "error" }
+      : { kind: "loading" };
 
-  useEffect(() => {
-    void reload();
-  }, [reload]);
+  const reload = useCallback(async () => {
+    if (!workspaceId) return;
+    await refresh();
+  }, [refresh, workspaceId]);
 
   if (state.kind === "loading") {
-    return <div className="text-sm text-muted-foreground">...</div>;
+    // Cold open only: the three sections' geometry, never a sentence (N4).
+    return (
+      <div aria-busy="true" data-testid="domains-skeleton" className="space-y-6">
+        <Skeleton className="h-6 w-32" />
+        {[0, 1, 2].map((i) => (
+          <section key={i} className="border-t border-border pt-6 space-y-3">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-3 w-64 max-w-full" />
+            <Skeleton className="h-14 w-full rounded-md" />
+          </section>
+        ))}
+      </div>
+    );
   }
   if (state.kind === "error") {
     return <p className="text-sm text-destructive">{t.loadError}</p>;

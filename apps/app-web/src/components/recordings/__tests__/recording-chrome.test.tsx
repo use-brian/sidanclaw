@@ -12,7 +12,7 @@ vi.mock("@/lib/api/recordings", () => ({
   getRecording: (...args: unknown[]) => getRecording(...args),
   updateRecordingParticipants: vi.fn(),
 }));
-vi.mock("next/link", () => ({ default: ({ children }: { children: unknown }) => <>{children}</> }));
+vi.mock("next/link", () => ({ default: ({ children, href }: { children: React.ReactNode; href: string }) => <a href={href}>{children}</a> }));
 vi.mock("@/lib/recordings/recording-player-context", () => ({
   useRecordingPlayer: () => ({ transcriptFocus: null, clearTranscriptFocus: vi.fn() }),
   RecordingVideoStage: () => <div data-testid="video-stage" />,
@@ -80,7 +80,7 @@ describe("[COMP:app-web/recording-chrome] participant refresh", () => {
     document.body.appendChild(container);
     root = createRoot(container);
     await act(async () => {
-      root!.render(<RecordingChrome recordingId="rec-1" workspaceId="ws-1" title="Meeting" />);
+      root!.render(<RecordingChrome recordingId="rec-1" workspaceId="ws-1" title="Meeting" pageId="page-1" />);
     });
   }
 
@@ -100,6 +100,12 @@ describe("[COMP:app-web/recording-chrome] participant refresh", () => {
       }
     },
   );
+
+  it.each(["processing", "processed"])("keeps the originating page on the %s recording link", async (status) => {
+    getRecording.mockResolvedValue({ ...SUMMARY, status });
+    await mount();
+    expect(container!.querySelector("a")?.getAttribute("href")).toBe("/w/ws-1/recordings/rec-1?page=page-1");
+  });
 
   it("does not show a player before the upload is proven", async () => {
     getRecording.mockResolvedValue({ ...SUMMARY, status: "awaiting_upload", durationMs: null });

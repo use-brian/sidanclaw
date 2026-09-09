@@ -14,6 +14,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n/client";
 import { en } from "@/lib/i18n/dictionaries/en";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -56,15 +57,21 @@ async function mount(search: string) {
       </I18nProvider>,
     );
   });
-  // Let the store fetches settle so nothing passes on timing.
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
+  // Let the store fetches settle so nothing passes on timing. The panel reads
+  // through the surface cache, whose loads land over a chain of macrotasks
+  // (reachability, then the gated drafts read), so this drains several ticks.
+  for (let i = 0; i < 6; i += 1) {
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+  }
   return host.textContent ?? "";
 }
 
 beforeEach(() => {
+  // The cache is module-level: a warm slot from the previous test would paint
+  // before this test's mocks are ever asked.
+  resetSurfaceCache();
   window.localStorage.clear();
   window.localStorage.setItem(
     "shopify:runs:ws-1",

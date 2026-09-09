@@ -12,7 +12,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
+import { useWorkspaceContext } from "@/lib/workspace-context";
+import { useCachedResource } from "@/lib/surface-cache";
+import { codexProviderCacheKey } from "@/lib/surface-prefetch";
 import {
   disconnectCodex,
   getCodexProviderStatus,
@@ -25,32 +29,43 @@ import {
 
 export function CodexProviderCard() {
   const t = useT().chrome.settingsModal.codexProvider;
-  const [status, setStatus] = useState<CodexProviderStatus | null>(null);
+  const { workspaceId } = useWorkspaceContext();
+  // Masked status only, from the surface cache (instant-navigation contract
+  // N1): reopening Providers paints the last-known connection on its first
+  // frame and revalidates behind it; the login poll and the Refresh control
+  // are the key's `refresh()`. The install-wide runtime is keyed under the
+  // workspace like every other Settings block (workspace-first keys). No
+  // token or raw account object is ever in the cache: the API masks it.
+  const resource = useCachedResource<CodexProviderStatus>(
+    workspaceId ? codexProviderCacheKey(workspaceId) : null,
+    getCodexProviderStatus,
+  );
+  const status = resource.data ?? null;
+  const loading = resource.loading;
+  const loadFailed = resource.error !== undefined && resource.data === undefined;
   const [browserLogin, setBrowserLogin] = useState<BrowserLogin | null>(null);
   const [deviceLogin, setDeviceLogin] = useState<DeviceCodeLogin | null>(null);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const error = actionError || (loadFailed ? t.error : "");
+  const setError = setActionError;
 
   const refresh = useCallback(async () => {
-    try {
-      const next = await getCodexProviderStatus();
-      setStatus(next);
-      setError("");
-      if (next.account.connected) {
-        setBrowserLogin(null);
-        setDeviceLogin(null);
-      }
-    } catch {
+    const next = await resource.refresh();
+    if (next === undefined) {
       setError(t.error);
-    } finally {
-      setLoading(false);
+      return;
     }
-  }, [t.error]);
+    setError("");
+  }, [resource, t.error]);
 
+  // A connected status (from any load) ends the pending login handoff.
+  const connected = status?.account.connected === true;
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!connected) return;
+    setBrowserLogin(null);
+    setDeviceLogin(null);
+  }, [connected]);
 
   useEffect(() => {
     if ((!browserLogin && !deviceLogin) || status?.account.connected) return;
@@ -110,8 +125,6 @@ export function CodexProviderCard() {
     }
   }
 
-  const connected = status?.account.connected === true;
-
   return (
     <div className="border-t border-border pt-6 space-y-4">
       <div>
@@ -120,7 +133,14 @@ export function CodexProviderCard() {
       </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">{t.loading}</div>
+        // Cold open only: the status pill + the action row's geometry (N4).
+        <div aria-busy="true" data-testid="codex-skeleton" className="space-y-3">
+          <Skeleton className="h-9 w-full rounded-lg" />
+          <div className="flex gap-2">
+            <Skeleton className="h-7 w-24 rounded-md" />
+            <Skeleton className="h-7 w-24 rounded-md" />
+          </div>
+        </div>
       ) : status?.runtimeAvailable === false ? (
         <div className="space-y-3">
           <div className="rounded-lg bg-muted/30 px-3 py-2 text-[13px] text-muted-foreground">

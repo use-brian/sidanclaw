@@ -138,13 +138,16 @@ export function OperatorTopbar({
       </button>
       <div className="w-12 shrink-0 md:hidden" aria-hidden />
 
-      {/* Browser history — back / forward. */}
+      {/* Browser history — back / forward. Hidden below `sm` (the brain /
+          studio topbar rule, responsive contract M8): at 360px the pair plus
+          the hamburger spacer pushed a surface's view toggles past the right
+          edge, and the phone's own back gesture already covers history. */}
       <button
         type="button"
         onClick={() => router.back()}
         aria-label={docCopy.topbarBackAria}
         title={docCopy.topbarBackAria}
-        className={iconBtnCls}
+        className={cn(iconBtnCls, "max-sm:hidden")}
       >
         <ChevronLeft className="size-4" aria-hidden />
       </button>
@@ -153,7 +156,7 @@ export function OperatorTopbar({
         onClick={() => router.forward()}
         aria-label={docCopy.topbarForwardAria}
         title={docCopy.topbarForwardAria}
-        className={cn(iconBtnCls, "mr-1")}
+        className={cn(iconBtnCls, "mr-1 max-sm:hidden")}
       >
         <ChevronRight className="size-4" aria-hidden />
       </button>

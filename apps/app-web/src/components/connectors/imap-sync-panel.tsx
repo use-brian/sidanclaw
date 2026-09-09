@@ -396,12 +396,12 @@ export function ImapSyncPanel({ instanceId }: { instanceId?: string } = {}) {
             }}
             placeholder={tm.sendAsPlaceholder}
             disabled={aliasSaving}
-            className="flex-1 min-w-0 text-xs bg-background border border-border rounded-lg px-2.5 py-1 disabled:opacity-50"
+            className="flex-1 min-w-0 text-[16px] md:text-xs bg-background border border-border rounded-lg px-2.5 py-1 disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={aliasSaving || !aliasDraft.trim()}
-            className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-50 transition-colors"
+            className="min-h-11 sm:min-h-0 text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-50 transition-colors"
           >
             {tm.sendAsAdd}
           </button>

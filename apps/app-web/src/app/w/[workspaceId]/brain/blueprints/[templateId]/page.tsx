@@ -80,6 +80,9 @@ import {
 import { requestBrainRefresh } from "@/lib/brain-events";
 import { docPagePath } from "@/lib/doc-page-url";
 import { useIsOffline } from "@/lib/offline/use-offline-sync";
+import { useCachedResource } from "@/lib/surface-cache";
+import { brainBlueprintCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import { useGenerateFromBrain } from "@/components/brain/use-generate-from-brain";
 import {
   createPageAction,
@@ -134,41 +137,67 @@ function BlueprintEditorInner({ templateId }: { templateId: string }) {
     setSection("blueprints");
   }, [setSection]);
 
-  // undefined = loading, null = not found, value = loaded.
-  const [template, setTemplate] = useState<CustomPageTemplate | null | undefined>(
-    undefined,
+  // Memory tier over the template (instant-navigation contract N1): a revisit
+  // paints the last-known blueprint on the first frame and revalidates behind
+  // it; the spine map marks `brain-blueprint:<wid>:` stale on
+  // BRAIN_REFRESH_EVENT (this page fires `requestBrainRefresh` after its own
+  // writes). `getCustomPageTemplate` throws on a non-OK response, so a cold
+  // `error` is not-found.
+  const cached = useCachedResource<CustomPageTemplate>(
+    activeId ? brainBlueprintCacheKey(activeId, templateId) : null,
+    () => getCustomPageTemplate(activeId ?? "", templateId),
   );
-
-  const reload = useCallback(async () => {
-    if (!activeId) return;
-    try {
-      setTemplate(await getCustomPageTemplate(activeId, templateId));
-    } catch {
-      setTemplate(null);
-    }
-  }, [activeId, templateId]);
-
+  // The contract is an EDITABLE DRAFT: a revalidated row is adopted into the
+  // editor only while its drafts are clean, or right after the editor's own
+  // save asked for it (`adoptNextRef`) - a hand edit in flight is never
+  // overwritten by a signal.
+  const [template, setTemplate] = useState<CustomPageTemplate | undefined>(undefined);
+  const dirtyRef = useRef(false);
+  const adoptNextRef = useRef(false);
   useEffect(() => {
-    setTemplate(undefined);
-    void reload();
-  }, [reload]);
+    if (cached.data === undefined) return;
+    const force = adoptNextRef.current;
+    adoptNextRef.current = false;
+    const next = cached.data;
+    setTemplate((prev) => (prev === undefined || force || !dirtyRef.current ? next : prev));
+  }, [cached.data]);
+  const refresh = cached.refresh;
+  const onSaved = useCallback(() => {
+    adoptNextRef.current = true;
+    void refresh();
+  }, [refresh]);
+  const onDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
+  }, []);
+  const resolved: CustomPageTemplate | null | undefined =
+    template !== undefined
+      ? template
+      : cached.error !== undefined && cached.data === undefined
+        ? null
+        : undefined;
 
-  if (template === undefined) {
+  if (resolved === undefined) {
+    // Nothing cached: a header skeleton in the topbar tail + the document
+    // column's geometry (N4), never a "…" placeholder.
     return (
       <>
         <BrainTopbar
           workspaceId={activeId ?? ""}
           tailSection="blueprints"
-          tail={<span className="text-muted-foreground">…</span>}
+          tail={<Skeleton className="h-3.5 w-32" />}
         />
-        <div className="mx-auto w-full max-w-3xl px-6 py-10 text-sm text-muted-foreground">
-          …
+        <div className="mx-auto w-full max-w-3xl px-6 py-8 flex flex-col gap-4" aria-busy>
+          <Skeleton className="h-8 w-2/3" />
+          <Skeleton className="h-4 w-1/2" />
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="mt-2 h-20 w-full rounded-lg" />
+          ))}
         </div>
       </>
     );
   }
 
-  if (template === null) {
+  if (resolved === null) {
     return (
       <>
         <BrainTopbar
@@ -188,9 +217,10 @@ function BlueprintEditorInner({ templateId }: { templateId: string }) {
   return (
     <BlueprintEditor
       workspaceId={activeId!}
-      template={template}
+      template={resolved}
       backHref={backHref}
-      onSaved={() => void reload()}
+      onSaved={onSaved}
+      onDirtyChange={onDirtyChange}
     />
   );
 }
@@ -202,11 +232,15 @@ function BlueprintEditor({
   template,
   backHref,
   onSaved,
+  onDirtyChange,
 }: {
   workspaceId: string;
   template: CustomPageTemplate;
   backHref: string;
   onSaved: () => void;
+  /** Reports the unsaved-diff state so the cache adoption gate above can
+   *  hold a revalidated row back while a hand edit is in flight. */
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const t = useT();
   const router = useRouter();
@@ -232,6 +266,9 @@ function BlueprintEditor({
 
   const patch = buildTemplatePatch(template, draft);
   const dirty = Object.keys(patch).length > 0;
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
   const issues = useMemo(() => validateDraft(draft), [draft]);
 
   // Capture-kind display labels (entityRef labels + the capture-only memory).
@@ -572,8 +609,12 @@ function FieldCard({
     task: copy.entityKindTask,
   };
 
+  // Visible at rest below `md` and on focus-within (C 18): tapping into a
+  // field's heading changed the row background and showed nothing, so
+  // removing or reordering a field was invisible on touch. 36px targets on
+  // touch, the 24px hover icons from `sm` (M2 / M3).
   const iconBtnCls =
-    "rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-0";
+    "inline-flex size-9 shrink-0 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity hover:bg-muted hover:text-foreground sm:size-6 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-30";
 
   return (
     <div className="group rounded-lg bg-muted/40 px-4 py-3 transition-colors focus-within:bg-muted/60">
@@ -588,7 +629,7 @@ function FieldCard({
             aria-label={copy.fieldHeadingPlaceholder}
             onChange={(e) => onChange(applyHeadingChange(field, e.target.value))}
             className={cn(
-              "w-full border-0 bg-transparent p-0 text-sm font-medium text-foreground placeholder:text-muted-foreground/40",
+              "w-full border-0 bg-transparent p-0 text-[16px] md:text-sm font-medium text-foreground placeholder:text-muted-foreground/40",
               quietFieldCls,
             )}
           />
@@ -603,7 +644,7 @@ function FieldCard({
           <SelectTrigger
             size="sm"
             aria-label={copy.typeLabel}
-            className="shrink-0 border-transparent bg-transparent text-xs text-muted-foreground hover:text-foreground"
+            className="shrink-0 border-transparent bg-transparent text-[16px] md:text-xs text-muted-foreground hover:text-foreground"
           >
             <SelectValue />
           </SelectTrigger>
@@ -660,7 +701,7 @@ function FieldCard({
           aria-label={copy.fieldInstructionPlaceholder}
           onChange={(e) => onChange({ ...field, instruction: e.target.value })}
           className={cn(
-            "w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
+            "w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] md:text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
             quietFieldCls,
           )}
         />
@@ -689,7 +730,7 @@ function FieldCard({
                 });
               }}
               className={cn(
-                "w-full border-0 bg-transparent p-0 text-xs text-foreground placeholder:text-muted-foreground/50",
+                "w-full border-0 bg-transparent p-0 text-[16px] md:text-xs text-foreground placeholder:text-muted-foreground/50",
                 quietFieldCls,
               )}
             />
@@ -708,7 +749,7 @@ function FieldCard({
             }}
             items={kindItems}
           >
-            <SelectTrigger size="sm" aria-label={copy.entityKindLabel} className="text-xs">
+            <SelectTrigger size="sm" aria-label={copy.entityKindLabel} className="text-[16px] md:text-xs">
               <SelectValue placeholder={copy.entityKindPlaceholder} />
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false}>
@@ -737,7 +778,7 @@ function FieldCard({
               aria-label={copy.keyLabel}
               onChange={(e) => onChange(applyKeyChange(field, e.target.value))}
               className={cn(
-                "w-40 border-0 bg-transparent p-0 font-mono text-[11px] text-muted-foreground placeholder:text-muted-foreground/40",
+                "w-40 border-0 bg-transparent p-0 font-mono text-[16px] md:text-[11px] text-muted-foreground placeholder:text-muted-foreground/40",
                 quietFieldCls,
               )}
             />
@@ -804,7 +845,7 @@ function CaptureRow({
             aria-label={`${label}: ${placeholder}`}
             onChange={(e) => onInstruction(e.target.value)}
             className={cn(
-              "w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
+              "w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] md:text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
               quietFieldCls,
             )}
           />
@@ -923,8 +964,10 @@ function RecordsSection({
                 disabled={openingId === record.id}
                 onClick={() => void handleOpenPage(record)}
                 className={cn(
-                  "shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity",
-                  "hover:bg-muted hover:text-foreground group-hover/record:opacity-100",
+                  // Visible at rest on touch (C 17): the only way a record
+                  // opens a page, and a phone had no way to know it existed.
+                  "inline-flex size-9 shrink-0 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity sm:size-6",
+                  "hover:bg-muted hover:text-foreground md:opacity-0 md:group-hover/record:opacity-100",
                   "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                   openingId === record.id && "opacity-60",
                 )}
@@ -1076,8 +1119,8 @@ function PageActionsSection({
                 title={copy.deleteConfirm}
                 onClick={() => void handleDelete(row)}
                 className={cn(
-                  "shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity",
-                  "hover:bg-muted hover:text-destructive group-hover/action:opacity-100",
+                  "inline-flex size-9 shrink-0 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity sm:size-6",
+                  "hover:bg-muted hover:text-destructive md:opacity-0 md:group-hover/action:opacity-100",
                   "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                 )}
               >
@@ -1095,7 +1138,7 @@ function PageActionsSection({
             onChange={(e) => setLabel(e.target.value)}
             placeholder={copy.labelPlaceholder}
             maxLength={64}
-            className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-[16px] md:text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           />
           <div className="flex flex-wrap items-center gap-2">
             <SearchableSelect
@@ -1126,7 +1169,7 @@ function PageActionsSection({
                 onChange={(e) => setOutcome(e.target.value)}
                 placeholder={copy.outcomePlaceholder}
                 maxLength={2000}
-                className="w-64 rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="w-64 max-w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-[16px] md:text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               />
             )}
           </div>

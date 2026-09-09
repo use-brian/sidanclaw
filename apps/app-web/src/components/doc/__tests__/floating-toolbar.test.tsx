@@ -24,6 +24,7 @@ import type { Editor } from "@tiptap/react";
 import {
   FloatingToolbar,
   ToolbarButtons,
+  selectionChipAnchor,
   shouldShowToolbar,
 } from "../floating-toolbar";
 
@@ -253,5 +254,78 @@ describe("[COMP:app-web/floating-toolbar] FloatingToolbar wrapper", () => {
       </I18nProvider>,
     );
     expect(html).toBe("");
+  });
+});
+
+// ── Phone (M3): 36px buttons, the link field as its own row ────────
+
+describe("[COMP:app-web/floating-toolbar] phone sizing", () => {
+  it("sizes the mark buttons 36px below md and 28px from md", () => {
+    const { editor } = makeEditor();
+    const html = mountButtons(editor);
+    expect(html).toContain("size-9 md:size-7");
+    expect(html).not.toMatch(/"h-7 w-7 /);
+  });
+});
+
+// ── Coarse-pointer Comment chip: the anchor rule ───────────────────
+
+/**
+ * `selectionChipAnchor` decides WHEN the touch chip shows (the same matrix as
+ * the bubble: a real, non-code, non-area, non-cell selection) and WHERE (the
+ * selection's span, so the chip sits below it, clear of the OS callout).
+ */
+describe("[COMP:app-web/floating-toolbar] selectionChipAnchor", () => {
+  function fakeEditor(opts: {
+    from: number;
+    to: number;
+    codeBlock?: boolean;
+    coords?: Record<number, { top: number; bottom: number; left: number }>;
+  }) {
+    const coords = opts.coords ?? {};
+    return {
+      state: { selection: { from: opts.from, to: opts.to, empty: opts.from === opts.to } },
+      isActive: (name: string) => name === "codeBlock" && !!opts.codeBlock,
+      view: {
+        coordsAtPos: (pos: number) =>
+          coords[pos] ?? { top: pos * 10, bottom: pos * 10 + 20, left: pos * 5, right: pos * 5 + 1 },
+      },
+    } as unknown as Parameters<typeof selectionChipAnchor>[0];
+  }
+
+  it("returns null for a collapsed selection", () => {
+    expect(selectionChipAnchor(fakeEditor({ from: 4, to: 4 }))).toBeNull();
+  });
+
+  it("returns null inside a code block", () => {
+    expect(selectionChipAnchor(fakeEditor({ from: 2, to: 6, codeBlock: true }))).toBeNull();
+  });
+
+  it("spans the selection from the start line's top to the end line's bottom, at the start's left", () => {
+    const anchor = selectionChipAnchor(
+      fakeEditor({
+        from: 2,
+        to: 9,
+        coords: {
+          2: { top: 100, bottom: 120, left: 40 },
+          9: { top: 140, bottom: 160, left: 200 },
+        },
+      }),
+    );
+    expect(anchor).toEqual({ top: 100, bottom: 160, left: 40 });
+  });
+
+  it("orders a reversed (right-to-left) selection by position", () => {
+    const anchor = selectionChipAnchor(
+      fakeEditor({
+        from: 9,
+        to: 2,
+        coords: {
+          2: { top: 100, bottom: 120, left: 40 },
+          9: { top: 140, bottom: 160, left: 200 },
+        },
+      }),
+    );
+    expect(anchor).toEqual({ top: 100, bottom: 160, left: 40 });
   });
 });

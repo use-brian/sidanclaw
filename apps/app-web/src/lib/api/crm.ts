@@ -196,6 +196,27 @@ export function fetchCrmSummary(workspaceId: string, pipeline?: string | null): 
 
 export type CrmLookupRow = { id: string; name: string; hint: string | null };
 
+/** The three relationship directories the CRM surface joins names through. */
+export type CrmDirectories = {
+  contacts: CrmLookupRow[];
+  companies: CrmLookupRow[];
+  deals: CrmLookupRow[];
+};
+
+/**
+ * ONE fetcher for the `crm:<wid>:lookups` cache slot. The surface and its
+ * sidebar panel both read that key, so the value shape must come from one
+ * place, or whichever mounts first would hand the other a different object.
+ */
+export async function fetchCrmDirectories(workspaceId: string): Promise<CrmDirectories> {
+  const [contacts, companies, deals] = await Promise.all([
+    fetchCrmLookup(workspaceId, "contact"),
+    fetchCrmLookup(workspaceId, "company"),
+    fetchCrmLookup(workspaceId, "deal"),
+  ]);
+  return { contacts, companies, deals };
+}
+
 export function fetchCrmLookup(
   workspaceId: string,
   kind: CrmCollectionKind,
@@ -309,6 +330,23 @@ export type CrmConfig = {
   pipelines: CrmPipeline[];
   fields: CrmFieldDefinition[];
 };
+
+/** Shape guard for a persisted config copy (`surface-content-cache.ts`). */
+export function isCrmConfigValue(value: unknown): value is CrmConfig {
+  if (!value || typeof value !== "object") return false;
+  const config = value as Partial<CrmConfig>;
+  return (
+    Array.isArray(config.pipelines) &&
+    config.pipelines.every(
+      (pipeline) =>
+        !!pipeline &&
+        typeof pipeline === "object" &&
+        typeof pipeline.id === "string" &&
+        Array.isArray(pipeline.stages),
+    ) &&
+    Array.isArray(config.fields)
+  );
+}
 
 type CrmIntakeFieldDefinition = {
   key: string;
@@ -556,7 +594,15 @@ export type CrmIntakeDefinitionInput = {
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(`${API_URL}${path}`, init);
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(body.error ?? `CRM request failed (${res.status})`);
+  if (!res.ok) {
+    // The status rides along as a property: a server-worded message carries no
+    // `(NNN)` suffix, and the disk tier (`surface-content-cache.ts`) has to
+    // tell an authoritative 401 / 403 / 404 from a transient failure.
+    throw Object.assign(
+      new Error(body.error ?? `CRM request failed (${res.status})`),
+      { status: res.status },
+    );
+  }
   return body;
 }
 

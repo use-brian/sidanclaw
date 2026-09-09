@@ -10,7 +10,10 @@
  *
  * Owns the `FeedProfilesProvider` and gates children on its readiness so
  * ported feed pages keep feed-web's assumption that the workspace context is
- * synchronously available (docs/plans/feed-web-consolidation.md §4). Once the
+ * synchronously available (docs/plans/feed-web-consolidation.md §4). The
+ * provider reads the surface cache, so a revisit is READY on the first frame
+ * (instant-navigation N1); the gate's cold branch is a geometry-matched
+ * skeleton of the Plan landing, never a sentence (N4 / N5). Once the
  * workspace state is READY it also mounts the feed-scoped tuning-chat dock
  * (`<FeedFloatingChat />`) under a `chatDockSuppression` hold — replacing
  * feed-web's workspace-layout mount — so every feed route SWAPS the global
@@ -20,7 +23,7 @@
  * [COMP:app-web/feed-surface-shell]
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { MessageSquareText, Plus } from "lucide-react";
 import {
@@ -31,6 +34,7 @@ import { chatDockSuppression } from "@/lib/chat-dock-suppress";
 import { FeedFloatingChat } from "@/components/feed/feed-floating-chat";
 import { PlatformIcon } from "@/components/feed/platform-icon";
 import { OperatorTopbar } from "@/components/operator/operator-topbar";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,10 +56,8 @@ export function FeedSurfaceShell(props: {
   workspaceId: string;
   children: ReactNode;
 }) {
-  // Retry remounts the provider (fresh fetch) via the key bump.
-  const [epoch, setEpoch] = useState(0);
   return (
-    <FeedProfilesProvider key={epoch} workspaceId={props.workspaceId}>
+    <FeedProfilesProvider workspaceId={props.workspaceId}>
       <div className="flex h-full min-h-0 flex-col">
         {/* Chrome — the shared operator top bar, ABOVE the readiness gate so
             it renders on every feed state (loading / error / onboarding
@@ -73,9 +75,7 @@ export function FeedSurfaceShell(props: {
           }
         />
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <FeedReadyGate onRetry={() => setEpoch((e) => e + 1)}>
-            {props.children}
-          </FeedReadyGate>
+          <FeedReadyGate>{props.children}</FeedReadyGate>
         </div>
       </div>
     </FeedProfilesProvider>
@@ -114,7 +114,7 @@ function FeedNewPostTopbarAction() {
             variant="ghost"
             size="sm"
             aria-label={t.postEditor.newPost}
-            className="h-8 gap-1.5 px-2.5 text-xs text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            className="h-9 md:h-8 gap-1.5 px-2.5 text-xs text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
           >
             <Plus className="size-3.5" aria-hidden />
             <span>{t.postEditor.newPost}</span>
@@ -159,7 +159,7 @@ function FeedChatTopbarAction() {
       onClick={requestFeedChatOpen}
       aria-label={t.openAria}
       title={t.openAria}
-      className="h-8 gap-1.5 px-2.5 text-xs text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+      className="h-9 md:h-8 gap-1.5 px-2.5 text-xs text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
     >
       <MessageSquareText className="size-3.5" aria-hidden />
       <span>{t.topbarAction}</span>
@@ -167,29 +167,64 @@ function FeedChatTopbarAction() {
   );
 }
 
-function FeedReadyGate(props: { onRetry: () => void; children: ReactNode }) {
+/**
+ * The cold-cache fallback: the Plan landing's silhouette (header line,
+ * capture strip, the month calendar block) at the pane's real padding, so a
+ * first-ever visit paints the frame the real content swaps into. Decorative
+ * only - `aria-hidden`, no strings - like every surface skeleton
+ * (`components/chrome/surface-skeleton.tsx`). It replaces the "Loading your
+ * feed workspace..." sentence this gate rendered on EVERY entry; a revisit
+ * never reaches it because the provider paints from the cache.
+ */
+function FeedGateSkeleton() {
+  return (
+    <div
+      aria-hidden
+      data-feed-gate-skeleton
+      className="animate-fade-in px-4 py-5 md:px-6"
+    >
+      <div className="mx-auto max-w-5xl space-y-4">
+        <div className="space-y-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-3 w-72 max-w-full" />
+        </div>
+        <Skeleton className="h-12 w-full rounded-xl" />
+        <div className="flex justify-end">
+          <Skeleton className="h-9 w-40 rounded-md md:h-6" />
+        </div>
+        <div className="overflow-hidden rounded-xl border border-border/60">
+          <div className="grid grid-cols-7 border-b border-border/60 bg-muted/30 px-2 py-2">
+            {Array.from({ length: 7 }).map((_, i) => (
+              <Skeleton key={i} className="h-3 w-8" />
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {Array.from({ length: 35 }).map((_, i) => (
+              <div
+                key={i}
+                className="min-h-[64px] border-b border-r border-border/60 p-1.5 md:min-h-[104px]"
+              >
+                <Skeleton className="size-5 rounded-full" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FeedReadyGate(props: { children: ReactNode }) {
   const t = useT().feedPage;
   const state = useFeedWorkspaceState();
 
-  if (state.status === "loading") {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div
-          role="status"
-          aria-label={t.shell.loading}
-          className="text-sm text-muted-foreground animate-pulse"
-        >
-          {t.shell.loading}
-        </div>
-      </div>
-    );
-  }
+  if (state.status === "loading") return <FeedGateSkeleton />;
 
   if (state.status === "error") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
         <div className="text-sm text-muted-foreground">{t.shell.loadError}</div>
-        <Button variant="outline" size="sm" onClick={props.onRetry}>
+        <Button variant="outline" size="sm" onClick={state.retry}>
           {t.shell.retry}
         </Button>
       </div>

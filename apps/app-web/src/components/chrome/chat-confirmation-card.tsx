@@ -22,6 +22,7 @@ import type { PendingConfirmation } from "@use-brian/chat-ui";
 import { buildConfirmationPreview } from "@use-brian/shared";
 import { useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   GenericToolPreview,
   ToolInputToggle,
@@ -198,7 +199,8 @@ export function ChatConfirmationCard({
         {commenting ? (
           <div className="space-y-2 pt-1">
             <textarea
-              autoFocus
+              // No auto-raised keyboard on a phone (responsive contract M4).
+              autoFocus={!isPhoneViewport()}
               rows={2}
               value={comment}
               onChange={(e) => setComment(e.target.value)}
@@ -217,7 +219,7 @@ export function ChatConfirmationCard({
               placeholder={t.confirmationCommentPlaceholder}
               maxLength={1000}
               className={cn(
-                "w-full resize-none rounded-md border border-amber-500/40 bg-background px-2.5 py-1.5 text-[12px] text-foreground",
+                "w-full resize-none rounded-md border border-amber-500/40 bg-background px-2.5 py-1.5 text-[16px] text-foreground md:text-[12px]",
                 "placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-500/50 disabled:opacity-50",
               )}
             />

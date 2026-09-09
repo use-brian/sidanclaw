@@ -309,7 +309,7 @@ export function PageComments({
               }}
               aria-label={t.pageComposerAria}
               placeholder={t.composerPlaceholder}
-              className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[14px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/60"
+              className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[16px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/60 md:text-[14px]"
             />
             <input
               ref={fileInputRef}
@@ -352,7 +352,7 @@ export function PageComments({
                   aria-label={tAttach.attach}
                   onClick={() => fileInputRef.current?.click()}
                   disabled={rec.busy}
-                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                  className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 sm:size-7"
                 >
                   <Paperclip className="size-[18px]" />
                 </button>
@@ -372,6 +372,7 @@ export function PageComments({
                 selectSide="bottom"
                 className="flex-1"
               />
+              {/* 44px on a phone, 28px from `sm` (responsive contract M3). */}
               <button
                 type="button"
                 onClick={() => void post()}
@@ -382,7 +383,7 @@ export function PageComments({
                   (!draft.trim() && !(aiReply && (att.hasReady || pendingRecordings.length > 0)))
                 }
                 aria-label={busy ? t.sending : t.send}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground sm:size-7"
               >
                 <ArrowUp className="size-4" />
               </button>

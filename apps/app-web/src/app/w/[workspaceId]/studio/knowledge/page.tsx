@@ -29,13 +29,15 @@
  * [COMP:app-web/studio-knowledge]
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { authFetch } from "@/lib/auth-fetch";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { BackButton } from "@/components/ui/back-button";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 import { StudioTopbarActions } from "@/components/studio/studio-topbar";
-import { AddSourceModal, type ConnectorInstanceOption } from "@/components/knowledge/add-source-modal";
+import { AddSourceModal } from "@/components/knowledge/add-source-modal";
 import { KbChatPanel } from "@/components/knowledge/kb-chat-panel";
 import { KbMaintenanceForm } from "@/components/knowledge/kb-maintenance-form";
 import { KbCaptureRules } from "@/components/knowledge/kb-capture-rules";
@@ -43,25 +45,13 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
 import { BookOpen, FolderGit2, HardDrive, NotebookPen } from "lucide-react";
+import {
+  useKnowledgeData,
+  type KnowledgeSource,
+  type Sensitivity,
+} from "./use-knowledge-data";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-
-type Sensitivity = "public" | "internal" | "confidential";
-
-type KnowledgeSource = {
-  id: string;
-  workspaceId: string;
-  sourceType: "github" | "local";
-  repo: string;
-  branch: string;
-  rootPath: string;
-  lastSyncedSha: string | null;
-  lastSyncedAt: string | null;
-  syncError: string | null;
-  writeAccess: boolean | null;
-  defaultSensitivity: Sensitivity;
-  entryCount: number;
-};
 
 /** Rail selection: a source id, or the manual-entries pseudo-row. */
 type Selection = { kind: "source"; id: string } | { kind: "manual" };
@@ -73,12 +63,23 @@ export default function StudioKnowledgePage() {
   const copy = t.studioPage.knowledgePage;
   const { activeId } = useWorkspaces();
 
-  const [sources, setSources] = useState<KnowledgeSource[] | null>(null);
-  const [manualCount, setManualCount] = useState(0);
-  const [instances, setInstances] = useState<ConnectorInstanceOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  // Sources + connector instances read the workspace's cached keys
+  // (instant-navigation N1 / N7): both fetches run in parallel, a revisit
+  // paints the rail on the first frame, and a brain change marks the source
+  // list stale through the spine map.
+  const {
+    sources,
+    manualCount,
+    instances,
+    error: loadError,
+    refreshSources: fetchSources,
+  } = useKnowledgeData(activeId);
   const [selected, setSelected] = useState<Selection | null>(null);
+  // Phone single-pane (responsive contract M1 / M5): below `md` the rail and
+  // the focused panel are two screens; a tapped row opens the panel and Back
+  // returns to the rail. Inert on `md+`.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
   const [showModal, setShowModal] = useState(false);
   const [connectWarning, setConnectWarning] = useState<string | null>(null);
 
@@ -87,52 +88,19 @@ export default function StudioKnowledgePage() {
   const [savingTierId, setSavingTierId] = useState<string | null>(null);
   const [resyncPendingId, setResyncPendingId] = useState<string | null>(null);
 
-  const fetchSources = useCallback(async () => {
-    if (!activeId) return;
-    try {
-      const res = await authFetch(
-        `${API_URL}/api/workspaces/${activeId}/knowledge/sources`,
-      );
-      if (res.ok) {
-        const data = (await res.json()) as {
-          sources: KnowledgeSource[];
-          manualCount?: number;
-        };
-        setSources(data.sources ?? []);
-        setManualCount(data.manualCount ?? 0);
-      } else {
-        setLoadError(true);
-      }
-    } catch {
-      setLoadError(true);
-    }
-  }, [activeId]);
-
-  const fetchInstances = useCallback(async () => {
-    if (!activeId) return;
-    try {
-      const res = await authFetch(
-        `${API_URL}/api/workspaces/${activeId}/knowledge/github/instances`,
-      );
-      if (res.ok) {
-        const data = (await res.json()) as { instances: ConnectorInstanceOption[] };
-        setInstances(data.instances ?? []);
-      }
-    } catch {
-      // non-fatal — the modal surfaces its no-connector empty state
-    }
-  }, [activeId]);
-
+  // A workspace switch drops the selection: the rail now lists another
+  // workspace's sources, so the old focus would point at a row that is gone.
   useEffect(() => {
-    if (!activeId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setLoadError(false);
     setSelected(null);
-    Promise.all([fetchSources(), fetchInstances()]).finally(() => setLoading(false));
-  }, [activeId, fetchSources, fetchInstances]);
+    setDetailOpen(false);
+  }, [activeId]);
+
+  function revealDetail() {
+    setDetailOpen(true);
+    requestAnimationFrame(() => {
+      detailRef.current?.scrollIntoView({ block: "start" });
+    });
+  }
 
   // Default focus: first source, else the manual pseudo-row. Repair-only —
   // never yank an existing valid selection when the list refreshes.
@@ -236,10 +204,13 @@ export default function StudioKnowledgePage() {
       <li key={row.kind === "source" ? row.id : "manual"}>
         <button
           type="button"
-          onClick={() => setSelected(row)}
+          onClick={() => {
+            setSelected(row);
+            revealDetail();
+          }}
           aria-current={isSel ? "true" : undefined}
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+            "flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm transition-colors",
             isSel
               ? "bg-muted font-medium text-foreground"
               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -315,13 +286,13 @@ export default function StudioKnowledgePage() {
             <button
               onClick={() => void handleSync(s)}
               disabled={syncingId === s.id}
-              className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
+              className="inline-flex h-11 items-center rounded-lg border border-border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50 sm:h-7"
             >
               {syncingId === s.id ? copy.sourceSyncing : copy.sourceSync}
             </button>
             <button
               onClick={() => void handleDisconnect(s)}
-              className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:text-destructive"
+              className="inline-flex h-11 items-center rounded-lg border border-border px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:text-destructive sm:h-7"
             >
               {copy.sourceDisconnect}
             </button>
@@ -356,7 +327,7 @@ export default function StudioKnowledgePage() {
         <section className="space-y-2">
           <h3 className="text-[13px] font-medium">{copy.clearanceTitle}</h3>
           <div className="rounded-lg border border-border px-4 py-3 space-y-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {TIERS.map((tier) => (
                 <button
                   key={tier}
@@ -364,7 +335,7 @@ export default function StudioKnowledgePage() {
                   disabled={savingTierId === s.id}
                   onClick={() => void handleTierChange(s, tier)}
                   className={cn(
-                    "rounded-lg px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50",
+                    "inline-flex h-11 items-center rounded-lg px-2.5 text-xs font-medium transition-colors disabled:opacity-50 sm:h-7",
                     s.defaultSensitivity === tier
                       ? "bg-action text-action-foreground"
                       : "border border-border text-muted-foreground hover:bg-muted",
@@ -438,7 +409,7 @@ export default function StudioKnowledgePage() {
             setConnectWarning(null);
             setShowModal(true);
           }}
-          className="text-xs font-medium bg-action text-action-foreground px-3 py-1.5 rounded-lg hover:bg-action/90 transition-colors"
+          className="inline-flex h-11 items-center text-xs font-medium bg-action text-action-foreground px-3 rounded-lg hover:bg-action/90 transition-colors sm:h-8"
         >
           {copy.addRepo}
         </button>
@@ -452,7 +423,11 @@ export default function StudioKnowledgePage() {
         onConnected={(sourceId, warning) => {
           setShowModal(false);
           setConnectWarning(warning);
-          if (sourceId) setSelected({ kind: "source", id: sourceId });
+          if (sourceId) {
+            setSelected({ kind: "source", id: sourceId });
+            // Jump to the fresh source: on a phone the pane swaps to it.
+            revealDetail();
+          }
           void fetchSources();
         }}
       />
@@ -465,13 +440,17 @@ export default function StudioKnowledgePage() {
 
       <KbCaptureRules workspaceId={activeId} sources={sources ?? []} />
 
-      {loading ? (
-        <div className="py-10 text-center text-sm text-muted-foreground">{copy.loading}</div>
-      ) : loadError ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-center text-sm text-destructive">
-          {copy.loadError}
-        </div>
-      ) : sources !== null && sources.length === 0 && manualCount === 0 ? (
+      {sources === null ? (
+        // Cold: nothing cached for this workspace yet. A failed first load
+        // says so; otherwise the rail skeleton holds the geometry (N4).
+        loadError ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-3 text-center text-sm text-destructive">
+            {copy.loadError}
+          </div>
+        ) : (
+          <RailSurfaceSkeleton chrome={false} padded={false} />
+        )
+      ) : sources.length === 0 && manualCount === 0 ? (
         <section className="flex flex-col items-center gap-2 rounded-xl border border-border bg-card/50 p-8 text-center">
           <BookOpen className="size-5 text-muted-foreground" aria-hidden />
           <div className="text-sm font-medium">{copy.emptyTitle}</div>
@@ -486,7 +465,12 @@ export default function StudioKnowledgePage() {
       ) : (
         /* ── Master-detail: source rail + focused panel ── */
         <div className="flex flex-col gap-6 md:flex-row">
-          <aside className="w-full shrink-0 self-start md:w-64">
+          <aside
+            className={cn(
+              "w-full shrink-0 self-start md:w-64",
+              detailOpen && "max-md:hidden",
+            )}
+          >
             <nav aria-label={copy.railAriaLabel} className="flex flex-col gap-3">
               <div>
                 <div className="flex items-center gap-1.5 px-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -523,7 +507,17 @@ export default function StudioKnowledgePage() {
             </nav>
           </aside>
 
-          <div className="min-w-0 flex-1">
+          <div
+            ref={detailRef}
+            className={cn("min-w-0 flex-1", !detailOpen && "max-md:hidden")}
+          >
+            <div className="mb-3 md:hidden">
+              <BackButton
+                label={copy.backToList}
+                onClick={() => setDetailOpen(false)}
+                className="min-h-11"
+              />
+            </div>
             {!sel ? (
               <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                 {copy.selectPrompt}

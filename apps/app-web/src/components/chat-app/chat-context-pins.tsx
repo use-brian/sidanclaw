@@ -661,7 +661,7 @@ export function ChatContextPins({
           {startedByName && (
             <span
               title={format(chatT.startedBy, { name: startedByName })}
-              className="inline-flex h-7 max-w-28 items-center gap-1.5 rounded-md bg-muted/70 px-2 text-[11px] text-muted-foreground"
+              className="inline-flex h-7 max-w-28 items-center gap-1.5 rounded-md bg-muted/70 px-2 text-xs text-muted-foreground"
             >
               <User className="size-3 shrink-0" aria-hidden />
               <span className="truncate">{startedByName}</span>
@@ -714,7 +714,7 @@ export function ChatContextPins({
               {chatT.liveWork}
             </h3>
             {activeCount > 0 && (
-              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
                 {format(chatT.liveWorkActive, { count: activeCount })}
               </span>
             )}
@@ -752,7 +752,7 @@ export function ChatContextPins({
                         <div className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                           {activeLead.name}
                         </div>
-                        <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-primary">
+                        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary">
                           <LoaderCircle
                             className={cn(
                               "size-3",
@@ -775,7 +775,7 @@ export function ChatContextPins({
                             onClick={() => void handleStop()}
                             disabled={stopping}
                             title={chatT.liveWorkStopTitle}
-                            className="shrink-0 rounded-md border border-border/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-60"
+                            className="min-h-11 shrink-0 rounded-md border border-border/70 px-3 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-60 sm:min-h-0 sm:px-1.5"
                           >
                             {stopping
                               ? chatT.liveWorkStopping
@@ -784,19 +784,19 @@ export function ChatContextPins({
                         )}
                       </div>
                       {currentStep && (
-                        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                           {currentStep}
                         </p>
                       )}
                       {stalledMinutes >= 1 && (
-                        <p className="mt-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                        <p className="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">
                           {format(chatT.liveWorkNoProgress, {
                             minutes: stalledMinutes,
                           })}
                         </p>
                       )}
                       {leadTools.length > 0 && (
-                        <p className="mt-1.5 text-[10px] text-muted-foreground/80">
+                        <p className="mt-1.5 text-xs text-muted-foreground/80">
                           {format(chatT.liveWorkSteps, {
                             done: leadDone,
                             running: leadRunning,
@@ -853,16 +853,16 @@ export function ChatContextPins({
                           <div className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                             {name}
                           </div>
-                          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
                             <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" aria-hidden />
                             {chatT.liveWorkWorking}
                           </span>
                         </div>
-                        <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
+                        <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                           {runningTool?.description ?? worker.description}
                         </p>
                         {workerTools.length > 0 && (
-                          <p className="mt-1.5 text-[10px] text-muted-foreground/80">
+                          <p className="mt-1.5 text-xs text-muted-foreground/80">
                             {format(chatT.liveWorkSteps, { done, running })}
                           </p>
                         )}
@@ -995,13 +995,13 @@ export function ChatContextPins({
                     value={urlValue}
                     onChange={(e) => setUrlValue(e.target.value)}
                     placeholder={t.urlPlaceholder}
-                    className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring/40"
+                    className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[16px] outline-none focus:ring-2 focus:ring-ring/40 md:text-xs"
                   />
                   <button
                     type="button"
                     disabled={busy || !urlValue.trim()}
                     onClick={() => void addPin({ kind: "url", url: urlValue.trim() })}
-                    className="rounded-md bg-action px-2.5 py-1 text-[11px] font-medium text-action-foreground disabled:opacity-50"
+                    className="rounded-md bg-action px-2.5 py-1 text-xs font-medium text-action-foreground disabled:opacity-50"
                   >
                     {t.pinAction}
                   </button>
@@ -1014,7 +1014,7 @@ export function ChatContextPins({
                     placeholder={t.instructionPlaceholder}
                     rows={3}
                     maxLength={2000}
-                    className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring/40"
+                    className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-[16px] outline-none focus:ring-2 focus:ring-ring/40 md:text-xs"
                   />
                   <button
                     type="button"
@@ -1022,7 +1022,7 @@ export function ChatContextPins({
                     onClick={() =>
                       void addPin({ kind: "instruction", text: instructionValue.trim() })
                     }
-                    className="rounded-md bg-action px-2.5 py-1 text-[11px] font-medium text-action-foreground disabled:opacity-50"
+                    className="rounded-md bg-action px-2.5 py-1 text-xs font-medium text-action-foreground disabled:opacity-50"
                   >
                     {t.pinAction}
                   </button>
@@ -1034,11 +1034,11 @@ export function ChatContextPins({
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     placeholder={t.searchPlaceholder}
-                    className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring/40"
+                    className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-[16px] outline-none focus:ring-2 focus:ring-ring/40 md:text-xs"
                   />
                   <div className="max-h-44 overflow-y-auto">
                     {filtered.length === 0 && candidates !== null && (
-                      <p className="px-1 py-1.5 text-[11px] text-muted-foreground">
+                      <p className="px-1 py-1.5 text-xs text-muted-foreground">
                         {t.noResults}
                       </p>
                     )}
@@ -1058,7 +1058,7 @@ export function ChatContextPins({
                   </div>
                 </div>
               )}
-              {error && <p className="text-[11px] text-destructive">{error}</p>}
+              {error && <p className="text-xs text-destructive">{error}</p>}
             </div>
           )}
 
@@ -1069,7 +1069,7 @@ export function ChatContextPins({
               onChange={(e) => setPinFilter(e.target.value)}
               placeholder={t.filterPlaceholder}
               aria-label={t.filterPlaceholder}
-              className="mt-3 w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-ring/40"
+              className="mt-3 w-full rounded-md border border-border bg-background px-2 py-1.5 text-[16px] outline-none focus:ring-2 focus:ring-ring/40 md:text-xs"
             />
           )}
 
@@ -1100,7 +1100,7 @@ export function ChatContextPins({
                     {upload.fileName}
                   </div>
                   {upload.error && (
-                    <div className="truncate text-[10px] text-destructive">
+                    <div className="truncate text-xs text-destructive">
                       {upload.error}
                     </div>
                   )}
@@ -1122,7 +1122,7 @@ export function ChatContextPins({
                           style={{ width: `${upload.progress}%` }}
                         />
                       </div>
-                      <span className="w-8 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                      <span className="w-8 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
                         {upload.progress}%
                       </span>
                     </div>
@@ -1160,13 +1160,13 @@ export function ChatContextPins({
                   )}
                 </span>
                 <span className="mt-2 text-xs font-medium">{t.dropFiles}</span>
-                <span className="mt-0.5 text-[10px] text-primary">
+                <span className="mt-0.5 text-xs text-primary">
                   {t.browseFiles}
                 </span>
               </button>
             )}
             {pins.length > 0 && visiblePins.length === 0 && (
-              <p className="px-1 py-1.5 text-[11px] text-muted-foreground">
+              <p className="px-1 py-1.5 text-xs text-muted-foreground">
                 {t.noResults}
               </p>
             )}
@@ -1185,7 +1185,7 @@ export function ChatContextPins({
                       <Icon className="size-3.5" aria-hidden />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         {kindLabel(pin.kind)}
                       </div>
                       <div
@@ -1201,13 +1201,13 @@ export function ChatContextPins({
                           href={pin.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="mt-1 block truncate text-[11px] text-primary underline-offset-2 hover:underline"
+                          className="mt-1 block truncate text-xs text-primary underline-offset-2 hover:underline"
                         >
                           {pin.url}
                         </a>
                       )}
                       {pin.addedByName && (
-                        <div className="mt-1 text-[10px] text-muted-foreground">
+                        <div className="mt-1 text-xs text-muted-foreground">
                           {format(t.addedBy, { name: pin.addedByName })}
                         </div>
                       )}
@@ -1217,7 +1217,7 @@ export function ChatContextPins({
                       onClick={() => void unpin(pin.id)}
                       aria-label={`${t.remove}: ${chipLabel(pin)}`}
                       title={t.remove}
-                      className="rounded-md p-1 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                      className="grid size-9 place-items-center rounded-md text-muted-foreground opacity-100 transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 md:size-auto md:p-1 md:opacity-0 md:group-hover:opacity-100"
                     >
                       <X className="size-3.5" aria-hidden />
                     </button>
@@ -1227,7 +1227,7 @@ export function ChatContextPins({
             })}
           </div>
           {!addOpen && error && (
-            <p className="mt-3 text-[11px] text-destructive">{error}</p>
+            <p className="mt-3 text-xs text-destructive">{error}</p>
           )}
         </section>
       </div>

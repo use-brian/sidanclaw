@@ -66,6 +66,45 @@ describe("[COMP:app-web/surface-cache] Surface cache", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a failed revalidation on every render (bounded by staleMs)", async () => {
+    await loadSurfaceCache("tasks:w9", async () => ["a"]);
+    markSurfaceCacheStale("tasks:w9");
+    const fetcher = vi.fn(async () => {
+      throw new Error("503");
+    });
+    let seen: string[] | undefined;
+    function Probe() {
+      const entry = useCachedResource<string[]>("tasks:w9", fetcher);
+      seen = entry.data;
+      return null;
+    }
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<Probe />);
+    });
+    await act(async () => {
+      await settle();
+      await settle();
+      await settle();
+    });
+    // One attempt, not a tight loop: the failure stamps `attemptedAt`, the
+    // entry reads fresh for another window, and the rows stay painted.
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual(["a"]);
+    expect(isSurfaceCacheStale("tasks:w9")).toBe(false);
+    // A spine mark reopens the window and one more attempt runs.
+    await act(async () => {
+      markSurfaceCacheStale("tasks:w9");
+      await settle();
+      await settle();
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("keeps the last good value when a revalidation fails", async () => {
     await loadSurfaceCache("k", async () => "good");
     await loadSurfaceCache("k", async () => {

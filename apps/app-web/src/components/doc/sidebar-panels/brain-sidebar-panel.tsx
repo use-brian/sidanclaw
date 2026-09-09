@@ -691,7 +691,7 @@ export function BrainSidebarPanel({ workspaceId }: { workspaceId: string }) {
           onChange={(e) => brain.setSearch(e.target.value)}
           placeholder={t.brainPage.blueprints.searchPlaceholder}
           className={cn(
-            "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]",
+            "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12px]",
             "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
           )}
         />
@@ -812,10 +812,11 @@ export function BrainSidebarPanel({ workspaceId }: { workspaceId: string }) {
                       aria-hidden
                       className={cn(
                         "inline-block h-2 w-2 shrink-0 rounded-full bg-amber-500 transition-opacity",
-                        // The checkbox takes the dot's place once it shows.
+                        // The checkbox takes the dot's place once it shows -
+                        // always, below `md`, where there is no hover (M2).
                         selectionMode
                           ? "opacity-0"
-                          : "opacity-100 group-hover/rev:opacity-0",
+                          : "opacity-0 md:opacity-100 md:group-hover/rev:opacity-0",
                       )}
                     />
                     <span className="min-w-0 flex-1 truncate">
@@ -831,7 +832,7 @@ export function BrainSidebarPanel({ workspaceId }: { workspaceId: string }) {
                       "absolute left-[5px] top-1/2 size-3.5 -translate-y-1/2",
                       selectionMode
                         ? "opacity-100"
-                        : "opacity-0 pointer-events-none group-hover/rev:opacity-100 group-hover/rev:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto",
+                        : "opacity-100 md:opacity-0 md:pointer-events-none md:group-hover/rev:opacity-100 md:group-hover/rev:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto",
                     )}
                   />
                 </li>
@@ -854,7 +855,7 @@ export function BrainSidebarPanel({ workspaceId }: { workspaceId: string }) {
             onChange={(e) => brain.setSearch(e.target.value)}
             placeholder={t.brainPage.audit.searchPlaceholder}
             className={cn(
-              "min-w-0 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]",
+              "min-w-0 rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12px]",
               "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
             )}
           />
@@ -918,7 +919,7 @@ function FilterOptionsBlock({
         onChange={(e) => onSearch(e.target.value)}
         placeholder={searchPlaceholder}
         className={cn(
-          "w-full px-2.5 py-1.5 text-[12px] bg-background border border-border rounded-md",
+          "w-full px-2.5 py-1.5 text-[16px] md:text-[12px] bg-background border border-border rounded-md",
           "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
         )}
       />
@@ -1018,7 +1019,7 @@ function CompactFilterBar({
         onChange={(e) => onSearch(e.target.value)}
         placeholder={searchPlaceholder}
         className={cn(
-          "min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]",
+          "min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12px]",
           "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
         )}
       />

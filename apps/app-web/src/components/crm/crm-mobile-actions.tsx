@@ -50,7 +50,8 @@ export function CrmMobileActions({
     <><DropdownMenu>
       <DropdownMenuTrigger
         data-crm-mobile-actions
-        className="inline-flex size-7 items-center justify-center rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent sm:hidden"
+        // The only entry to every displaced CRM action on a phone: 44px (M3).
+        className="inline-flex size-11 items-center justify-center rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent sm:hidden"
         aria-label={t.crmActions}
       >
         <MoreHorizontal className="size-4" aria-hidden />

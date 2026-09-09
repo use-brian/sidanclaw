@@ -28,6 +28,7 @@ import {
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { routeProgress } from "@/lib/route-progress";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   organizeWorkspacePicker,
   usesScalableWorkspacePicker,
@@ -177,12 +178,12 @@ export function WorkspacePicker({
           />
           <span className="sr-only">{t.searchLabel}</span>
           <input
-            autoFocus
+            autoFocus={!isPhoneViewport()}
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t.searchPlaceholder}
-            className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground"
+            className="h-11 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-[16px] outline-none transition-colors placeholder:text-muted-foreground sm:h-10 md:text-sm"
           />
         </label>
         {error ? (
@@ -227,7 +228,7 @@ export function WorkspacePicker({
             <button
               type="button"
               onClick={() => setShowHidden((current) => !current)}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:min-h-0"
               aria-expanded={showHidden}
             >
               {showHidden ? (
@@ -340,7 +341,7 @@ function WorkspacePickerRow({
       <Link
         href={href}
         onClick={onOpened}
-        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5"
+        className="flex min-h-11 min-w-0 flex-1 items-center gap-3 px-3 py-2.5 sm:min-h-0"
       >
         <TeamAvatar
           id={workspace.id}
@@ -368,7 +369,7 @@ function WorkspacePickerRow({
               type="button"
               disabled={pending}
               aria-label={format(t.workspaceActions, { name: workspace.name })}
-              className="mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-70 transition-colors hover:bg-muted hover:text-foreground focus:opacity-100 disabled:cursor-wait disabled:opacity-40 group-hover:opacity-100"
+              className="mr-2 inline-flex size-11 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-70 transition-colors hover:bg-muted hover:text-foreground focus:opacity-100 disabled:cursor-wait disabled:opacity-40 group-hover:opacity-100 sm:size-8"
             >
               <MoreHorizontal aria-hidden className="size-4" />
             </button>

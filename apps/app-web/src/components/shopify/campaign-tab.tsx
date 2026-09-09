@@ -96,8 +96,12 @@ type UploadedCampaignFile = {
   error?: string;
 };
 
-const inputClass = "h-9 w-full rounded-lg border border-border bg-background px-3 text-sm";
-const textAreaClass = "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm";
+// 16px below `md` (responsive contract M4): iOS zooms the page on focusing a
+// smaller control and stays zoomed. Every field in the six-step builder reads
+// one of these two, the `datetime-local` pair included (they keep the native
+// picker; the floor stops the zoom on the way in).
+const inputClass = "h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm";
+const textAreaClass = "w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 /** `shopifyListProducts` caps a page at 50 rows, so this is the largest page there is. */
 const PRODUCT_PAGE_SIZE = 50;
@@ -1490,15 +1494,24 @@ function CopyField({
   multiline?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-background p-3">
-      <div className="flex items-center justify-between gap-2">
+    // The WHOLE card is the control (responsive contract M3): copying is the
+    // point of step 6, and a 24px chip in the corner of each of nine cards
+    // was its only hit area. Tapping anywhere on the card copies its value;
+    // the label in the corner just says so.
+    <button
+      type="button"
+      data-copy-field={copyKey}
+      onClick={() => void onCopy(copyKey, value)}
+      className="block min-h-11 w-full rounded-xl border border-border bg-background p-3 text-left transition-colors hover:bg-muted/40 md:min-h-0"
+    >
+      <span className="flex items-center justify-between gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
-        <Button variant="ghost" size="xs" onClick={() => void onCopy(copyKey, value)}>
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <Copy className="size-3" aria-hidden />
           {copied === copyKey ? copiedLabel : copyLabel}
-        </Button>
-      </div>
-      <p className={cn("mt-1 text-[13px]", multiline && "whitespace-pre-wrap")}>{value || "-"}</p>
-    </div>
+        </span>
+      </span>
+      <span className={cn("mt-1 block text-[13px]", multiline && "whitespace-pre-wrap")}>{value || "-"}</span>
+    </button>
   );
 }

@@ -250,7 +250,7 @@ export function CaptionEditor({
         placeholder={placeholder ?? t.captionPlaceholder}
         rows={4}
         className={cn(
-          "w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-relaxed",
+          "w-full resize-none border-0 bg-transparent p-0 text-[16px] md:text-[15px] leading-relaxed",
           !readOnly && "pt-3",
           "placeholder:text-muted-foreground/50 focus:outline-none focus-visible:shadow-none",
           readOnly && "cursor-default opacity-80",

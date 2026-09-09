@@ -30,6 +30,16 @@
  * the single active user — the prior single-account behaviour. Account
  * management (add / remove) stays on the web app.
  *
+ * **The list is the shared workspace cache**, not a private copy
+ * (instant-navigation contract N1 / N2). `contexts/workspace-context.tsx`
+ * already holds the `/api/workspaces` list for every ported surface; this
+ * popover used to fetch its own copy on first open and show a "Loading
+ * workspaces..." line for the round trip. It now mounts `useWorkspaceFetch`
+ * (one request per app load, shared with the Studio layout) and reads
+ * `useWorkspaces()`, so an already-fetched list paints on the first open;
+ * only a genuinely cold list shows skeleton rows (N4), and a rename or icon
+ * change patches the shared cache so every reader agrees.
+ *
  * [COMP:app-web/workspace-switcher]
  */
 
@@ -40,8 +50,15 @@ import { routeProgress } from "@/lib/route-progress";
 import { useT } from "@/lib/i18n/client";
 import { desktopBridge } from "@/lib/desktop-auth-source";
 import { format } from "@/lib/i18n/format";
-import { authFetch } from "@/lib/auth-fetch";
 import { primaryAuthUrl, webAppUrl } from "@/lib/primary-auth";
+import {
+  fetchWorkspaces,
+  updateWorkspace,
+  useWorkspaceFetch,
+  useWorkspaces,
+  type Workspace,
+} from "@/contexts/workspace-context";
+import { Skeleton } from "@/components/skeleton";
 import { getUserInfo } from "@/lib/user";
 import { signOutActiveAccount } from "@/lib/account-logout";
 import { requestSidebarClose } from "@/lib/sidebar-close";
@@ -54,6 +71,7 @@ import {
 } from "@/lib/workspace-picker";
 import { getAccountsDir, type AccountDirEntry } from "@/lib/accounts";
 import { TeamAvatar } from "@/components/team-avatar";
+import { DesktopAccounts } from "@/components/desktop-accounts";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import {
   CreateWorkspaceForm,
@@ -94,17 +112,6 @@ function formatPlanLabel(plan: string): string {
   return plan;
 }
 
-type Workspace = {
-  id: string;
-  name: string;
-  iconSeed: number | null;
-  iconUrl?: string | null;
-  plan?: string | null;
-  pickerPinnedAt?: string | null;
-  pickerHiddenAt?: string | null;
-  pickerLastOpenedAt?: string | null;
-};
-
 function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
@@ -115,7 +122,10 @@ export function WorkspaceSwitcher() {
   const ctx = useWorkspaceContext();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
+  // The shared list (carries `plan` + picker preferences per row). Warmed
+  // once per app load here, so the first open paints without a fetch.
+  const { workspaces } = useWorkspaces();
+  useWorkspaceFetch(API_URL);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Create-workspace mode: swaps the popover body for the in-app
@@ -186,45 +196,30 @@ export function WorkspaceSwitcher() {
   }, []);
 
   // Keep both the active trigger (through WorkspaceContextProvider) and the
-  // lazily-cached popover list current after an upload/remove/reroll.
+  // shared popover list current after an upload/remove/reroll.
   useEffect(() => {
     function onIconChanged(e: Event) {
       const detail = (e as CustomEvent<WorkspaceIconChangedDetail>).detail;
       if (!detail?.workspaceId) return;
-      setWorkspaces((prev) =>
-        prev
-          ? prev.map((w) =>
-              w.id === detail.workspaceId
-                ? {
-                    ...w,
-                    iconSeed: detail.iconSeed,
-                    iconUrl: detail.iconUrl,
-                  }
-                : w,
-            )
-          : prev,
-      );
+      updateWorkspace(detail.workspaceId, {
+        iconSeed: detail.iconSeed,
+        iconUrl: detail.iconUrl,
+      });
     }
     window.addEventListener(WORKSPACE_ICON_CHANGED_EVENT, onIconChanged);
     return () =>
       window.removeEventListener(WORKSPACE_ICON_CHANGED_EVENT, onIconChanged);
   }, []);
 
-  // Keep the lazily-cached workspace list in sync with a settings-modal
-  // rename (the trigger label itself reads `ctx.name`, which the provider
-  // updates from the same event) — without this the popover rows show the
-  // old name until a full reload.
+  // Keep the shared workspace list in sync with a settings-modal rename (the
+  // trigger label itself reads `ctx.name`, which the provider updates from
+  // the same event) — without this the popover rows show the old name until
+  // a full reload.
   useEffect(() => {
     function onRenamed(e: Event) {
       const detail = (e as CustomEvent<WorkspaceRenamedDetail>).detail;
       if (!detail?.workspaceId || !detail.name) return;
-      setWorkspaces((prev) =>
-        prev
-          ? prev.map((w) =>
-              w.id === detail.workspaceId ? { ...w, name: detail.name } : w,
-            )
-          : prev,
-      );
+      updateWorkspace(detail.workspaceId, { name: detail.name });
     }
     window.addEventListener(WORKSPACE_RENAMED_EVENT, onRenamed);
     return () => window.removeEventListener(WORKSPACE_RENAMED_EVENT, onRenamed);
@@ -308,21 +303,31 @@ export function WorkspaceSwitcher() {
     window.location.assign("/");
   }
 
-  // Lazy-fetch the workspace list on first open (carries `plan` per row).
+  // A cold shared list on open (the mount-time warm failed, or has not landed
+  // yet): fetch it now. `fetchWorkspaces` joins any in-flight request, so this
+  // never doubles the warm. A list already in hand needs nothing - it painted
+  // on the first frame.
+  const listEmpty = workspaces.length === 0;
   useEffect(() => {
-    if (!open || workspaces !== null || loading) return;
+    if (!open || !listEmpty || loading) return;
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    authFetch(`${API_URL}/api/workspaces`)
-      .then((r) => r.json())
-      .then((data: { workspaces?: Workspace[]; teams?: Workspace[] }) => {
-        setWorkspaces(data.workspaces ?? data.teams ?? []);
+    fetchWorkspaces(API_URL)
+      .catch(() => {
+        if (!cancelled) setError(t.loadError);
       })
-      .catch(() => setError(t.loadError))
-      .finally(() => setLoading(false));
-  }, [open, workspaces, loading, t.loadError]);
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `loading` is deliberately not a dep: it is set inside this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, listEmpty, t.loadError]);
 
-  const activeWorkspace = workspaces?.find((w) => w.id === ctx.workspaceId);
+  const activeWorkspace = workspaces.find((w) => w.id === ctx.workspaceId);
   // Plan label: the active workspace's plan once the workspaces list loads;
   // null (no label) before that. Billing is per-workspace only.
   const planRaw = activeWorkspace?.plan ?? null;
@@ -354,16 +359,7 @@ export function WorkspaceSwitcher() {
   function switchTo(workspaceId: string) {
     setOpen(false);
     if (workspaceId === ctx.workspaceId) return;
-    const now = new Date().toISOString();
-    setWorkspaces((current) =>
-      current
-        ? current.map((workspace) =>
-            workspace.id === workspaceId
-              ? { ...workspace, pickerLastOpenedAt: now }
-              : workspace,
-          )
-        : current,
-    );
+    updateWorkspace(workspaceId, { pickerLastOpenedAt: new Date().toISOString() });
     void updateWorkspacePickerPreferences(workspaceId, { opened: true }).catch(
       () => {},
     );
@@ -372,13 +368,16 @@ export function WorkspaceSwitcher() {
     router.push(docPagePath(workspaceId));
   }
 
-  // The in-popover create form succeeded: close the switcher, drop the
-  // cached workspace list so the next open refetches with the new row, and
-  // navigate into the new workspace's doc surface.
+  // The in-popover create form succeeded: close the switcher, refresh the
+  // shared workspace list behind the paint so the next open carries the new
+  // row (the current rows stay up meanwhile), and navigate into the new
+  // workspace's doc surface.
   function handleWorkspaceCreated(created: CreatedWorkspace) {
     setCreating(false);
     setOpen(false);
-    setWorkspaces(null);
+    void fetchWorkspaces(API_URL).catch(() => {
+      // The next open retries through the cold-list effect.
+    });
     routeProgress.start();
     router.push(docPagePath(created.id));
   }
@@ -395,19 +394,18 @@ export function WorkspaceSwitcher() {
     signOutActiveAccount();
   }
 
-  const scalableWorkspaceList =
-    workspaces !== null && usesScalableWorkspacePicker(workspaces.length);
-  const switcherGroups = organizeWorkspacePicker(
-    workspaces ?? [],
-    workspaceQuery,
-  );
+  const scalableWorkspaceList = usesScalableWorkspacePicker(workspaces.length);
+  const switcherGroups = organizeWorkspacePicker(workspaces, workspaceQuery);
   const switcherRows = scalableWorkspaceList
     ? [
         ...switcherGroups.pinned,
         ...switcherGroups.recent,
         ...switcherGroups.all,
       ]
-    : workspaces ?? [];
+    : workspaces;
+  // Cold list with the fetch in flight: geometry-matched skeleton rows, never
+  // a "Loading..." sentence (N4). Anything in hand paints as rows.
+  const showListSkeleton = loading && listEmpty;
 
   return (
     <>
@@ -530,7 +528,7 @@ export function WorkspaceSwitcher() {
           <div className="border-t border-border" />
 
           {/* Signed-in accounts — active row checkmarked, others click to switch */}
-          {accountRows.length > 0 && (
+          {desktopBridge()?.listAccounts ? <DesktopAccounts /> : accountRows.length > 0 && (
             <div className="flex flex-col gap-0.5">
               {accountRows.map((acct) => (
                 <AccountRow
@@ -551,8 +549,21 @@ export function WorkspaceSwitcher() {
           )}
 
           {/* Workspace list + Add workspace */}
-          {loading && (
-            <div className="px-2 py-1 text-xs text-muted-foreground">{t.loading}</div>
+          {showListSkeleton && (
+            <ul aria-busy="true" aria-hidden="true" className="flex flex-col gap-0.5">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <li
+                  key={i}
+                  className="flex min-h-11 items-center gap-2 px-2 py-1.5 sm:min-h-0"
+                >
+                  <Skeleton className="size-6 shrink-0 rounded-md" />
+                  <Skeleton
+                    className="h-3.5"
+                    style={{ width: `${44 + ((i * 17) % 30)}%` }}
+                  />
+                </li>
+              ))}
+            </ul>
           )}
           {error && (
             <div className="px-2 py-1 text-xs text-destructive">{error}</div>
@@ -612,7 +623,7 @@ export function WorkspaceSwitcher() {
                     routeProgress.start();
                     router.push("/teams");
                   }}
-                  className="w-full px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground rounded"
+                  className="w-full min-h-11 px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground rounded sm:min-h-0"
                 >
                   {t.manageWorkspaces}
                 </button>
@@ -629,7 +640,7 @@ export function WorkspaceSwitcher() {
                   setError(null);
                   setCreating(true);
                 }}
-                className="w-full inline-flex items-center gap-2 px-2 py-1.5 rounded text-sm text-primary hover:bg-muted transition-colors"
+                className="w-full inline-flex min-h-11 items-center gap-2 px-2 py-1.5 rounded text-sm text-primary hover:bg-muted transition-colors sm:min-h-0"
               >
                 <span aria-hidden>+</span>
                 <span>{t.addWorkspace}</span>
@@ -645,15 +656,22 @@ export function WorkspaceSwitcher() {
               type="button"
               role="menuitem"
               onClick={handleAddAccount}
-              className="text-left px-2 py-1.5 text-sm hover:bg-muted rounded transition-colors"
+              className="min-h-11 text-left px-2 py-1.5 text-sm hover:bg-muted rounded transition-colors sm:min-h-0"
             >
               {t.addAnotherAccount}
             </button>
+            {desktopBridge()?.chooseDeployment && (
+              <button type="button" role="menuitem"
+                onClick={() => { setOpen(false); requestSidebarClose(); desktopBridge()?.chooseDeployment?.(); }}
+                className="min-h-11 rounded px-2 py-1.5 text-left text-sm hover:bg-muted">
+                {t.useOwnDeployment}
+              </button>
+            )}
             <button
               type="button"
               role="menuitem"
               onClick={handleLogOut}
-              className="inline-flex items-center gap-2 text-left px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground rounded transition-colors"
+              className="inline-flex min-h-11 items-center gap-2 text-left px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground rounded transition-colors sm:min-h-0"
             >
               <LogOutIcon />
               <span>{t.logOut}</span>
@@ -804,7 +822,7 @@ function CreateWorkspacePanel({
           type="button"
           onClick={onBack}
           aria-label={t.create.back}
-          className="inline-flex items-center justify-center -ml-1 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          className="inline-flex size-11 items-center justify-center -ml-1 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors sm:size-auto sm:p-1"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M15 18l-6-6 6-6" />

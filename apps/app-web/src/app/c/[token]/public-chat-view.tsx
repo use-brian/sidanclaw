@@ -146,7 +146,9 @@ export function PublicChatView({ token, meta }: { token: string; meta: PublicCha
       </div>
 
       {/* ── Composer ───────────────────────────────────────────── */}
-      <div className="border-t border-border px-4 py-3">
+      {/* Bottom padding clears the home-indicator zone (responsive contract
+          M6): the send button sat inside it on notched phones. */}
+      <div className="border-t border-border px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <form
           className="mx-auto flex w-full max-w-2xl items-end gap-2"
           onSubmit={(e) => {
@@ -165,7 +167,7 @@ export function PublicChatView({ token, meta }: { token: string; meta: PublicCha
             }}
             placeholder={t.composerPlaceholder}
             rows={1}
-            className="max-h-40 min-h-[42px] flex-1 resize-none rounded-xl border border-border bg-background px-3 py-2.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+            className="max-h-40 min-h-[42px] flex-1 resize-none rounded-xl border border-border bg-background px-3 py-2.5 text-[16px] outline-none focus:ring-1 focus:ring-ring md:text-sm"
           />
           <button
             type="submit"

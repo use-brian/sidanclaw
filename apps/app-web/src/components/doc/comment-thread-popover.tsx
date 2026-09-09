@@ -101,11 +101,17 @@ export function placeAnchoredPanel(
   vw: number,
   vh: number,
   topInset = 0,
+  visibleBottom = vh,
 ): AnchoredPos {
   const left = Math.max(MARGIN, Math.min(r.left, vw - PANEL_WIDTH - MARGIN));
 
   const ceiling = Math.max(MARGIN, topInset); // highest the top edge may reach
-  const floorY = vh - MARGIN; // lowest the bottom edge may reach
+  // Lowest the bottom edge may reach. `visibleBottom` is the bottom of the
+  // VISIBLE viewport (the `visualViewport`), which is shorter than `vh` while
+  // the on-screen keyboard is up: the box must stay above the keys, while the
+  // `bottom` pin below is still measured from the layout viewport (`vh`),
+  // which is what `position:fixed` resolves against.
+  const floorY = Math.min(vh, visibleBottom) - MARGIN;
   const band = Math.max(0, floorY - ceiling);
 
   // Room for the box on each side of the anchor, already confined to the band.
@@ -219,6 +225,11 @@ export function useAnchoredPosition(
     if (!open || !anchorEl || typeof window === "undefined") return;
     let raf = 0;
     let last: AnchoredPos | null = null;
+    // The on-screen keyboard shrinks the VISUAL viewport, not the layout one
+    // (`innerHeight` is unchanged on iOS), so the visible floor comes from
+    // `visualViewport` and the panel re-places when it resizes / scrolls
+    // (responsive contract M5; report B row 36).
+    const vv = window.visualViewport;
     const compute = () => {
       raf = 0;
       const next = placeAnchoredPanel(
@@ -226,6 +237,7 @@ export function useAnchoredPosition(
         window.innerWidth,
         window.innerHeight,
         chromeBottom(),
+        vv ? vv.offsetTop + vv.height : window.innerHeight,
       );
       if (last && samePos(last, next)) return;
       last = next;
@@ -242,12 +254,16 @@ export function useAnchoredPosition(
     };
     compute();
     window.addEventListener("resize", schedule);
+    vv?.addEventListener("resize", schedule);
+    vv?.addEventListener("scroll", schedule);
     // Capture phase so a scroll from the anchor's own (non-bubbling) scroll
     // parent is seen; `onScroll` filters out the panel's internal scroll.
     window.addEventListener("scroll", onScroll, true);
     return () => {
       if (raf) window.cancelAnimationFrame(raf);
       window.removeEventListener("resize", schedule);
+      vv?.removeEventListener("resize", schedule);
+      vv?.removeEventListener("scroll", schedule);
       window.removeEventListener("scroll", onScroll, true);
     };
   }, [anchorEl, open, panelRef]);
@@ -317,7 +333,7 @@ export function CommentThreadPopover({
         width: PANEL_WIDTH,
         maxHeight: pos.maxHeight,
       }}
-      className="z-40 flex max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+      className="z-40 flex max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
     >
       <CommentThreadBody
         key={thread.id}

@@ -76,6 +76,7 @@ import {
   quietFieldCls,
 } from "@/components/brain/skill-document";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import { isImageIcon } from "@use-brian/shared/page-icon";
 
 const MODEL_ALIASES: WorkflowModelAlias[] = ["standard", "pro", "max"];
@@ -83,9 +84,16 @@ const MODEL_ALIASES: WorkflowModelAlias[] = ["standard", "pro", "max"];
 /** Sentinel value used by the destinations dropdown to reveal a custom-ID input. */
 const CUSTOM_DESTINATION_VALUE = "__custom__";
 
-/** Compact input matching the rail's `size="sm"` selects. */
+/**
+ * Compact input matching the rail's `size="sm"` selects. 16px on a phone
+ * (responsive contract M4: iOS zooms the page on a sub-16px focus and stays
+ * zoomed) and 44px tall there.
+ */
 const RAIL_INPUT_CLS =
-  "w-full h-8 px-2.5 bg-background border border-input rounded-md text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50";
+  "w-full h-11 sm:h-8 px-2.5 bg-background border border-input rounded-md text-[16px] md:text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50";
+
+/** The rail's `size="sm"` selects: 36px on a phone, the primitive's 28px above. */
+const RAIL_SELECT_CLS = "w-full min-h-9 sm:min-h-0";
 
 const PROMPT_MAX = 8000;
 const PROMPT_WARN_AT = 7200;
@@ -137,6 +145,13 @@ type Props = {
   onMoveUp: () => void;
   onMoveDown: () => void;
   onRemove: () => void;
+  /**
+   * Wire THIS step to `targetStepId` (a branch names the arm through `port`)
+   * - the non-drag path beside the board's port drag (responsive contract
+   * M9). The page runs it through `connectEdge` so the refusals (self, cycle,
+   * duplicate, width) are the board's. Absent -> no "Connect to" row.
+   */
+  onConnect?: (targetStepId: string, port?: "true" | "false") => void;
   disabled?: boolean;
 };
 
@@ -157,6 +172,7 @@ export function StepEditor({
   onMoveUp,
   onMoveDown,
   onRemove,
+  onConnect,
   disabled,
 }: Props) {
   const t = useT();
@@ -169,7 +185,7 @@ export function StepEditor({
   return (
     <div className="rounded-xl border border-border/60 bg-card">
       {/* Toolbar — position + type readout left, reorder/remove right. */}
-      <div className="flex items-center justify-between gap-2 px-5 pt-4">
+      <div className="flex items-center justify-between gap-2 px-4 sm:px-5 pt-4">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/60">
             {format(b.stepOfTotal, { n: String(index + 1), total: String(total) })}
@@ -206,7 +222,7 @@ export function StepEditor({
 
       <div
         className={cn(
-          "px-5 pb-5 pt-3",
+          "px-4 sm:px-5 pb-5 pt-3",
           hasRail && "lg:grid lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-8",
         )}
       >
@@ -258,7 +274,7 @@ export function StepEditor({
                   wait: b.stepTypeWait,
                 }}
               >
-                <SelectTrigger size="sm" className="w-full">
+                <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -299,7 +315,7 @@ export function StepEditor({
                       ),
                     }}
                   >
-                    <SelectTrigger size="sm" className="w-full">
+                    <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -352,6 +368,16 @@ export function StepEditor({
             <RawJsonFields
               step={step}
               onChange={onChange}
+              disabled={disabled}
+              t={t}
+            />
+          )}
+
+          {onConnect && (
+            <ConnectToField
+              step={step}
+              steps={steps}
+              onConnect={onConnect}
               disabled={disabled}
               t={t}
             />
@@ -458,7 +484,7 @@ function InstructionBody({
           maxLength={PROMPT_MAX}
           aria-label={b.promptLabel}
           className={cn(
-            "min-h-32 w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
+            "min-h-32 w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] md:text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
             quietFieldCls,
           )}
         />
@@ -570,7 +596,7 @@ function ExecutionFields({
             max: b.stepModelMax,
           }}
         >
-          <SelectTrigger size="sm" className="w-full">
+          <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -647,7 +673,7 @@ function ExecutionFields({
             persistent: b.sessionPersistent,
           }}
         >
-          <SelectTrigger size="sm" className="w-full">
+          <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -795,8 +821,10 @@ function ToolsField({
             onChange={(e) => setQuery(e.target.value)}
             placeholder={b.toolsSearchPlaceholder}
             aria-label={b.toolsSearchPlaceholder}
-            autoFocus
-            className="h-5 w-full bg-transparent text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
+            // Not on a phone: the popup opens under a keyboard otherwise
+            // (responsive contract M4).
+            autoFocus={!isPhoneViewport()}
+            className="h-6 md:h-5 w-full bg-transparent text-[16px] md:text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
           />
         </div>
 
@@ -882,14 +910,14 @@ function ToolsField({
               aria-label={b.toolsCustomAdd}
               maxLength={128}
               disabled={disabled || atMax}
-              className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+              className="h-9 sm:h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-[16px] md:text-xs outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
             />
             <button
               type="button"
               onClick={addCustom}
               disabled={disabled || atMax || normalizeToolName(customDraft) === null}
               aria-label={b.toolsCustomAdd}
-              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-input px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+              className="inline-flex h-9 sm:h-7 shrink-0 items-center gap-1 rounded-md border border-input px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
             >
               <Plus className="size-3.5" aria-hidden />
               {b.toolsCustomAddShort}
@@ -1121,7 +1149,7 @@ function PageAnchorField({
           fromStep: b.pageAnchorModeFromStep,
         }}
       >
-        <SelectTrigger size="sm" className="w-full">
+        <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -1211,7 +1239,7 @@ function PageAnchorField({
             createSteps.map((s) => [s.id, s.description || s.id]),
           )}
         >
-          <SelectTrigger size="sm" className="w-full">
+          <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
             <SelectValue placeholder={b.pageAnchorFromStepPlaceholder} />
           </SelectTrigger>
           <SelectContent>
@@ -1364,7 +1392,7 @@ function SkillsField({
         disabled={disabled}
         items={MODE_ITEMS}
       >
-        <SelectTrigger size="sm" className="w-[6.75rem] shrink-0">
+        <SelectTrigger size="sm" className="w-[6.75rem] shrink-0 min-h-9 sm:min-h-0">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -1397,11 +1425,13 @@ function SkillsField({
               onChange={(e) => setQuery(e.target.value)}
               placeholder={b.skillsSearchPlaceholder}
               disabled={disabled}
-              className="w-full bg-transparent text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
+              className="w-full bg-transparent text-[16px] md:text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
             />
           </div>
 
-          {/* Horizontal rows: [Name] [Description] [Option] */}
+          {/* Horizontal rows: [Name] [Description] [Option]. Below `sm` the
+              row wraps to [Name] [Option] / [Description], so the select is
+              never pushed past the edge by a long name (C 11). */}
           <div className="flex max-h-56 flex-col gap-0.5 overflow-y-auto">
             {filteredSkills.length === 0 && filteredExtra.length === 0 ? (
               <div className="px-2 py-2 text-xs text-muted-foreground">
@@ -1413,14 +1443,14 @@ function SkillsField({
                   <div
                     key={s.rowId}
                     className={cn(
-                      "flex items-center gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-muted/40",
+                      "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-2 py-1.5 text-sm hover:bg-muted/40",
                       disabled && "opacity-60",
                     )}
                   >
-                    <span className="max-w-[10rem] shrink-0 truncate font-medium">
+                    <span className="min-w-0 flex-1 truncate font-medium sm:max-w-[10rem] sm:flex-none">
                       {s.name}
                     </span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                    <span className="order-last min-w-0 basis-full truncate text-xs text-muted-foreground sm:order-none sm:basis-auto sm:flex-1">
                       {s.description}
                     </span>
                     <ModeSelect slug={s.slug} mode={modeOf(s.slug)} />
@@ -1430,14 +1460,14 @@ function SkillsField({
                   <div
                     key={slug}
                     className={cn(
-                      "flex items-center gap-3 rounded-md px-2 py-1.5 text-sm hover:bg-muted/40",
+                      "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-2 py-1.5 text-sm hover:bg-muted/40",
                       disabled && "opacity-60",
                     )}
                   >
-                    <span className="max-w-[10rem] shrink-0 truncate font-mono text-xs text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground sm:max-w-[10rem] sm:flex-none">
                       {slug}
                     </span>
-                    <span className="min-w-0 flex-1" />
+                    <span className="hidden min-w-0 flex-1 sm:block" />
                     <ModeSelect slug={slug} mode={modeOf(slug)} />
                   </div>
                 ))}
@@ -1619,7 +1649,7 @@ export function WorkflowDeliveryField({
               web: b.deliverChannelWeb,
             }}
           >
-            <SelectTrigger size="sm" className="w-full">
+            <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1661,7 +1691,7 @@ export function WorkflowDeliveryField({
                   telegramChannels.map((channel) => [channel.id, channel.displayName]),
                 )}
               >
-                <SelectTrigger size="sm" className="w-full">
+                <SelectTrigger size="sm" className={RAIL_SELECT_CLS}>
                   <SelectValue placeholder={b.deliverTelegramChannelPlaceholder} />
                 </SelectTrigger>
                 <SelectContent>
@@ -1755,6 +1785,102 @@ export function WorkflowDeliveryField({
   );
 }
 
+/**
+ * "Connect to" - the non-drag wiring path (responsive contract M9). Picking
+ * another step appends an edge from THIS step to it through the page's
+ * `connectEdge` (a branch names its arm: "When true" / "When false" pick the
+ * arm's target, replacing it). The board's port drag stays the direct path;
+ * on a phone a 16px port was the only way to wire and plain-step wiring had
+ * no fallback at all (C 7). The row reads what is currently wired so the
+ * author can see the result without scrolling back to the board.
+ */
+function ConnectToField({
+  step,
+  steps,
+  onConnect,
+  disabled,
+  t,
+}: {
+  step: WorkflowStep;
+  steps: WorkflowStep[];
+  onConnect: (targetStepId: string, port?: "true" | "false") => void;
+  disabled?: boolean;
+  t: Dictionary;
+}) {
+  const b = t.workflowPage.builder;
+  const others = steps.filter((s) => s.id !== step.id);
+  const labelOf = (id: string) => {
+    const s = steps.find((x) => x.id === id);
+    return s ? s.description || s.id : id;
+  };
+  const itemsExcluding = (exclude: string[]): SearchableSelectItem[] =>
+    others
+      .filter((s) => !exclude.includes(s.id))
+      .map((s) => ({
+        value: s.id,
+        label: s.description || s.id,
+        hint: s.description ? s.id : undefined,
+      }));
+  const rows: Array<{ label: string; port?: "true" | "false"; current: string[] }> =
+    step.type === "branch"
+      ? [
+          {
+            label: b.connectToTrueLabel,
+            port: "true",
+            current: step.nextStepIdIfTrue ? [step.nextStepIdIfTrue] : [],
+          },
+          {
+            label: b.connectToFalseLabel,
+            port: "false",
+            current: step.nextStepIdIfFalse ? [step.nextStepIdIfFalse] : [],
+          },
+        ]
+      : [
+          {
+            label: b.connectToLabel,
+            current: Array.isArray(step.nextStepId)
+              ? step.nextStepId
+              : typeof step.nextStepId === "string"
+                ? [step.nextStepId]
+                : [],
+          },
+        ];
+
+  return (
+    <div className="mt-4 flex flex-col gap-3 border-t border-border/60 pt-3">
+      {rows.map((row) => (
+        <div key={row.port ?? "default"} className="flex flex-col gap-1.5">
+          <FieldLabel label={row.label} />
+          {others.length === 0 ? (
+            <div className="text-xs text-muted-foreground">{b.connectToEmpty}</div>
+          ) : (
+            <SearchableSelect
+              value=""
+              onValueChange={(v) => {
+                if (v) onConnect(v, row.port);
+              }}
+              items={itemsExcluding(row.current)}
+              placeholder={b.connectToPlaceholder}
+              searchPlaceholder={b.connectToSearchPlaceholder}
+              emptyMessage={b.connectToEmpty}
+              disabled={disabled}
+              aria-label={row.label}
+              className="h-11 sm:h-9"
+            />
+          )}
+          {row.current.length > 0 && (
+            <div className="text-[11px] text-muted-foreground/80">
+              {format(b.connectToCurrent, {
+                names: row.current.map(labelOf).join(", "),
+              })}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RawJsonFields({
   step,
   onChange,
@@ -1811,7 +1937,7 @@ function RawJsonFields({
             // (still resize-y) so the whole step JSON is visible once expanded.
             rows={14}
             spellCheck={false}
-            className="px-3 py-2 bg-background border border-border rounded-md text-xs font-mono outline-none focus:ring-2 focus:ring-ring resize-y"
+            className="px-3 py-2 bg-background border border-border rounded-md text-[16px] md:text-xs font-mono outline-none focus:ring-2 focus:ring-ring resize-y"
           />
           <div className="text-[11px] text-muted-foreground/80">
             {t.workflowPage.builder.stepRawJsonHint}
@@ -1919,7 +2045,8 @@ function IconButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent",
+        // 36px on a phone (M3), the compact 26px toolbar chip above `sm`.
+        "inline-flex size-9 sm:size-auto sm:p-1.5 items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 disabled:hover:bg-transparent",
         danger && "hover:text-red-600 dark:hover:text-red-400",
       )}
     >

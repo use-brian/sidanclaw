@@ -13,10 +13,13 @@
 // entry merged into ws-plan ("Plan & usage"); `openWorkspaceSettings("ws-usage")`
 // still lands there via the settings-modal alias case.
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import { useT, useLocale } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
+import { useCachedResource } from "@/lib/surface-cache";
+import { settingsUsageCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import {
   getUsage,
   startExtraUsageCheckout,
@@ -66,10 +69,6 @@ function formatLastUpdated(ms: number | null, dict: Record<string, string>): str
 export function UsageSection() {
   const t = useT();
   const locale = useLocale();
-  const [plan, setPlan] = useState("");
-  const [credits, setCredits] = useState<Credits>(EMPTY_CREDITS);
-  const [loading, setLoading] = useState(true);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [buying, setBuying] = useState(false);
   const [buyError, setBuyError] = useState<string | null>(null);
   // Re-render once a minute so the reset date / "resetting now" state stays current.
@@ -79,29 +78,33 @@ export function UsageSection() {
   // workspace from the doc workspace context.
   const { workspaceId } = useWorkspaceContext();
 
+  // Paints from the surface cache (instant-navigation contract N1): reopening
+  // the section renders the last-known bar on its first frame and
+  // revalidates behind it; the manual refresh control is the key's
+  // `refresh()`. No spine primitive names usage, so mount / visibility
+  // revalidation covers the rest. `getUsage` answers `null` for a non-OK
+  // response, which is cached as "no usage" (the honest value, not a
+  // fallback to stale rows).
+  const usage = useCachedResource(
+    workspaceId ? settingsUsageCacheKey(workspaceId) : null,
+    () => getUsage(workspaceId),
+  );
+  const { refresh } = usage;
+  const data = usage.data ?? null;
+  // `'free'` is the no-active-plan state, not a plan name — keep the raw
+  // value here and translate at render time.
+  const plan = data?.plan ?? "";
+  const credits = useMemo<Credits>(
+    () => (data?.credits ? { ...EMPTY_CREDITS, ...data.credits } : EMPTY_CREDITS),
+    [data],
+  );
+  const loading = usage.loading;
+  const lastUpdatedAt = usage.updatedAt > 0 ? usage.updatedAt : null;
+
   const fetchUsage = useCallback(() => {
     if (!workspaceId) return;
-    getUsage(workspaceId)
-      .then((data) => {
-        if (!data) {
-          setLoading(false);
-          return;
-        }
-        if (data.plan) {
-          // `'free'` is the no-active-plan state, not a plan name — keep the
-          // raw value here and translate at render time.
-          setPlan(data.plan);
-        }
-        if (data.credits) setCredits({ ...EMPTY_CREDITS, ...data.credits });
-        setLastUpdatedAt(Date.now());
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [workspaceId]);
-
-  useEffect(() => {
-    fetchUsage();
-  }, [fetchUsage]);
+    void refresh();
+  }, [refresh, workspaceId]);
 
   useEffect(() => {
     const tick = setInterval(() => setNow(new Date()), 60_000);
@@ -252,11 +255,22 @@ function UsageBar({
 }) {
   const t = useT();
   return (
-    <div className="flex items-center gap-6">
+    // Stacked on phones so the bar keeps its width instead of shrinking to
+    // 40px between a fixed label and a fixed percent (report A row 19).
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-6">
       {/* Left column: label + sublabel */}
-      <div className="w-44 shrink-0">
-        <div className="text-sm font-semibold">{label}</div>
-        <div className="text-xs text-muted-foreground mt-0.5">{sublabel}</div>
+      <div className="shrink-0 sm:w-44">
+        {loading ? (
+          <div aria-busy="true" className="space-y-1.5">
+            <Skeleton className="h-4 w-36" />
+            <Skeleton className="h-3 w-24" />
+          </div>
+        ) : (
+          <>
+            <div className="text-sm font-semibold">{label}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">{sublabel}</div>
+          </>
+        )}
       </div>
 
       {/* Middle: progress bar */}
@@ -270,7 +284,7 @@ function UsageBar({
       </div>
 
       {/* Right: percent used (or "Uncapped" for enterprise) */}
-      <div className="w-16 shrink-0 text-right">
+      <div className="shrink-0 sm:w-16 sm:text-right">
         <span className="text-sm text-muted-foreground tabular-nums">
           {loading ? (
             <span className="skeleton inline-block w-12 h-4" />

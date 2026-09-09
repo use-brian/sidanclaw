@@ -56,7 +56,18 @@ import {
 import { useRouter } from "next/navigation";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { promptDialog } from "@/components/ui/prompt-dialog";
-import { invalidateDocPage } from "@/lib/surface-prefetch";
+import {
+  homeDockCacheKey,
+  invalidateDocPage,
+  sidebarTreeCacheKey,
+} from "@/lib/surface-prefetch";
+import {
+  loadSurfaceCache,
+  mutateSurfaceCache,
+  readSurfaceCache,
+  useCachedResource,
+} from "@/lib/surface-cache";
+import { isAuthoritativeBrainDenial } from "@/lib/offline/brain-content-cache";
 import { useT, format } from "@/lib/i18n/client";
 import {
   createDraft,
@@ -93,10 +104,11 @@ import { fetchFeedTeamProfiles, type FeedProfile } from "@/lib/api/feed";
 import { isHostedEdition } from "@/lib/edition";
 import { fetchHomeDock, type ResolvedDock } from "@/lib/api/home-dock";
 import {
-  APPROVALS_REFRESH_EVENT,
-  type ApprovalsRefreshDetail,
-} from "@/lib/approvals-events";
-import { LOCAL_PAGES_CHANGED } from "@/lib/offline/offline-pages";
+  LOCAL_PAGES_CHANGED,
+  readCachedSidebarTree,
+  sidebarCacheKey,
+  type CachedSidebarTree,
+} from "@/lib/offline/offline-pages";
 import { idbGet, idbSet } from "@/lib/offline/idb";
 import { dropPageFromDocTabsSession } from "@/lib/doc-tabs-session";
 import { offlineWrite, getOnline } from "@/lib/offline/offline-writes";
@@ -111,6 +123,16 @@ function recentsKey(workspaceId: string): string {
 const RECENTS_STORAGE_CAP = 8;
 /** How many recent rows the sidebar renders (excludes the active page). */
 const RECENTS_VISIBLE_CAP = 5;
+
+/** Stable empties so a cold tree does not mint new arrays every render. */
+const EMPTY_ROWS: ViewListRow[] = [];
+const EMPTY_TEAMSPACES: Teamspace[] = [];
+/** What an authoritative denial paints: nothing this viewer may see. */
+const EMPTY_TREE: CachedSidebarTree = {
+  saved: EMPTY_ROWS,
+  drafts: EMPTY_ROWS,
+  teamspaces: EMPTY_TEAMSPACES,
+};
 
 /**
  * The slice of CENTRE-pane state the handlers need to keep optimistically in
@@ -276,9 +298,7 @@ export function DocSidebarDataProvider({
 }) {
   const t = useT().docPage;
 
-  const [saved, setSaved] = useState<ViewListRow[]>([]);
-  const [drafts, setDrafts] = useState<ViewListRow[]>([]);
-  const [teamspaces, setTeamspaces] = useState<Teamspace[]>([]);
+  // `saved` / `drafts` / `teamspaces` come from the cached tree below.
   const [draftPruneByid, setDraftPruneByid] = useState<
     Record<string, string | null>
   >({});
@@ -441,89 +461,137 @@ export function DocSidebarDataProvider({
     [workspaceId],
   );
 
-  // ── Sidebar list fetch — re-runs on workspace change + manual bump ────
+  // ── Sidebar page tree — cached, parallel, paint-first ─────────────────
+  // `saved` / `drafts` / `teamspaces` ride ONE `useCachedResource` slot keyed
+  // by workspace + viewer (`sidebarTreeCacheKey`; instant-navigation contract
+  // N1 / N2): switching workspaces back and forth paints the tree on the
+  // first frame, and a key miss paints an EMPTY tree, never the previous
+  // workspace's rows. The three fetches stay parallel inside the one fetcher
+  // (N7). The teamspace list rides the same fetch as the page lists so the
+  // sidebar's sections and their rows always land together (a row whose
+  // teamspace section hasn't arrived would misfile into Private); a failed
+  // teamspace fetch (an older backend without the route) degrades to the
+  // last cached sections rather than blanking the whole sidebar.
+  //
+  // After a FULL reload the memory slot is empty, so the first paint comes
+  // from the viewer-scoped IndexedDB copy `listViews` keeps
+  // (`readCachedSidebarTree`) while the network revalidates; the seed is
+  // superseded the moment the network answers. A user mutation reloads via
+  // `refresh()` (keep-last-good while the new lists land), never
+  // `invalidate`: this provider is mounted for the whole session, so the
+  // refresh always completes and a blank tree would only be a flash. The
+  // fetcher never rejects while a value is on screen (a rejected
+  // revalidation of a stale entry would re-run on the next snapshot); it
+  // keeps the last good tree and reports the error, or paints the empty tree
+  // on an authoritative denial (401 / 403 / 404 evict, never fall back).
   const [reloadTick, setReloadTick] = useState(0);
   const router = useRouter();
   const reloadSidebar = useCallback(() => setReloadTick((n) => n + 1), []);
+  const treeKey = workspaceId ? sidebarTreeCacheKey(workspaceId) : null;
+  const tree = useCachedResource<CachedSidebarTree>(treeKey, async () => {
+    const teamspacesKey = sidebarCacheKey("teamspaces", workspaceId);
+    try {
+      const [saved, drafts, teamspaces] = await Promise.all([
+        listViews({ workspaceId, state: "saved" }),
+        listViews({ workspaceId, state: "draft" }),
+        listTeamspaces(workspaceId).catch(async () =>
+          (teamspacesKey ? await idbGet<Teamspace[]>(teamspacesKey) : null) ?? [],
+        ),
+      ]);
+      if (teamspacesKey) void idbSet(teamspacesKey, teamspaces);
+      return { saved, drafts, teamspaces };
+    } catch (err) {
+      if (isAuthoritativeBrainDenial(err)) return EMPTY_TREE;
+      const previous = treeKey
+        ? readSurfaceCache<CachedSidebarTree>(treeKey).data
+        : undefined;
+      if (previous === undefined) throw err;
+      setTopError(err instanceof Error ? err.message : String(err));
+      return previous;
+    }
+  });
+  const treeError = tree.error;
   useEffect(() => {
-    if (!workspaceId) return;
+    // A cold-load failure (nothing to keep) surfaces here; the hook holds it
+    // without retrying until the next `reloadSidebar()`.
+    if (treeError === undefined) return;
+    setTopError(treeError instanceof Error ? treeError.message : String(treeError));
+  }, [treeError]);
+  const [diskSeed, setDiskSeed] = useState<{
+    workspaceId: string;
+    tree: CachedSidebarTree;
+  } | null>(null);
+  useEffect(() => {
+    if (!workspaceId || !treeKey) return;
+    // Memory already warm (a workspace revisit): nothing to seed.
+    if (readSurfaceCache<CachedSidebarTree>(treeKey).data !== undefined) return;
     let cancelled = false;
-
-    // Page lists merge durable local creations in the SDK. Teamspaces retain
-    // their last known list so cached sections remain available offline.
-    const teamspacesKey = `sidebar:teamspaces:${workspaceId}`;
-    // The teamspace list rides the same fetch as the page lists so the
-    // sidebar's sections and their rows always land together (a row whose
-    // teamspace section hasn't arrived would misfile into Private). A failed
-    // teamspace fetch (an older backend without the route) degrades to zero
-    // sections rather than blanking the whole sidebar.
-    Promise.all([
-      listViews({ workspaceId, state: "saved" }),
-      listViews({ workspaceId, state: "draft" }),
-      listTeamspaces(workspaceId).catch(async () => (await idbGet<Teamspace[]>(teamspacesKey)) ?? []),
-    ])
-      .then(([s, d, ts]) => {
-        if (cancelled) return;
-        setSaved(s);
-        setDrafts(d);
-        setTeamspaces(ts);
-        void idbSet(teamspacesKey, ts);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setTopError(message);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId, reloadTick]);
-
-  // ── Home dock (the "Suggested for you" data) ───────────────────────────
-  // Owned here per docs/architecture/features/home-dock.md → Frontend: the
-  // sidebar badge (HomeDock) and the Home pane (SuggestedView) share this one
-  // fetch. Stale-while-revalidate — a refetch keeps the current dock until
-  // the new one lands, and a failed refetch keeps it entirely (fetchHomeDock
-  // nulls on error). reloadTick is a dep because page mutations (drafts
-  // created/deleted/saved) move the dock's pickUp list — the lists' refresh
-  // rhythm revalidates the dock too.
-  const [dock, setDock] = useState<ResolvedDock | null>(null);
-  const [dockLoading, setDockLoading] = useState(true);
-  const [dockTick, setDockTick] = useState(0);
-  const reloadDock = useCallback(() => setDockTick((n) => n + 1), []);
-  useEffect(() => {
-    // Workspace switch: drop the old workspace's dock (never badge across).
-    setDock(null);
-    setDockLoading(true);
-  }, [workspaceId]);
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    fetchHomeDock(workspaceId).then((d) => {
-      if (cancelled) return;
-      if (d) setDock(d);
-      setDockLoading(false);
+    void readCachedSidebarTree(workspaceId).then((cached) => {
+      if (cancelled || !cached) return;
+      setDiskSeed({ workspaceId, tree: cached });
     });
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, dockTick, reloadTick]);
+  }, [workspaceId, treeKey]);
+  const paintedTree =
+    tree.data ??
+    (diskSeed?.workspaceId === workspaceId ? diskSeed.tree : undefined);
+  const saved = paintedTree?.saved ?? EMPTY_ROWS;
+  const drafts = paintedTree?.drafts ?? EMPTY_ROWS;
+  const teamspaces = paintedTree?.teamspaces ?? EMPTY_TEAMSPACES;
 
-  // Approval create/resolve events change the live approvals signal even
-  // though no page list changed. Listen at the provider (mounted across all
-  // workspace surfaces) so the persistent Suggested row, its badge, and the
-  // Home pane re-read the same dock immediately after an inline chat/queue
-  // response and after the cross-tab workspace event.
+  // ── Home dock (the "Suggested for you" data) ───────────────────────────
+  // Owned here per docs/architecture/features/home-dock.md → Frontend: the
+  // sidebar badge (HomeDock), the Home pane (SuggestedView) AND the workspace
+  // root (which decides whether to land on Suggested) read ONE cached slot,
+  // `homeDockCacheKey` - so a warm dock lets the root decide synchronously
+  // while this provider revalidates behind it. Stale-while-revalidate: a
+  // refetch keeps the current dock until the new one lands, and a failed
+  // refetch keeps it entirely (fetchHomeDock nulls on error; the fetcher
+  // returns the dock already on screen so the badge never blinks out on a
+  // transient failure, and resolves null only when there was nothing).
+  // Approval create / resolve events mark this key stale through the spine
+  // map (`surface-cache-invalidation.ts` -> APPROVALS_REFRESH_EVENT), so the
+  // provider carries no listener of its own; page mutations (drafts created /
+  // deleted / saved) move the dock's pickUp list, so `reloadSidebar` refreshes
+  // it alongside the lists.
+  const dockKey = workspaceId ? homeDockCacheKey(workspaceId) : null;
+  const dockRes = useCachedResource<ResolvedDock | null>(dockKey, async () => {
+    const next = await fetchHomeDock(workspaceId);
+    if (next) return next;
+    return dockKey
+      ? (readSurfaceCache<ResolvedDock | null>(dockKey).data ?? null)
+      : null;
+  });
+  const dock = dockRes.data ?? null;
+  const dockLoading = dockRes.loading;
+  const dockRefresh = dockRes.refresh;
+  const reloadDock = useCallback(() => {
+    void dockRefresh();
+  }, [dockRefresh]);
+  // SuggestedView's POST /refresh already holds the server's answer: write it
+  // straight into the slot (a load when the slot is still cold, so the value
+  // is not dropped by the no-op-when-empty patch seam).
+  const setDock = useCallback(
+    (next: ResolvedDock) => {
+      if (!dockKey) return;
+      if (readSurfaceCache<ResolvedDock | null>(dockKey).data !== undefined) {
+        mutateSurfaceCache<ResolvedDock | null>(dockKey, () => next);
+      } else {
+        void loadSurfaceCache(dockKey, async () => next);
+      }
+    },
+    [dockKey],
+  );
+  const treeRefresh = tree.refresh;
+  const refreshRef = useRef({ tree: treeRefresh, dock: dockRefresh });
+  refreshRef.current = { tree: treeRefresh, dock: dockRefresh };
   useEffect(() => {
-    if (!workspaceId || typeof window === "undefined") return;
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<ApprovalsRefreshDetail>).detail;
-      if (detail?.workspaceId && detail.workspaceId !== workspaceId) return;
-      reloadDock();
-    };
-    window.addEventListener(APPROVALS_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(APPROVALS_REFRESH_EVENT, handler);
-  }, [workspaceId, reloadDock]);
+    if (reloadTick === 0) return;
+    void refreshRef.current.tree();
+    void refreshRef.current.dock();
+  }, [reloadTick]);
 
   // Floating-chat bridge: a chat turn that persists a draft fires
   // `doc:draft-created`; refresh the lists so the new draft surfaces

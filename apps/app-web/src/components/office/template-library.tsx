@@ -185,10 +185,10 @@ export function OfficeTemplateLibrary({ workspaceId, templateId }: { workspaceId
         breadcrumbs={selectedName ? [{ label: t.templates, href: templatesHref }, { label: selectedName }] : [{ label: t.templates }]}
         right={
           <div className="flex items-center gap-2">
-            <button type="button" onClick={openTemplateUpload} aria-label={t.uploadTemplateAction} className="inline-flex h-8 items-center gap-1.5 rounded-md border bg-background px-2.5 text-sm font-medium">
+            <button type="button" onClick={openTemplateUpload} aria-label={t.uploadTemplateAction} className="inline-flex h-11 items-center gap-1.5 rounded-md border bg-background px-2.5 text-sm font-medium sm:h-8">
               <Upload className="size-4" aria-hidden /><span className="hidden sm:inline">{t.uploadTemplateAction}</span>
             </button>
-            <button type="button" onClick={openGenerate} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-action px-2.5 text-sm font-medium text-action-foreground">
+            <button type="button" onClick={openGenerate} className="inline-flex h-11 items-center gap-1.5 rounded-md bg-action px-2.5 text-sm font-medium text-action-foreground sm:h-8">
               <Sparkles className="size-4" aria-hidden /><span className="hidden sm:inline">{t.generateTemplateAction}</span>
             </button>
           </div>
@@ -217,17 +217,17 @@ export function OfficeTemplateLibrary({ workspaceId, templateId }: { workspaceId
       <Dialog.Root open={generateOpen} onOpenChange={(open) => { if (open) setGenerateOpen(true); else closeGenerate(); }}>
         <Dialog.Portal>
           <Dialog.Backdrop className="fixed inset-0 z-[80] bg-foreground/35 backdrop-blur-[1px]" />
-          <Dialog.Popup className="fixed inset-x-4 top-1/2 z-[81] mx-auto w-auto max-w-lg -translate-y-1/2 rounded-2xl border bg-background p-6 shadow-2xl outline-none">
+          <Dialog.Popup className="fixed inset-0 z-[81] h-dvh w-full overflow-y-auto bg-background p-5 outline-none sm:inset-auto sm:left-1/2 sm:top-1/2 sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border sm:p-6 sm:shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div><Dialog.Title className="text-lg font-semibold">{t.generateTemplateTitle}</Dialog.Title><Dialog.Description className="mt-1 text-sm text-muted-foreground">{t.generateTemplateDescription}</Dialog.Description></div>
-              <button type="button" disabled={generateState === "working"} aria-label={t.closeTemplateAria} title={t.closeTemplateAria} onClick={closeGenerate} className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"><X className="size-4" aria-hidden /></button>
+              <button type="button" disabled={generateState === "working"} aria-label={t.closeTemplateAria} title={t.closeTemplateAria} onClick={closeGenerate} className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 sm:size-8"><X className="size-4" aria-hidden /></button>
             </div>
             <div className="mt-4"><p className="text-xs font-medium text-muted-foreground">{t.guidedExamples}</p><div className="mt-2 flex flex-wrap gap-2"><button type="button" onClick={() => applyStarter("general-presentation")} className="rounded-full border px-3 py-1.5 text-xs">{t.starterPresentationTitle}</button><button type="button" onClick={() => applyStarter("letterhead")} className="rounded-full border px-3 py-1.5 text-xs">{t.starterLetterheadTitle}</button><button type="button" onClick={() => applyStarter("invoice")} className="rounded-full border px-3 py-1.5 text-xs">{t.starterInvoiceTitle}</button></div></div>
             <form className="mt-5 grid gap-3" onSubmit={(event) => void submitGuidedTemplate(event)}>
               <Select value={family} onValueChange={(value) => { if (value) setFamily(value as OfficeFamily); }}><SelectTrigger aria-label={t.family} className="h-9 w-full">{familyLabel(t, family)}</SelectTrigger><SelectContent><SelectItem value="document">{t.document}</SelectItem><SelectItem value="presentation">{t.presentation}</SelectItem><SelectItem value="spreadsheet">{t.spreadsheet}</SelectItem></SelectContent></Select>
-              <input required disabled={generateState === "working"} value={name} onChange={(event) => setName(event.target.value)} placeholder={t.templateName} className="h-9 rounded border px-2 disabled:opacity-60" />
-              <textarea required disabled={generateState === "working"} value={guidance} onChange={(event) => setGuidance(event.target.value)} placeholder={t.templateInstructions} className="min-h-28 rounded border p-2 disabled:opacity-60" />
-              <label className="text-sm font-medium">{t.website}<input type="url" required={!noWebsite} disabled={generateState === "working" || noWebsite} value={website} onChange={(event) => setWebsite(event.target.value)} placeholder={t.websitePlaceholder} className="mt-2 h-9 w-full rounded border px-2 font-normal disabled:opacity-50" /></label>
+              <input required disabled={generateState === "working"} value={name} onChange={(event) => setName(event.target.value)} placeholder={t.templateName} className="h-10 rounded border px-2 text-[16px] disabled:opacity-60 md:h-9 md:text-sm" />
+              <textarea required disabled={generateState === "working"} value={guidance} onChange={(event) => setGuidance(event.target.value)} placeholder={t.templateInstructions} className="min-h-28 rounded border p-2 text-[16px] disabled:opacity-60 md:text-sm" />
+              <label className="text-sm font-medium">{t.website}<input type="url" required={!noWebsite} disabled={generateState === "working" || noWebsite} value={website} onChange={(event) => setWebsite(event.target.value)} placeholder={t.websitePlaceholder} className="mt-2 h-10 w-full rounded border px-2 text-[16px] font-normal disabled:opacity-50 md:h-9 md:text-sm" /></label>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" disabled={generateState === "working"} checked={noWebsite} onChange={(event) => setNoWebsite(event.target.checked)} />{t.noWebsite}</label>
               {generateState === "failed" ? <p role="alert" className="text-sm text-destructive">{t.generateTemplateFailed}</p> : null}
               <div className="mt-2 flex justify-end gap-2 border-t pt-4"><button type="button" disabled={generateState === "working"} onClick={closeGenerate} className="h-9 rounded border px-3 text-sm font-medium disabled:opacity-50">{copy.common.cancel}</button><button type="submit" disabled={generateState === "working" || !name.trim() || !guidance.trim() || (!noWebsite && !website.trim())} className="h-9 rounded bg-action px-3 text-sm font-medium text-action-foreground disabled:opacity-50">{generateState === "working" ? t.generatingTemplate : t.generateDraft}</button></div>
@@ -239,10 +239,10 @@ export function OfficeTemplateLibrary({ workspaceId, templateId }: { workspaceId
       <Dialog.Root open={uploadOpen} onOpenChange={(open) => { if (open) setUploadOpen(true); else closeTemplateUpload(); }}>
         <Dialog.Portal>
           <Dialog.Backdrop className="fixed inset-0 z-[80] bg-foreground/35 backdrop-blur-[1px]" />
-          <Dialog.Popup className="fixed inset-x-4 top-1/2 z-[81] mx-auto w-auto max-w-xl -translate-y-1/2 rounded-2xl border bg-background p-6 shadow-2xl outline-none">
+          <Dialog.Popup className="fixed inset-0 z-[81] h-dvh w-full overflow-y-auto bg-background p-5 outline-none sm:inset-auto sm:left-1/2 sm:top-1/2 sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:w-[calc(100%-2rem)] sm:max-w-xl sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:border sm:p-6 sm:shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div><Dialog.Title className="text-lg font-semibold">{t.uploadTemplateTitle}</Dialog.Title><Dialog.Description className="mt-1 text-sm text-muted-foreground">{t.uploadTemplateDescription}</Dialog.Description></div>
-              <button type="button" disabled={uploadState === "working"} aria-label={t.closeTemplateAria} title={t.closeTemplateAria} onClick={closeTemplateUpload} className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"><X className="size-4" aria-hidden /></button>
+              <button type="button" disabled={uploadState === "working"} aria-label={t.closeTemplateAria} title={t.closeTemplateAria} onClick={closeTemplateUpload} className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 sm:size-8"><X className="size-4" aria-hidden /></button>
             </div>
             <form className="mt-5 grid gap-3" onSubmit={(event) => void submitTemplateUpload(event)}>
               <button
@@ -295,8 +295,8 @@ export function OfficeTemplateLibrary({ workspaceId, templateId }: { workspaceId
                 aria-hidden
               />
               {uploadState === "invalid" ? <p role="alert" className="text-sm text-destructive">{t.uploadInvalidFile}</p> : null}
-              <input required disabled={uploadState === "working"} value={uploadName} onChange={(event) => setUploadName(event.target.value)} placeholder={t.templateName} className="h-10 rounded-xl border bg-background px-3 text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60" />
-              <textarea required disabled={uploadState === "working"} value={uploadGuidance} onChange={(event) => setUploadGuidance(event.target.value)} placeholder={t.templateInstructions} className="min-h-24 rounded-xl border bg-background p-3 text-sm outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60" />
+              <input required disabled={uploadState === "working"} value={uploadName} onChange={(event) => setUploadName(event.target.value)} placeholder={t.templateName} className="h-10 rounded-xl border bg-background px-3 text-[16px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 md:text-sm" />
+              <textarea required disabled={uploadState === "working"} value={uploadGuidance} onChange={(event) => setUploadGuidance(event.target.value)} placeholder={t.templateInstructions} className="min-h-24 rounded-xl border bg-background p-3 text-[16px] outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 md:text-sm" />
               {uploadState === "failed" ? <p role="alert" className="text-sm text-destructive">{t.importTemplateFailed}</p> : null}
               <div className="mt-2 flex justify-end gap-2 border-t pt-4"><button type="button" disabled={uploadState === "working"} onClick={closeTemplateUpload} className="h-9 rounded border px-3 text-sm font-medium disabled:opacity-50">{copy.common.cancel}</button><button type="submit" disabled={!uploadFile || uploadState === "working" || !uploadName.trim() || !uploadGuidance.trim()} className="h-9 rounded bg-action px-3 text-sm font-medium text-action-foreground disabled:opacity-50">{uploadState === "working" ? t.importTemplateWorking : t.uploadTemplateAction}</button></div>
             </form>

@@ -46,6 +46,7 @@ import {
   type DraftRect,
   type GuestCommentDraft,
 } from "@/lib/guest-comment-selection";
+import { isPhoneViewport } from "@/lib/viewport";
 import { useGuestIdentity } from "@/components/doc/guest-comments";
 
 /** Composer card width — the editor's comment panel is 420; the public reading
@@ -54,8 +55,13 @@ import { useGuestIdentity } from "@/components/doc/guest-comments";
 const COMPOSER_WIDTH = 360;
 /** Gap between the last highlighted line and the composer / the pill. */
 const GAP = 8;
-/** The pill's height, for placing it above the selection. */
-const PILL_HEIGHT = 32;
+/** The pill's height, for placing it above the selection: 32px from `md`,
+ *  44px on a phone (responsive contract M3 - it is the only way into an
+ *  anchored comment). The className carries the same pair (`h-11 md:h-8`),
+ *  so the measurement and the paint cannot disagree. */
+const PILL_HEIGHT_DESKTOP = 32;
+const PILL_HEIGHT_PHONE = 44;
+const pillHeight = (): number => (isPhoneViewport() ? PILL_HEIGHT_PHONE : PILL_HEIGHT_DESKTOP);
 
 type Bubble = { top: number; left: number };
 type Draft = GuestCommentDraft & { rects: DraftRect[] };
@@ -63,12 +69,16 @@ type Draft = GuestCommentDraft & { rects: DraftRect[] };
 /**
  * Where the Comment pill goes for a selection: above the FIRST highlighted
  * line, left-aligned to it, clamped inside the container. Pure; exported for
- * the unit test.
+ * the unit test. `height` is the pill's rendered height for the viewport.
  */
-export function bubblePositionFor(rects: DraftRect[], containerWidth: number): Bubble | null {
+export function bubblePositionFor(
+  rects: DraftRect[],
+  containerWidth: number,
+  height: number = PILL_HEIGHT_DESKTOP,
+): Bubble | null {
   const first = rects[0];
   if (!first) return null;
-  const top = Math.max(0, first.top - PILL_HEIGHT - GAP);
+  const top = Math.max(0, first.top - height - GAP);
   const left = Math.max(0, Math.min(first.left, Math.max(0, containerWidth - 120)));
   return { top, left };
 }
@@ -133,7 +143,7 @@ export function GuestSelectionComment({
         setBubble(null);
         return;
       }
-      setBubble(bubblePositionFor(draftRects(d.range, root), containerWidth()));
+      setBubble(bubblePositionFor(draftRects(d.range, root), containerWidth(), pillHeight()));
     };
     const schedule = () => {
       if (raf) return;
@@ -253,8 +263,8 @@ export function GuestSelectionComment({
           aria-label={t.selectionAria}
           onMouseDown={keepSelection}
           onClick={openDraft}
-          style={{ position: "absolute", top: bubble.top, left: bubble.left, height: PILL_HEIGHT }}
-          className="z-30 inline-flex items-center gap-1.5 rounded-lg border border-border bg-popover px-2.5 text-[13px] font-medium text-popover-foreground shadow-md transition-colors hover:bg-accent"
+          style={{ position: "absolute", top: bubble.top, left: bubble.left }}
+          className="z-30 inline-flex h-11 items-center gap-1.5 rounded-lg border border-border bg-popover px-3 text-[13px] font-medium text-popover-foreground shadow-md transition-colors hover:bg-accent md:h-8 md:px-2.5"
         >
           <MessageSquare className="size-4 text-muted-foreground" aria-hidden />
           {t.selectionAction}
@@ -293,7 +303,7 @@ export function GuestSelectionComment({
               onChange={(e) => setName(e.target.value)}
               placeholder={t.namePlaceholder}
               maxLength={80}
-              className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm"
+              className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-[16px] md:text-sm"
             />
           ) : null}
           <div className="flex flex-col gap-1 rounded-2xl border border-foreground/[0.18] bg-background px-3 py-2">
@@ -309,13 +319,15 @@ export function GuestSelectionComment({
               }}
               placeholder={t.placeholder}
               rows={2}
-              className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[14px] leading-relaxed outline-none placeholder:text-muted-foreground/70 focus-visible:shadow-none"
+              className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[16px] leading-relaxed outline-none placeholder:text-muted-foreground/70 focus-visible:shadow-none md:text-[14px]"
             />
+            {/* 44px Post and Cancel on a phone (M3): the only way to submit an
+                anchored comment was a 28px circle. */}
             <div className="mt-1 flex items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={dismiss}
-                className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="min-h-11 rounded-md px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:min-h-0 md:px-2"
               >
                 {t.cancel}
               </button>
@@ -324,7 +336,7 @@ export function GuestSelectionComment({
                 onClick={() => void send()}
                 disabled={posting || !canSend}
                 aria-label={t.post}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground md:size-7"
               >
                 <ArrowUp className="size-4" />
               </button>

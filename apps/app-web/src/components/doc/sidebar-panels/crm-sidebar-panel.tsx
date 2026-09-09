@@ -12,29 +12,51 @@
  * same `crm-view.ts` codec the surface and the Home dock card use, so
  * "needs attention" means one thing everywhere.
  *
- * Fetches its own row copy for the counts (the "sidebar fetches its own
- * copy" pattern) — cheap against the flat endpoint, refreshed on the
- * brain-refresh signal the surface fires after mutations.
+ * Reads the SURFACE's cache slots for its counts instead of fetching a copy
+ * (instant-navigation contract N1 / N2 / N3): the config (`crmConfigCacheKey`)
+ * to resolve the selected pipeline exactly as the surface does, then the
+ * `summary`, `lookups` and `email-drafts` regions through
+ * `crmRegionCacheKey` and the approvals queue through `approvalsCacheKey` -
+ * every key built in `lib/surface-prefetch.ts`, never by hand. The panel
+ * remounts on every surface entry, and its old private `fetchWorkspaceCrm`
+ * paid a second request (the full flat record set) and blanked the counts
+ * each time while the surface's regions sat in the cache. Live updates come
+ * from the ONE spine map (`lib/surface-cache-invalidation.ts` marks
+ * `crm:<wid>:` and `approvals:<wid>` stale), so there is no listener here.
+ * Counts paint from cached values; skeleton pills show only when nothing is
+ * cached (N4).
  *
- * [COMP:app-web/crm-surface] (the sidebar-panel flavour)
+ * [COMP:app-web/crm-sidebar-panel]
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
-import { BRAIN_REFRESH_EVENT } from "@/lib/brain-events";
+import { Skeleton } from "@/components/skeleton";
+import { useCachedResource } from "@/lib/surface-cache";
 import {
-  APPROVALS_REFRESH_EVENT,
-  type ApprovalsRefreshDetail,
-} from "@/lib/approvals-events";
+  approvalsCacheKey,
+  crmConfigCacheKey,
+  crmRegionCacheKey,
+} from "@/lib/surface-prefetch";
 import { listApprovals, type PendingApprovalRow } from "@/lib/api/approvals";
-import { fetchCrmEmailDrafts, fetchWorkspaceCrm, type CrmData } from "@/lib/api/crm";
+import {
+  fetchCrmConfig,
+  fetchCrmDirectories,
+  fetchCrmEmailDrafts,
+  fetchCrmSummary,
+  type CrmConfig,
+  type CrmDirectories,
+  type CrmEmailDraft,
+  type CrmSummary,
+} from "@/lib/api/crm";
 import { crmEmailApprovalQueue } from "@/lib/crm-r2";
 import {
-  crmQuickCounts,
+  crmDataFromDirectories,
   crmViewFromSearch,
+  resolveSelectedPipeline,
   sectionForQuickFilter,
   CONTACT_QUICK_FILTERS,
   CRM_SECTIONS,
@@ -69,55 +91,54 @@ export function CrmSidebarPanel({ workspaceId }: { workspaceId: string }) {
   const t = useT().crmPage;
   const searchParams = useSearchParams();
 
-  // ── Live counts (own fetch; refreshed on the surface's mutate signal) ──
-  const [data, setData] = useState<CrmData | null>(null);
-  const [approvals, setApprovals] = useState<PendingApprovalRow[]>([]);
-  const [canonicalDraftCount, setCanonicalDraftCount] = useState(0);
-  const refresh = useCallback(async () => {
-    const [crm, pending, drafts] = await Promise.allSettled([
-      fetchWorkspaceCrm(workspaceId),
-      listApprovals(workspaceId, { throwOnError: true }),
-      fetchCrmEmailDrafts(workspaceId),
-    ]);
-    setData(crm.status === "fulfilled" ? crm.value : { deals: [], contacts: [], companies: [] });
-    if (pending.status === "fulfilled") setApprovals(pending.value);
-    if (drafts.status === "fulfilled") setCanonicalDraftCount(drafts.value.length);
-  }, [workspaceId]);
-  useEffect(() => {
-    setData(null);
-    void refresh();
-    const handleBrainRefresh = () => void refresh();
-    const handleApprovalsRefresh = (event: Event) => {
-      const detail = (event as CustomEvent<ApprovalsRefreshDetail>).detail;
-      if (!detail?.workspaceId || detail.workspaceId === workspaceId) void refresh();
-    };
-    window.addEventListener(BRAIN_REFRESH_EVENT, handleBrainRefresh);
-    window.addEventListener(APPROVALS_REFRESH_EVENT, handleApprovalsRefresh);
-    return () => {
-      window.removeEventListener(BRAIN_REFRESH_EVENT, handleBrainRefresh);
-      window.removeEventListener(APPROVALS_REFRESH_EVENT, handleApprovalsRefresh);
-    };
-  }, [refresh, workspaceId]);
-
-  const counts = useMemo(
-    () => crmQuickCounts(data?.deals ?? [], data?.contacts ?? [], new Date()),
-    [data],
-  );
-  const emailDraftCount = useMemo(
-    () => canonicalDraftCount + (data ? crmEmailApprovalQueue(data, approvals).length : 0),
-    [approvals, canonicalDraftCount, data],
-  );
-
   const view = crmViewFromSearch(searchParams);
+
+  // ── Live counts from the surface's own cache slots ─────────────────────
+  // The four reads are independent and run in parallel on a cold cache (N7);
+  // on a warm one none of them fetches at all.
+  const configResource = useCachedResource<CrmConfig>(
+    crmConfigCacheKey(workspaceId),
+    () => fetchCrmConfig(workspaceId),
+  );
+  const selectedPipeline = resolveSelectedPipeline(configResource.data?.pipelines, view.pipeline);
+  const summaryResource = useCachedResource<CrmSummary>(
+    crmRegionCacheKey(workspaceId, "summary", selectedPipeline?.id ?? "all"),
+    () => fetchCrmSummary(workspaceId, selectedPipeline?.id),
+  );
+  const directoriesResource = useCachedResource<CrmDirectories>(
+    crmRegionCacheKey(workspaceId, "lookups"),
+    () => fetchCrmDirectories(workspaceId),
+  );
+  const emailDraftsResource = useCachedResource<CrmEmailDraft[]>(
+    crmRegionCacheKey(workspaceId, "email-drafts"),
+    () => fetchCrmEmailDrafts(workspaceId),
+  );
+  const approvalsResource = useCachedResource<PendingApprovalRow[]>(
+    approvalsCacheKey(workspaceId),
+    () => listApprovals(workspaceId, { throwOnError: true }),
+  );
+
+  const summary = summaryResource.data ?? null;
+  const counts = summary?.attention ?? { overdue: 0, stale: 0, noAmount: 0, orphaned: 0 };
+  const emailDraftCount = useMemo(() => {
+    const canonical = emailDraftsResource.data?.length ?? 0;
+    const queued = crmEmailApprovalQueue(
+      crmDataFromDirectories(directoriesResource.data),
+      approvalsResource.data ?? [],
+    ).length;
+    return canonical + queued;
+  }, [approvalsResource.data, directoriesResource.data, emailDraftsResource.data]);
+  const emailCountReady =
+    emailDraftsResource.data !== undefined || approvalsResource.data !== undefined;
   const sectionLabels: Record<CrmSection, string> = {
     deals: t.sectionDeals,
     contacts: t.sectionContacts,
     companies: t.sectionCompanies,
   };
   const sectionCounts: Record<CrmSection, number> = {
-    deals: data?.deals.length ?? 0,
-    contacts: data?.contacts.length ?? 0,
-    companies: data?.companies.length ?? 0,
+    deals: summary?.totals.deals ?? 0,
+    contacts: summary?.totals.contacts ?? 0,
+    companies: summary?.totals.companies ?? 0,
   };
   const quickLabels: Record<CrmQuickFilter, string> = {
     overdue: t.quickOverdue,
@@ -144,10 +165,12 @@ export function CrmSidebarPanel({ workspaceId }: { workspaceId: string }) {
             <span className="min-w-0 flex-1 truncate">
               {sectionLabels[section]}
             </span>
-            {data !== null && (
+            {summary !== null ? (
               <span className="shrink-0 tabular-nums text-[11px] text-sidebar-foreground/50">
                 {sectionCounts[section]}
               </span>
+            ) : (
+              <Skeleton className="h-3 w-5 shrink-0 rounded" data-sidebar-count-skeleton />
             )}
           </Link>
         ))}
@@ -157,7 +180,11 @@ export function CrmSidebarPanel({ workspaceId }: { workspaceId: string }) {
           className={rowCls(view.review === "email")}
         >
           <span className="min-w-0 flex-1 truncate">{t.r2.emailDrafts}</span>
-          <AttentionBadge count={emailDraftCount} />
+          {emailCountReady ? (
+            <AttentionBadge count={emailDraftCount} />
+          ) : (
+            <Skeleton className="h-[1.1rem] w-5 shrink-0 rounded-full" data-sidebar-count-skeleton />
+          )}
         </Link>
       </div>
 
@@ -175,7 +202,11 @@ export function CrmSidebarPanel({ workspaceId }: { workspaceId: string }) {
               className={rowCls(view.review === null && view.quick === f)}
             >
               <span className="min-w-0 flex-1 truncate">{quickLabels[f]}</span>
-              <AttentionBadge count={counts[f]} />
+              {summary !== null ? (
+                <AttentionBadge count={counts[f]} />
+              ) : (
+                <Skeleton className="h-[1.1rem] w-5 shrink-0 rounded-full" data-sidebar-count-skeleton />
+              )}
             </Link>
           ))}
         </div>

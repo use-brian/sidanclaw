@@ -587,7 +587,7 @@ function ConnectorPicker({
       }}
       disabled={disabled}
     >
-      <SelectTrigger className="w-full max-w-md text-sm">
+      <SelectTrigger className="w-full max-w-md min-h-11 sm:min-h-0 text-[16px] md:text-sm">
         <SelectValue placeholder={t.workflowPage.builder.eventSourcePickConnector} />
       </SelectTrigger>
       <SelectContent>
@@ -638,7 +638,7 @@ function ChannelPicker({
       }}
       disabled={disabled}
     >
-      <SelectTrigger className="w-full max-w-md text-sm">
+      <SelectTrigger className="w-full max-w-md min-h-11 sm:min-h-0 text-[16px] md:text-sm">
         <SelectValue placeholder={t.workflowPage.builder.eventSourcePickChannel} />
       </SelectTrigger>
       <SelectContent>
@@ -688,7 +688,7 @@ function PagePicker({
         }}
         disabled={disabled}
       >
-        <SelectTrigger className="w-full max-w-md text-sm">
+        <SelectTrigger className="w-full max-w-md min-h-11 sm:min-h-0 text-[16px] md:text-sm">
           <SelectValue placeholder={t.workflowPage.builder.eventSourcePickPage} />
         </SelectTrigger>
         <SelectContent>
@@ -784,7 +784,7 @@ function CrmWatchFor({
             }}
             disabled={disabled}
           >
-            <SelectTrigger className="w-full max-w-md text-sm">
+            <SelectTrigger className="w-full max-w-md min-h-11 sm:min-h-0 text-[16px] md:text-sm">
               <SelectValue placeholder={t.workflowPage.builder.eventCrmStableKeysPlaceholder} />
             </SelectTrigger>
             <SelectContent>
@@ -930,7 +930,7 @@ function PageActorPicker({
             }}
             disabled={disabled}
           >
-            <SelectTrigger className="w-full max-w-md text-sm">
+            <SelectTrigger className="w-full max-w-md min-h-11 sm:min-h-0 text-[16px] md:text-sm">
               <SelectValue
                 placeholder={t.workflowPage.builder.eventPageChangedByAdd}
               />
@@ -1124,7 +1124,7 @@ function TaskAssigneePicker({
             }}
             disabled={disabled}
           >
-            <SelectTrigger className="w-full max-w-md text-sm">
+            <SelectTrigger className="w-full max-w-md min-h-11 sm:min-h-0 text-[16px] md:text-sm">
               <SelectValue
                 placeholder={t.workflowPage.builder.eventTaskAssigneeAdd}
               />
@@ -1322,7 +1322,7 @@ function ChipInput({
             : t.workflowPage.builder.eventMatchChipPlaceholder
         }
         disabled={disabled || atCap}
-        className="px-3 py-1.5 bg-background border border-border rounded-md text-sm outline-none focus:ring-2 focus:ring-ring max-w-md disabled:opacity-60"
+        className="px-3 py-1.5 bg-background border border-border rounded-md text-[16px] md:text-sm outline-none focus:ring-2 focus:ring-ring max-w-md disabled:opacity-60"
       />
     </div>
   );

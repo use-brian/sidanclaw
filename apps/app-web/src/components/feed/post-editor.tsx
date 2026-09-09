@@ -27,6 +27,7 @@ import {
   Heart,
   Link2,
   MessageCircle,
+  MessageSquareText,
   Pencil,
   Plus,
   Repeat2,
@@ -46,6 +47,9 @@ import { BrandCheck } from "@/components/feed/brand-check";
 import { PostMediaTray } from "@/components/feed/post-media-tray";
 import type { PostMedia } from "@/lib/feed-media";
 import { TuningChatPanel } from "@/components/feed/tuning-chat-panel";
+import { PlanMobileSheet } from "@/components/feed/plan-mobile-sheet";
+import { useLgViewport } from "@/components/feed/use-lg-viewport";
+import { Skeleton } from "@/components/skeleton";
 import {
   PeekResizeHandle,
   usePeekResize,
@@ -308,7 +312,7 @@ function NewPost({
                 onChange={(e) => { setTitle(e.target.value); saveForm({ title: e.target.value }); }}
                 placeholder={te.newPostTitlePlaceholder}
                 disabled={busy || !formReady || !canDraft}
-                className="h-10 w-full rounded-xl border border-border/70 bg-background px-3.5 text-sm shadow-xs disabled:opacity-50"
+                className="h-10 w-full rounded-xl border border-border/70 bg-background px-3.5 text-[16px] md:text-sm shadow-xs disabled:opacity-50"
               />
             </div>
 
@@ -335,7 +339,7 @@ function NewPost({
                 placeholder={te.newPostBriefPlaceholder}
                 disabled={busy || !formReady || !canDraft}
                 rows={6}
-                className="w-full resize-y rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm leading-relaxed shadow-xs disabled:opacity-50"
+                className="w-full resize-y rounded-xl border border-border/70 bg-background px-3.5 py-3 text-[16px] md:text-sm leading-relaxed shadow-xs disabled:opacity-50"
               />
             </div>
 
@@ -399,6 +403,11 @@ function PostPane({
   const te = t.postEditor;
   const router = useRouter();
   const dockRecorder = useGlobalDockRecorder();
+  // Below `lg` the refine chat is a FAB -> bottom sheet instead of the
+  // docked rail (responsive contract M5); mount-gated so exactly one panel
+  // subscribes to the post's session.
+  const isLg = useLgViewport();
+  const [refineOpen, setRefineOpen] = useState(false);
   // User-adjustable refine-rail width — the shared peek-resize behavior
   // (drag the left edge, double-click to reset, persisted per key).
   const {
@@ -630,7 +639,7 @@ function PostPane({
             onChange={(e) => {
               permalink = e.target.value;
             }}
-            className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus:outline-none"
+            className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm focus:outline-none"
           />
         ),
       });
@@ -801,9 +810,23 @@ function PostPane({
   );
 
   if (loading) {
+    // The editor's silhouette (header row, status strip, the caption card)
+    // rather than a sentence (instant-navigation N4); the composition read is
+    // the one wait this surface still pays, and it should look like a frame.
     return (
-      <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-        {te.loading}
+      <div aria-hidden data-post-editor-skeleton className="animate-fade-in p-4 sm:p-6 xl:p-8">
+        <div className="space-y-6">
+          <div className="flex items-center gap-3 border-b border-border/60 pb-4">
+            <Skeleton className="size-8 rounded-xl" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="h-8 w-28 rounded-lg" />
+          </div>
+          <Skeleton className="h-11 w-full rounded-xl" />
+          <Skeleton className="h-52 w-full rounded-xl" />
+        </div>
       </div>
     );
   }
@@ -866,7 +889,7 @@ function PostPane({
                             event.currentTarget.blur();
                           }
                         }}
-                        className="h-7 min-w-0 w-full truncate rounded-md border border-transparent bg-transparent px-1 text-[15px] font-semibold outline-none transition-colors hover:border-border/70 focus:border-border focus:bg-background disabled:opacity-60"
+                        className="h-9 md:h-7 min-w-0 w-full truncate rounded-md border border-transparent bg-transparent px-1 text-[16px] md:text-[15px] font-semibold outline-none transition-colors hover:border-border/70 focus:border-border focus:bg-background disabled:opacity-60"
                       />
                       <Pencil className="size-3 shrink-0 text-muted-foreground/70" aria-hidden />
                     </div>
@@ -883,7 +906,7 @@ function PostPane({
               <div
                 role="group"
                 aria-label={te.viewModeAria}
-                className="inline-flex h-8 items-center rounded-lg border border-border/70 bg-muted/35 p-0.5"
+                className="inline-flex h-10 md:h-8 items-center rounded-lg border border-border/70 bg-muted/35 p-0.5"
               >
                 {(["edit", "preview"] as const).map((mode) => (
                   <button
@@ -892,7 +915,7 @@ function PostPane({
                     onClick={() => setViewMode(mode)}
                     aria-pressed={viewMode === mode}
                     className={cn(
-                      "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+                      "h-9 md:h-7 rounded-md px-3 md:px-2.5 text-[11px] font-medium transition-colors",
                       viewMode === mode
                         ? "bg-background text-foreground shadow-xs"
                         : "text-muted-foreground hover:text-foreground",
@@ -958,7 +981,7 @@ function PostPane({
                   {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
                   {copied ? te.copied : te.copyCaption}
                 </Button>
-                <Button variant="outline" size="icon" type="button" onClick={() => void removePost()} disabled={busy || remoteBlocked} aria-label={te.delete} title={te.delete} className="size-8 text-muted-foreground hover:text-destructive">
+                <Button variant="outline" size="icon" type="button" onClick={() => void removePost()} disabled={busy || remoteBlocked} aria-label={te.delete} title={te.delete} className="size-9 md:size-8 text-muted-foreground hover:text-destructive">
                   <Trash2 className="size-3.5" aria-hidden />
                 </Button>
               </div>
@@ -1033,7 +1056,7 @@ function PostPane({
                           onClick={() => { setSelectedId(version.id); if (!readOnly) void persist({ text: version.text }); }}
                           aria-pressed={active}
                           className={cn(
-                            "inline-flex h-7 items-center rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                            "inline-flex h-9 md:h-7 items-center rounded-full border px-3 md:px-2.5 text-[11px] font-medium transition-colors",
                             active
                               ? "border-transparent bg-foreground text-background"
                               : "border-border bg-background text-muted-foreground hover:bg-muted",
@@ -1145,36 +1168,73 @@ function PostPane({
         </div>
       </main>
 
-      <aside className="relative h-[min(680px,85dvh)] min-h-[520px] border-t border-border/60 lg:h-auto lg:min-h-0 lg:border-l lg:border-t-0">
-        <div className="hidden lg:block">
-          <PeekResizeHandle resizing={railResizing} {...railHandleProps} />
-        </div>
-        {offline || localPost?.newSession ? (
-          <p className="p-5 text-sm text-muted-foreground">{te.refineNeedsConnection}</p>
-        ) : <TuningChatPanel
-          docked
-          assistantId={assistantId}
-          assistantName={assistantName}
-          iconSeed={assistantIconSeed}
-          workspaceId={workspaceId}
-          sessionId={sessionId}
-          title={te.chatTitle}
-          composerPlaceholder={te.chatPlaceholder}
-          headline={te.chatHeadline}
-          emptyTitle={te.chatEmptyTitle}
-          emptyBody={te.chatEmptyBody}
-          emptySuggestionsLabel={te.chatTry}
-          suggestions={[
-            te.chatSuggestion1,
-            te.chatSuggestion2,
-            te.chatSuggestion3,
-          ]}
-          onTurnComplete={() => void load()}
-          renderPlanGate={planGate}
-          dockRecorder={dockRecorder ?? undefined}
-          ownsDockRecorderTarget
-        />}
-      </aside>
+      {/* The refine chat, hosted ONCE: the resizable rail at `lg+`, and below
+          it a FAB -> bottom sheet (responsive contract M5, the
+          `MobileChatDrawer` shape) instead of a 520-680px block under the
+          whole editor with its composer beneath the keyboard. `keepMounted`
+          keeps a streaming turn alive while the sheet is closed; the `isLg`
+          gate keeps exactly one panel subscribed to the post's session. */}
+      {(() => {
+        const refinePanel =
+          offline || localPost?.newSession ? (
+            <p className="p-5 text-sm text-muted-foreground">{te.refineNeedsConnection}</p>
+          ) : (
+            <TuningChatPanel
+              docked
+              assistantId={assistantId}
+              assistantName={assistantName}
+              iconSeed={assistantIconSeed}
+              workspaceId={workspaceId}
+              sessionId={sessionId}
+              title={te.chatTitle}
+              composerPlaceholder={te.chatPlaceholder}
+              headline={te.chatHeadline}
+              emptyTitle={te.chatEmptyTitle}
+              emptyBody={te.chatEmptyBody}
+              emptySuggestionsLabel={te.chatTry}
+              suggestions={[
+                te.chatSuggestion1,
+                te.chatSuggestion2,
+                te.chatSuggestion3,
+              ]}
+              onTurnComplete={() => void load()}
+              renderPlanGate={planGate}
+              dockRecorder={dockRecorder ?? undefined}
+              ownsDockRecorderTarget
+            />
+          );
+        return isLg ? (
+          <aside className="relative hidden border-border/60 lg:block lg:h-auto lg:min-h-0 lg:border-l">
+            <PeekResizeHandle resizing={railResizing} {...railHandleProps} />
+            {refinePanel}
+          </aside>
+        ) : (
+          <div className="lg:hidden" data-post-refine-mobile-host>
+            <button
+              type="button"
+              onClick={() => setRefineOpen(true)}
+              aria-label={te.refineOpenAria}
+              aria-expanded={refineOpen}
+              className={cn(
+                "fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-30",
+                "inline-flex h-14 w-14 items-center justify-center rounded-full bg-action text-action-foreground shadow-lg",
+                "transition-[opacity,transform] duration-150 ease-out",
+                refineOpen ? "pointer-events-none scale-90 opacity-0" : "scale-100 opacity-100",
+              )}
+            >
+              <MessageSquareText className="size-5" aria-hidden />
+            </button>
+            <PlanMobileSheet
+              open={refineOpen}
+              keepMounted
+              title={te.chatTitle}
+              onClose={() => setRefineOpen(false)}
+            >
+              <div className="absolute inset-0">{refinePanel}</div>
+            </PlanMobileSheet>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1224,7 +1284,7 @@ function FormatPicker({
               aria-pressed={active}
               className={cn(
                 "rounded-xl border text-left transition-colors",
-                compact ? "h-7 px-2.5 text-[11px]" : "p-3.5",
+                compact ? "h-9 md:h-7 px-3 md:px-2.5 text-[11px]" : "p-3.5",
                 active
                   ? "border-foreground bg-foreground text-background"
                   : "border-border/70 bg-background text-foreground hover:bg-muted/50",
@@ -1291,7 +1351,7 @@ function ThreadComposer({
               }}
               rows={4}
               placeholder={te.captionPlaceholder}
-              className="w-full resize-y bg-transparent text-[15px] leading-relaxed placeholder:text-muted-foreground/50 focus-visible:shadow-none"
+              className="w-full resize-y bg-transparent text-[16px] md:text-[15px] leading-relaxed placeholder:text-muted-foreground/50 focus-visible:shadow-none"
             />
           </div>
         );
@@ -1328,7 +1388,7 @@ function ArticleFields({
             readOnly={readOnly}
             onChange={(event) => onChange({ ...value, sourceUrl: event.target.value })}
             placeholder={te.articleSourcePlaceholder}
-            className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-sm"
+            className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-[16px] md:text-sm"
           />
         </div>
         <span className="block text-[11px] leading-relaxed text-muted-foreground">
@@ -1343,7 +1403,7 @@ function ArticleFields({
           readOnly={readOnly}
           onChange={(event) => onChange({ ...value, title: event.target.value })}
           placeholder={te.articleTitlePlaceholder}
-          className="h-9 w-full rounded-lg border border-border/70 bg-background px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-border/70 bg-background px-3 text-[16px] md:text-sm"
         />
       </label>
       <label className="block space-y-1.5">
@@ -1354,7 +1414,7 @@ function ArticleFields({
           onChange={(event) => onChange({ ...value, description: event.target.value })}
           placeholder={te.articleDescriptionPlaceholder}
           rows={3}
-          className="w-full resize-y rounded-lg border border-border/70 bg-background px-3 py-2 text-sm leading-relaxed"
+          className="w-full resize-y rounded-lg border border-border/70 bg-background px-3 py-2 text-[16px] md:text-sm leading-relaxed"
         />
       </label>
     </div>

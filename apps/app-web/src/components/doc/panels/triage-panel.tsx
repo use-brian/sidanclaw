@@ -21,7 +21,7 @@
  * [COMP:app-web/triage-panel]
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { useWorkspaces } from "@/contexts/workspace-context";
@@ -33,6 +33,10 @@ import {
   type GoalDetail,
   type GoalRow,
 } from "@/lib/api/goals";
+import { useCachedResource } from "@/lib/surface-cache";
+import { goalDetailCacheKey, triageCacheKey } from "@/lib/surface-prefetch";
+import { requestGoalRefresh } from "@/lib/goal-events";
+import { Skeleton } from "@/components/skeleton";
 import { cn } from "@/lib/utils";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { BackButton } from "@/components/ui/back-button";
@@ -40,34 +44,26 @@ import { BackButton } from "@/components/ui/back-button";
 export function TriagePanel() {
   const t = useT();
   const { activeId } = useWorkspaces();
-  const [rows, setRows] = useState<GoalRow[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Phone single-pane (responsive contract M1 / M5) - the Autopilot shape:
   // the first row is auto-selected, but below `md` the detail only takes the
   // pane once a row is tapped, and Back returns to the list.
   const [detailOpen, setDetailOpen] = useState(false);
-  // Bumped after a pane action (confirm / dismiss) so the list re-pulls and a
-  // still-open pane re-fetches its detail.
-  const [refetchTick, setRefetchTick] = useState(0);
-  const refetch = useCallback(() => setRefetchTick((n) => n + 1), []);
 
-  useEffect(() => {
-    if (!activeId) return;
-    let cancelled = false;
-    setRows(null);
-    // Unconfirmed drafts only - the §8 triage population. Non-terminal by
-    // default, so a dismissed (abandoned) draft leaves the queue.
-    listGoals(activeId, { confirmed: false })
-      .then((g) => {
-        if (!cancelled) setRows(g);
-      })
-      .catch(() => {
-        if (!cancelled) setRows([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId, refetchTick]);
+  // The drafts queue as one cache slot (N1): a re-open paints the last-known
+  // queue on the first frame and revalidates behind it. The spine map marks
+  // `triage:<wid>` on GOAL_REFRESH_EVENT - the `goal` primitive (a draft the
+  // triage judge minted from a worker) and the same-tab `requestGoalRefresh`
+  // after a pane action - so no local refetch tick. Unconfirmed drafts only:
+  // the §8 triage population, non-terminal by default, so a dismissed
+  // (abandoned) draft leaves the queue. `listGoals` answers `[]` on a non-OK
+  // response; the catch covers a network failure as `setRows([])` did.
+  const queue = useCachedResource<GoalRow[]>(
+    activeId ? triageCacheKey(activeId) : null,
+    () => listGoals(activeId ?? "", { confirmed: false }).catch(() => [] as GoalRow[]),
+  );
+  const rows: GoalRow[] | null = queue.data ?? (queue.loading ? null : []);
+  const refetch = () => requestGoalRefresh(activeId ?? null);
 
   // Keep a valid selection: default to the first row; drop a selection that
   // vanished after a confirm / dismiss.
@@ -102,9 +98,8 @@ export function TriagePanel() {
         </header>
 
         {rows === null ? (
-          <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-            {t.triagePage.loading}
-          </div>
+          // Cold cache only (N4); a re-open paints the cached queue.
+          <ListRowsSkeleton />
         ) : rows.length === 0 ? (
           <EmptyState />
         ) : (
@@ -145,8 +140,9 @@ export function TriagePanel() {
             </div>
             <TriageDetailPane
               key={selectedId}
+              workspaceId={activeId ?? ""}
               goalId={selectedId}
-              refreshKey={refetchTick}
+              seed={rows?.find((r) => r.id === selectedId) ?? null}
               onActed={refetch}
             />
           </>
@@ -158,6 +154,20 @@ export function TriagePanel() {
           )
         )}
       </div>
+    </div>
+  );
+}
+
+/** Cold-cache rows for the list column (N4) - the row recipe's geometry. */
+function ListRowsSkeleton() {
+  return (
+    <div className="flex-1 min-h-0 overflow-hidden px-3 py-3 flex flex-col gap-1.5" aria-busy>
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <div key={i} className="rounded-md border border-border bg-card px-3 py-2.5 flex flex-col gap-2">
+          <Skeleton className="h-3.5" style={{ width: `${48 + ((i * 17) % 40)}%` }} />
+          <Skeleton className="h-3 w-24" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -238,20 +248,62 @@ function TriageListRow({
  * refocuses the outcome field); Dismiss abandons the draft (reversible).
  */
 function TriageDetailPane({
+  workspaceId,
   goalId,
-  refreshKey,
+  seed,
   onActed,
 }: {
+  workspaceId: string;
   goalId: string;
-  refreshKey: number;
+  /** The queue row (task title + drafted outcome), painted while the detail
+   *  is cold so the review pane never opens blank. */
+  seed: GoalRow | null;
   onActed: () => void;
 }) {
   const t = useT();
   const labels = t.triagePage;
-  const [goal, setGoal] = useState<GoalDetail | null | undefined>(undefined);
-  const [outcomeDraft, setOutcomeDraft] = useState("");
+  // Shared with the Autopilot pane and the full goal page; marked stale by
+  // the spine map (`goal:<wid>:`) on every goal change. `getGoalDetail`
+  // answers `null` on a non-OK response, so a cold `error` is a network
+  // failure: not-found, never a skeleton forever.
+  const detail = useCachedResource<GoalDetail | null>(
+    goalDetailCacheKey(workspaceId, goalId),
+    () => getGoalDetail(goalId),
+  );
+  const goal =
+    detail.data === undefined && detail.error !== undefined ? null : detail.data;
+  const [outcomeDraft, setOutcomeDraft] = useState(seed?.outcome ?? "");
   const [verificationDraft, setVerificationDraft] = useState("");
   const [approachDraft, setApproachDraft] = useState("");
+  // The brief is an editable draft: adopt a (re)validated row only while
+  // every field still equals the value it was last seeded from, so a spine
+  // revalidation mid-edit never clobbers what the reviewer typed.
+  const adoptedRef = useRef<{ outcome: string; verification: string; approach: string } | null>(
+    seed ? { outcome: seed.outcome, verification: "", approach: "" } : null,
+  );
+  const draftsRef = useRef({ outcome: outcomeDraft, verification: verificationDraft, approach: approachDraft });
+  draftsRef.current = { outcome: outcomeDraft, verification: verificationDraft, approach: approachDraft };
+  useEffect(() => {
+    if (!goal) return;
+    const next = {
+      outcome: goal.outcome,
+      verification: goal.brief?.verification ?? "",
+      approach: goal.brief?.approach ?? "",
+    };
+    const adopted = adoptedRef.current;
+    const cur = draftsRef.current;
+    const clean =
+      adopted === null ||
+      (cur.outcome === adopted.outcome &&
+        cur.verification === adopted.verification &&
+        cur.approach === adopted.approach);
+    if (clean) {
+      setOutcomeDraft(next.outcome);
+      setVerificationDraft(next.verification);
+      setApproachDraft(next.approach);
+    }
+    adoptedRef.current = next;
+  }, [goal]);
   const [busy, setBusy] = useState<null | "confirm" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
   // The clarity gate's clarifying question (HTTP 200, ok:false) - guidance,
@@ -259,26 +311,28 @@ function TriageDetailPane({
   const [question, setQuestion] = useState<string | null>(null);
   const outcomeRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    setQuestion(null);
-    setGoal(undefined);
-    void getGoalDetail(goalId).then((g) => {
-      if (cancelled) return;
-      setGoal(g);
-      setOutcomeDraft(g?.outcome ?? "");
-      setVerificationDraft(g?.brief?.verification ?? "");
-      setApproachDraft(g?.brief?.approach ?? "");
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [goalId, refreshKey]);
-
   if (goal === undefined) {
+    // Cold cache: the queue row already knows the task and the drafted
+    // outcome, so the pane opens on those and skeletons the brief (N4).
     return (
-      <div className="w-full px-4 md:px-8 py-10 text-sm text-muted-foreground">{labels.loading}</div>
+      <div className="w-full h-full flex flex-col" aria-busy>
+        <div className="px-4 md:px-8 pt-6 flex flex-col gap-6">
+          {seed?.hostTitle && (
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">
+              {format(labels.taskHeading, { title: seed.hostTitle })}
+            </p>
+          )}
+          {seed && (
+            <h1 className="text-lg font-semibold break-words">{seed.outcome}</h1>
+          )}
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="flex flex-col gap-2">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-16 w-full rounded-md" />
+            </div>
+          ))}
+        </div>
+      </div>
     );
   }
   if (goal === null) {
@@ -449,8 +503,9 @@ function BriefField({
         maxLength={2000}
         aria-label={label}
         className={cn(
+          // 16px floor below `md` (M4): the brief editors zoomed on iOS.
           "w-full resize-none rounded-md border border-border bg-background px-3 py-2 leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          emphasis ? "text-lg font-semibold" : "text-sm",
+          emphasis ? "text-lg font-semibold" : "text-[16px] md:text-sm",
         )}
       />
       <p className="text-[11px] text-muted-foreground">{hint}</p>

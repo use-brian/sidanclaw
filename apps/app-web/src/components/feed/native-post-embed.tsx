@@ -239,7 +239,7 @@ function ScriptEmbed({
             e.stopPropagation();
             reload();
           }}
-          className="absolute top-2 right-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md bg-card/85 text-muted-foreground shadow-sm backdrop-blur-sm opacity-0 group-hover/embed:opacity-100 focus-visible:opacity-100 hover:text-foreground hover:bg-card transition-opacity"
+          className="absolute top-2 right-2 z-10 inline-flex h-11 w-11 md:h-7 md:w-7 items-center justify-center rounded-md bg-card/85 text-muted-foreground shadow-sm backdrop-blur-sm opacity-100 md:opacity-0 md:group-hover/embed:opacity-100 focus-visible:opacity-100 hover:text-foreground hover:bg-card transition-opacity"
         >
           <ReloadIcon spinning={reloading} />
         </button>

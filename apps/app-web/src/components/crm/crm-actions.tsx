@@ -46,6 +46,7 @@ import {
   type CsvPreview,
 } from "@/lib/crm-r2";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { CrmProductionImportPanel } from "@/components/crm/operations/import-panel";
 
@@ -175,10 +176,13 @@ function Shell({ open, onOpenChange, title, description, children }: {
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm" />
-        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-xl">
+        {/* Full-screen below `sm` (the settings-modal shape, responsive
+            contract M5): a floating card with the iOS keyboard open left its
+            lower third, Create included, under the keyboard. */}
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex h-[100dvh] w-full max-w-none -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-none border border-border bg-background shadow-xl sm:h-auto sm:max-h-[85dvh] sm:w-[calc(100%-2rem)] sm:max-w-2xl sm:rounded-2xl">
           <div className="flex items-start justify-between border-b border-border px-5 py-4">
             <div><Dialog.Title className="text-base font-semibold">{title}</Dialog.Title><Dialog.Description className="mt-1 text-xs text-muted-foreground">{description}</Dialog.Description></div>
-            <Button size="icon-sm" variant="ghost" onClick={() => onOpenChange(false)} aria-label={t.close}><X aria-hidden /></Button>
+            <Button size="icon-sm" variant="ghost" className="max-sm:size-11" onClick={() => onOpenChange(false)} aria-label={t.close}><X aria-hidden /></Button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-5">{children}</div>
         </Dialog.Popup>
@@ -710,5 +714,8 @@ function CreateField({ field, data, value, onChange }: {
 }
 
 function Input({ label, value, onChange, placeholder, autoFocus, type = "text" }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; autoFocus?: boolean; type?: "text" | "number" | "date" }) {
-  return <label className="block text-xs"><span className="mb-1 block text-muted-foreground">{label}</span><input type={type} autoFocus={autoFocus} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none" /></label>;
+  // 16px below `md` (M4) and no auto-focus on a phone: an auto-focused 14px
+  // Name field opened the dialog already zoomed, with the kind select and
+  // Cancel / Create scrolled off-screen (D4).
+  return <label className="block text-xs"><span className="mb-1 block text-muted-foreground">{label}</span><input type={type} autoFocus={autoFocus && !isPhoneViewport()} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] outline-none md:text-sm" /></label>;
 }

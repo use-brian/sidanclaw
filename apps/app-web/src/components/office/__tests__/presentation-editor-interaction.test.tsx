@@ -8,7 +8,7 @@ import { en } from "@/lib/i18n/dictionaries/en";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 import { clearPresentationClipboardForTest } from "@/lib/office/presentation-clipboard";
 import { admitOfficeImageResource } from "@/lib/office/api";
-import { PresentationEditor } from "../presentation-editor";
+import { PRESENTATION_SLIDE_TOUCH_HOLD_MS, PresentationEditor } from "../presentation-editor";
 import { presentationFixture } from "./editor-fixtures";
 
 vi.mock("@/components/ui/confirm-dialog", () => ({ confirmDialog: vi.fn(async () => true) }));
@@ -225,18 +225,34 @@ describe("[COMP:app-web/office-presentation-editor] Presentation interaction loo
     Object.defineProperty(thumbnails[0], "getBoundingClientRect", { value: () => ({ left: 0, top: 8, width: 160, height: 80, right: 160, bottom: 88, x: 0, y: 8, toJSON: () => ({}) }) });
     Object.defineProperty(thumbnails[1], "getBoundingClientRect", { value: () => ({ left: 0, top: 100, width: 160, height: 80, right: 160, bottom: 180, x: 0, y: 100, toJSON: () => ({}) }) });
     const handle = thumbnails[0].querySelector("button")!;
-    act(() => handle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", button: 0, bubbles: true })));
-    act(() => rail.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, clientY: 195, bubbles: true })));
-    expect(thumbnails[1].dataset.slideInsertion).toBe("after");
-    expect(rail.scrollTop).toBe(116);
-    act(() => handle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, bubbles: true })));
-    expect(onCommand).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "reorderSlide", slideId: snapshot.slides[0].id, index: 1 }));
-    expect(onCommand).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers();
+    try {
+      // A touch that moves before the hold elapses pans the filmstrip: no
+      // drag, no reorder (report B row 19).
+      act(() => handle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", button: 0, clientX: 0, clientY: 0, bubbles: true })));
+      act(() => rail.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, clientX: 0, clientY: 195, bubbles: true })));
+      expect(thumbnails[1].dataset.slideInsertion).toBeUndefined();
+      act(() => { vi.advanceTimersByTime(PRESENTATION_SLIDE_TOUCH_HOLD_MS + 10); });
+      act(() => handle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, bubbles: true })));
+      expect(onCommand).not.toHaveBeenCalled();
 
-    const secondHandle = thumbnails[1].querySelector("button")!;
-    act(() => secondHandle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", button: 0, bubbles: true })));
-    act(() => secondHandle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, bubbles: true })));
-    expect(onCommand).toHaveBeenCalledTimes(1);
+      // A still hold becomes the drag.
+      act(() => handle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, pointerType: "touch", button: 0, clientX: 0, clientY: 0, bubbles: true })));
+      act(() => { vi.advanceTimersByTime(PRESENTATION_SLIDE_TOUCH_HOLD_MS + 10); });
+      act(() => rail.dispatchEvent(new PointerEvent("pointermove", { pointerId: 1, clientY: 195, bubbles: true })));
+      expect(thumbnails[1].dataset.slideInsertion).toBe("after");
+      expect(rail.scrollTop).toBe(116);
+      act(() => handle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, bubbles: true })));
+      expect(onCommand).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "reorderSlide", slideId: snapshot.slides[0].id, index: 1 }));
+      expect(onCommand).toHaveBeenCalledTimes(1);
+
+      const secondHandle = thumbnails[1].querySelector("button")!;
+      act(() => secondHandle.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 2, pointerType: "touch", button: 0, bubbles: true })));
+      act(() => secondHandle.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, bubbles: true })));
+      expect(onCommand).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("resizes the slide rail by pointer and keyboard within accessible limits", () => {

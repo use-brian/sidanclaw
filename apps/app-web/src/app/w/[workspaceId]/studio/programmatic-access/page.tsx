@@ -26,7 +26,7 @@
  * [COMP:app-web/studio-programmatic-access]
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   AppWindow,
   Check,
@@ -42,6 +42,9 @@ import {
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
+import { isPhoneViewport } from "@/lib/viewport";
+import { useBrainKeysData } from "./use-brain-keys-data";
 import {
   Select,
   SelectContent,
@@ -56,7 +59,6 @@ import type { Dictionary } from "@/lib/i18n";
 import {
   BRAIN_MCP_URL,
   createBrainKey,
-  listBrainKeys,
   revokeBrainKey,
   updateBrainKeyCaptureBinding,
   updateBrainKeyMaxClearance,
@@ -66,20 +68,14 @@ import {
   type CreatedBrainKey,
 } from "@/lib/api/brain-keys";
 import {
-  listOAuthAuthorizations,
   revokeOAuthAuthorization,
   updateOAuthCaptureBinding,
   type OAuthAuthorization,
 } from "@/lib/api/oauth-authorizations";
 import { ContextScopePicker } from "@/components/context/context-scope-picker";
 import { ContextScopeChips } from "@/components/context/context-scope-chips";
-import {
-  listContextProjects,
-  listContextTeams,
-  type ContextProject,
-  type ContextTeam,
-} from "@/lib/api/context-scopes";
-import { listAssistants, type StudioAssistantSummary } from "@/lib/api/studio";
+import type { ContextProject, ContextTeam } from "@/lib/api/context-scopes";
+import type { StudioAssistantSummary } from "@/lib/api/studio";
 import {
   addCaptureRule,
   createCaptureProfile,
@@ -137,59 +133,55 @@ async function copyToClipboard(value: string): Promise<boolean> {
 export default function ProgrammaticAccessPage() {
   const t = useT();
   const { activeId } = useWorkspaces();
-  const [keys, setKeys] = useState<BrainKey[] | null>(null);
-  const [authorizations, setAuthorizations] = useState<OAuthAuthorization[] | null>(null);
-  const [teams, setTeams] = useState<ContextTeam[]>([]);
-  const [projects, setProjects] = useState<ContextProject[]>([]);
-  const [assistants, setAssistants] = useState<StudioAssistantSummary[]>([]);
-  const [captureProfiles, setCaptureProfiles] = useState<CaptureProfile[]>([]);
+  // Every list the page paints (keys, OAuth authorizations, context scopes,
+  // assistants, capture profiles) lands in ONE cached key (instant-navigation
+  // N1 / N7): a revisit paints on the first frame; the page's optimistic
+  // edits write through it. `adminOnly` is the backend's 403.
+  const {
+    data,
+    adminOnly,
+    error: loadError,
+    refresh: load,
+    update,
+  } = useBrainKeysData(activeId);
+  const keys = data?.keys ?? null;
+  const authorizations = data?.authorizations ?? null;
+  const teams = data?.teams ?? [];
+  const projects = data?.projects ?? [];
+  const assistants = data?.assistants ?? [];
+  const captureProfiles = data?.captureProfiles ?? [];
   const [mode, setMode] = useState<Mode>({ kind: "list" });
   const [showRevoked, setShowRevoked] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [adminOnly, setAdminOnly] = useState(false);
+  // A failed ACTION (revoke, cap change); a failed first load reports through
+  // `loadError` from the hook.
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? loadError;
 
-  const load = useCallback(async () => {
-    if (!activeId) return;
-    setError(null);
-    setAdminOnly(false);
-    try {
-      const [loadedKeys, loadedAuths, loadedTeams, loadedProjects, loadedAssistants, loadedProfiles] = await Promise.all([
-        listBrainKeys(activeId),
-        listOAuthAuthorizations(activeId),
-        listContextTeams(activeId),
-        listContextProjects(activeId),
-        listAssistants(activeId),
-        listCaptureProfiles(activeId),
-      ]);
-      setKeys(loadedKeys);
-      setAuthorizations(loadedAuths);
-      setTeams(loadedTeams);
-      setProjects(loadedProjects);
-      setAssistants(loadedAssistants);
-      setCaptureProfiles(loadedProfiles);
-    } catch (err) {
-      const message = (err as Error).message;
-      // The backend 403s non-admins — show the targeted message, not a
-      // generic load error.
-      if (message.includes("403")) setAdminOnly(true);
-      else setError(message);
-      setKeys([]);
-      setAuthorizations([]);
-      setCaptureProfiles([]);
-    }
-  }, [activeId]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const setKeys = useCallback(
+    (updater: (prev: BrainKey[]) => BrainKey[]) => {
+      update((prev) => ({ ...prev, keys: updater(prev.keys) }));
+    },
+    [update],
+  );
+  const setAuthorizations = useCallback(
+    (updater: (prev: OAuthAuthorization[]) => OAuthAuthorization[]) => {
+      update((prev) => ({ ...prev, authorizations: updater(prev.authorizations) }));
+    },
+    [update],
+  );
+  const setCaptureProfiles = useCallback(
+    (profiles: CaptureProfile[]) => {
+      update((prev) => ({ ...prev, captureProfiles: profiles }));
+    },
+    [update],
+  );
 
   const changeMaxClearance = useCallback(
     async (keyId: string, next: BrainKeyClearance | null) => {
       if (!activeId) return;
       // Optimistic: reflect the new cap immediately, reload on failure.
-      setKeys(
-        (prev) =>
-          prev?.map((x) => (x.id === keyId ? { ...x, maxClearance: next } : x)) ?? null,
+      setKeys((prev) =>
+        prev.map((x) => (x.id === keyId ? { ...x, maxClearance: next } : x)),
       );
       try {
         await updateBrainKeyMaxClearance(activeId, keyId, next);
@@ -198,7 +190,7 @@ export default function ProgrammaticAccessPage() {
         load();
       }
     },
-    [activeId, load],
+    [activeId, load, setKeys],
   );
 
   if (mode.kind === "creating" && activeId) {
@@ -211,7 +203,7 @@ export default function ProgrammaticAccessPage() {
         onCreated={(created) => {
           setMode({ kind: "revealed", created });
           // Optimistically prepend so the key is in the list after dismissing.
-          setKeys((prev) => (prev ? [created, ...prev] : [created]));
+          setKeys((prev) => [created, ...prev]);
         }}
       />
     );
@@ -223,6 +215,10 @@ export default function ProgrammaticAccessPage() {
 
   const activeKeys = (keys ?? []).filter((k) => k.status === "active");
   const revokedKeys = (keys ?? []).filter((k) => k.status === "revoked");
+  // Cold: nothing cached for this workspace yet. The endpoint panel is static
+  // and paints regardless; the lists below hold their geometry with a
+  // skeleton (N4) until the first snapshot lands.
+  const cold = data === undefined && !adminOnly && !loadError;
 
   return (
     <div className="flex flex-col gap-6">
@@ -240,7 +236,9 @@ export default function ProgrammaticAccessPage() {
         </div>
       )}
 
-      {!adminOnly && activeId && (
+      {cold && <RailSurfaceSkeleton chrome={false} padded={false} rows={4} />}
+
+      {!adminOnly && !cold && activeId && (
         <CaptureProfilesSection
           workspaceId={activeId}
           assistants={assistants}
@@ -250,7 +248,7 @@ export default function ProgrammaticAccessPage() {
         />
       )}
 
-      {!adminOnly && (
+      {!adminOnly && !cold && (
         <section className="flex flex-col gap-3">
           {/* Section header carries the one primary action, mirroring the
               Knowledge sources header; the topbar breadcrumb names the page
@@ -269,9 +267,7 @@ export default function ProgrammaticAccessPage() {
             </Button>
           </div>
 
-          {keys === null ? (
-            <div className="text-sm text-muted-foreground">{t.programmaticAccess.loading}</div>
-          ) : activeKeys.length === 0 ? (
+          {activeKeys.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border px-5 py-10 text-center">
               <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                 <KeyRound className="h-4 w-4" />
@@ -291,9 +287,9 @@ export default function ProgrammaticAccessPage() {
                   captureProfiles={captureProfiles}
                   onChangeCaptureBinding={async (assistantId, profileId) => {
                     if (!activeId) return;
-                    setKeys((prev) => prev?.map((row) => row.id === k.id
+                    setKeys((prev) => prev.map((row) => row.id === k.id
                       ? { ...row, captureAssistantId: assistantId, captureProfileId: profileId }
-                      : row) ?? null);
+                      : row));
                     try {
                       await updateBrainKeyCaptureBinding(activeId, k.id, assistantId, profileId);
                     } catch (err) {
@@ -312,11 +308,10 @@ export default function ProgrammaticAccessPage() {
                     if (!ok || !activeId) return;
                     try {
                       await revokeBrainKey(activeId, k.id);
-                      setKeys(
-                        (prev) =>
-                          prev?.map((x) =>
-                            x.id === k.id ? { ...x, status: "revoked" as const } : x,
-                          ) ?? null,
+                      setKeys((prev) =>
+                        prev.map((x) =>
+                          x.id === k.id ? { ...x, status: "revoked" as const } : x,
+                        ),
                       );
                     } catch (err) {
                       setError((err as Error).message);
@@ -356,16 +351,16 @@ export default function ProgrammaticAccessPage() {
         </section>
       )}
 
-      {!adminOnly && (
+      {!adminOnly && !cold && (
         <ConnectedAppsSection
           authorizations={authorizations}
           assistants={assistants}
           captureProfiles={captureProfiles}
           onChangeCaptureBinding={async (auth, assistantId, profileId) => {
             if (!activeId) return;
-            setAuthorizations((prev) => prev?.map((row) => row.id === auth.id
+            setAuthorizations((prev) => prev.map((row) => row.id === auth.id
               ? { ...row, captureAssistantId: assistantId, captureProfileId: profileId }
-              : row) ?? null);
+              : row));
             try {
               await updateOAuthCaptureBinding(activeId, auth.id, assistantId, profileId);
             } catch (err) {
@@ -385,11 +380,10 @@ export default function ProgrammaticAccessPage() {
             if (!ok || !activeId) return;
             try {
               await revokeOAuthAuthorization(activeId, auth.id);
-              setAuthorizations(
-                (prev) =>
-                  prev?.map((x) =>
-                    x.id === auth.id ? { ...x, status: "revoked" as const } : x,
-                  ) ?? null,
+              setAuthorizations((prev) =>
+                prev.map((x) =>
+                  x.id === auth.id ? { ...x, status: "revoked" as const } : x,
+                ),
               );
             } catch (err) {
               setError((err as Error).message);
@@ -432,7 +426,7 @@ function ConnectedAppsSection({
       </header>
 
       {authorizations === null ? (
-        <div className="text-sm text-muted-foreground">{t.programmaticAccess.loading}</div>
+        <RailSurfaceSkeleton chrome={false} padded={false} rows={2} />
       ) : active.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border px-5 py-10 text-center">
           <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-muted-foreground">
@@ -514,14 +508,16 @@ function ConnectedAppRow({
 // ── Subcomponents ──────────────────────────────────────────────
 
 /** Right-aligned meta column — value with a tiny label underneath, so the
- *  two dates in a row read unambiguously (Last used vs Created). */
+ *  two dates in a row read unambiguously (Last used vs Created). Below `sm`
+ *  the column becomes a "label: value" line stacked under the name (M1:
+ *  never hidden with no alternative). */
 function MetaCell({ value, label }: { value: string; label: string }) {
   return (
-    <div className="hidden sm:flex w-28 shrink-0 flex-col items-end">
-      <span className="text-[12px] tabular-nums">{value}</span>
-      <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+    <div className="order-last flex w-full items-baseline gap-1.5 pl-12 sm:order-none sm:w-28 sm:shrink-0 sm:flex-col sm:items-end sm:gap-0 sm:pl-0">
+      <span className="order-first text-[10px] uppercase tracking-wide text-muted-foreground/70 sm:order-none">
         {label}
       </span>
+      <span className="text-[12px] tabular-nums">{value}</span>
     </div>
   );
 }
@@ -644,7 +640,7 @@ function ClearanceCapControl({
     >
       <SelectTrigger
         size="sm"
-        className="text-[11px] text-muted-foreground"
+        className="text-[16px] md:text-[11px] text-muted-foreground"
         aria-label={t.programmaticAccess.clearance.label}
       >
         <SelectValue />
@@ -679,7 +675,7 @@ function CaptureBindingControl({
     const profile = profiles.find((row) => row.id === profileId);
     if (!assistant) return null;
     return (
-      <div className="hidden lg:block max-w-44 text-right text-[11px] text-muted-foreground">
+      <div className="order-last w-full pl-12 text-[11px] text-muted-foreground lg:order-none lg:w-auto lg:max-w-44 lg:pl-0 lg:text-right">
         <div className="truncate">{assistant.name}</div>
         <div className="truncate">{profile?.name ?? t.programmaticAccess.capture.inherit}</div>
       </div>
@@ -800,7 +796,7 @@ function CaptureProfilesSection({
             onChange={(event) => setName(event.target.value)}
             placeholder={t.programmaticAccess.capture.profileNamePlaceholder}
             maxLength={120}
-            className="bg-muted/50 border border-border rounded-lg px-3 py-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="bg-muted/50 border border-border rounded-lg px-3 py-2 text-[16px] md:text-[13px] focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
           <Select value={partitionBy} items={partitionItems} onValueChange={(value) => value && setPartitionBy(value as CapturePartition)}>
             <SelectTrigger aria-label={t.programmaticAccess.capture.partitionLabel}><SelectValue /></SelectTrigger>
@@ -1005,7 +1001,7 @@ function NewRuleForm({
         placeholder={filterType === "metadata_match"
           ? t.programmaticAccess.capture.metadataPlaceholder
           : t.programmaticAccess.capture.valuesPlaceholder}
-        className="bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-[12px] disabled:opacity-50"
+        className="bg-muted/50 border border-border rounded-lg px-3 py-1.5 text-[16px] md:text-[12px] disabled:opacity-50"
       />
       <Select value={routingMode} items={routingItems} onValueChange={(value) => value && setRoutingMode(value as CaptureRoutingMode)}>
         <SelectTrigger size="sm" aria-label={t.programmaticAccess.capture.routingLabel}><SelectValue /></SelectTrigger>
@@ -1019,7 +1015,7 @@ function NewRuleForm({
         disabled={routingMode !== "scheduled"}
         placeholder="0 * * * *"
         aria-label={t.programmaticAccess.capture.scheduleLabel}
-        className="bg-muted/50 border border-border rounded-lg px-3 py-1.5 font-mono text-[12px] disabled:opacity-50"
+        className="bg-muted/50 border border-border rounded-lg px-3 py-1.5 font-mono text-[16px] md:text-[12px] disabled:opacity-50"
       />
       <Button
         size="sm"
@@ -1190,12 +1186,12 @@ function CreateKeyForm({
             {t.programmaticAccess.create.nameLabel}
           </span>
           <input
-            autoFocus
+            autoFocus={!isPhoneViewport()}
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={t.programmaticAccess.create.placeholder}
             maxLength={120}
-            className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-[14px] focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-[16px] md:text-[14px] focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         </label>
 

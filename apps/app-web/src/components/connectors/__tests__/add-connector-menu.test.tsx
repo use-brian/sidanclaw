@@ -18,7 +18,9 @@ describe("[COMP:app-web/add-connector-menu] AddConnectorMenu", () => {
       />,
     );
 
-    expect(markup).toContain("h-7");
+    // 44px on a phone, the compact 28px Skills-action height from `sm` up
+    // (responsive contract M3; report C row 29).
+    expect(markup).toContain("h-11 sm:h-7");
     expect(markup).toContain("border-border");
     expect(markup).toContain("text-xs");
     expect(markup).toContain("text-muted-foreground");

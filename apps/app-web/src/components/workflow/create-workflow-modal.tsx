@@ -37,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { isPhoneViewport } from "@/lib/viewport";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -138,12 +139,14 @@ export function CreateWorkflowModal({ onClose }: Props) {
         if (!submitting) onClose();
       }}
     >
-      <div className="min-h-full flex items-center justify-center p-6">
+      {/* Settings-modal shape (responsive contract M5): full-screen below
+          `sm`, a floating card above it. */}
+      <div className="min-h-full flex items-center justify-center p-0 sm:p-6">
         <div
           role="dialog"
           aria-label={t.workflowPage.builder.newPageTitle}
           aria-modal="true"
-          className="relative w-full max-w-xl bg-popover border border-border rounded-xl shadow-2xl"
+          className="relative w-full max-w-xl min-h-[100dvh] sm:min-h-0 bg-popover border-0 sm:border border-border rounded-none sm:rounded-xl shadow-2xl"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -151,14 +154,17 @@ export function CreateWorkflowModal({ onClose }: Props) {
             onClick={onClose}
             disabled={submitting}
             aria-label={t.workflowPage.builder.cancel}
-            className="absolute top-3 right-3 h-7 w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground disabled:opacity-40"
+            className="absolute top-2 right-2 sm:top-3 sm:right-3 h-11 w-11 sm:h-7 sm:w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground disabled:opacity-40"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
               <path d="M6 6l12 12M18 6L6 18" />
             </svg>
           </button>
 
-          <form onSubmit={onSubmit} className="flex flex-col gap-5 p-6">
+          <form
+            onSubmit={onSubmit}
+            className="flex flex-col gap-5 p-4 pt-12 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-6"
+          >
             <header>
               <h2 className="text-lg font-semibold">{t.workflowPage.builder.newPageTitle}</h2>
               <p className="text-sm text-muted-foreground">
@@ -178,14 +184,17 @@ export function CreateWorkflowModal({ onClose }: Props) {
                 placeholder={t.workflowPage.builder.namePlaceholder}
                 disabled={submitting}
                 maxLength={120}
-                autoFocus
+                // Not on a phone: auto-focusing a field on open raises the
+                // keyboard (and used to zoom Safari) before the user has
+                // done anything (responsive contract M4).
+                autoFocus={!isPhoneViewport()}
                 // Plain label field — keep browser autofill and password
                 // managers (1Password / LastPass / Dashlane) off it.
                 autoComplete="off"
                 data-1p-ignore="true"
                 data-lpignore="true"
                 data-form-type="other"
-                className="px-3 py-2 bg-background border border-border rounded-md text-sm outline-none focus:ring-2 focus:ring-ring"
+                className="px-3 py-2 bg-background border border-border rounded-md text-[16px] md:text-sm outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
 
@@ -201,7 +210,7 @@ export function CreateWorkflowModal({ onClose }: Props) {
                 disabled={submitting}
                 rows={2}
                 maxLength={2000}
-                className="px-3 py-2 bg-background border border-border rounded-md text-sm outline-none focus:ring-2 focus:ring-ring resize-y"
+                className="px-3 py-2 bg-background border border-border rounded-md text-[16px] md:text-sm outline-none focus:ring-2 focus:ring-ring resize-y"
               />
             </div>
 
@@ -221,7 +230,7 @@ export function CreateWorkflowModal({ onClose }: Props) {
                     }}
                     disabled={submitting}
                   >
-                    <SelectTrigger className="w-full text-sm" id="cwm-assistant">
+                    <SelectTrigger className="w-full min-h-11 sm:min-h-0 text-[16px] md:text-sm" id="cwm-assistant">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -249,7 +258,7 @@ export function CreateWorkflowModal({ onClose }: Props) {
                     disabled={submitting}
                     rows={5}
                     maxLength={8000}
-                    className="px-3 py-2 bg-background border border-border rounded-md text-sm outline-none focus:ring-2 focus:ring-ring resize-y"
+                    className="px-3 py-2 bg-background border border-border rounded-md text-[16px] md:text-sm outline-none focus:ring-2 focus:ring-ring resize-y"
                   />
                 </div>
               </div>
@@ -264,7 +273,7 @@ export function CreateWorkflowModal({ onClose }: Props) {
                 type="button"
                 onClick={onClose}
                 disabled={submitting}
-                className="px-4 py-2 rounded-md border border-border text-sm hover:bg-muted disabled:opacity-50"
+                className="inline-flex h-11 sm:h-9 items-center px-4 rounded-md border border-border text-sm hover:bg-muted disabled:opacity-50"
               >
                 {t.workflowPage.builder.cancel}
               </button>
@@ -272,7 +281,7 @@ export function CreateWorkflowModal({ onClose }: Props) {
                 type="submit"
                 disabled={submitting}
                 className={cn(
-                  "px-4 py-2 rounded-md text-sm font-medium",
+                  "inline-flex h-11 sm:h-9 items-center px-4 rounded-md text-sm font-medium",
                   "bg-action text-action-foreground hover:opacity-90 disabled:opacity-50",
                 )}
               >

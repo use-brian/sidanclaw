@@ -131,8 +131,10 @@ export function PlanSlotChip({
                 type="button"
                 aria-label={tp.slotActions}
                 className={cn(
-                  "inline-flex shrink-0 items-center justify-center rounded opacity-0 transition-opacity focus-visible:opacity-100 group-hover/chip:opacity-100",
-                  variant === "grid" ? "size-4" : "size-5",
+                  // Visible on touch, hover-revealed at `md+` (responsive
+                  // contract M2); 28px on a phone, the dense size on desktop.
+                  "inline-flex shrink-0 items-center justify-center rounded opacity-100 md:opacity-0 transition-opacity focus-visible:opacity-100 md:group-hover/chip:opacity-100",
+                  variant === "grid" ? "size-7 md:size-4" : "size-7 md:size-5",
                 )}
               >
                 <MoreHorizontal className="size-3.5" aria-hidden />
@@ -204,14 +206,14 @@ export function PlanProposalChip({
       </span>
 
       {canEdit ? (
-        <span className="flex shrink-0 items-center gap-0.5">
+        <span className="flex shrink-0 items-center gap-1.5 md:gap-0.5">
           <button
             type="button"
             onClick={onAccept}
             disabled={accepting}
             aria-label={`${tp.acceptSlot}: ${proposal.title}`}
             title={tp.acceptSlot}
-            className="inline-flex size-4 items-center justify-center rounded transition-colors hover:bg-background disabled:opacity-50"
+            className="inline-flex size-8 md:size-4 items-center justify-center rounded transition-colors hover:bg-background disabled:opacity-50"
           >
             <Check className="size-3" aria-hidden />
           </button>
@@ -221,7 +223,7 @@ export function PlanProposalChip({
             disabled={accepting}
             aria-label={`${tp.dismissSlot}: ${proposal.title}`}
             title={tp.dismissSlot}
-            className="inline-flex size-4 items-center justify-center rounded transition-colors hover:bg-background disabled:opacity-50"
+            className="inline-flex size-8 md:size-4 items-center justify-center rounded transition-colors hover:bg-background disabled:opacity-50"
           >
             <X className="size-3" aria-hidden />
           </button>

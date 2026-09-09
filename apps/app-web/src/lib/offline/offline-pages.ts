@@ -27,6 +27,59 @@ function changed(): void {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(LOCAL_PAGES_CHANGED));
 }
 
+/** The sidebar's IndexedDB families: the two page lists, the merged list, and the teamspace sections. */
+export type SidebarCacheKind = "saved" | "drafts" | "all" | "teamspaces";
+
+/**
+ * The viewer-scoped IndexedDB key for one sidebar list of one workspace:
+ * `sidebar:<kind>:<workspaceId>:<viewerId>`. Workspace before viewer, the
+ * same order the in-memory `sidebarTreeCacheKey` uses.
+ *
+ * `null` when no viewer is signed in (SSR, a cleared cookie): the caller then
+ * skips the disk tier entirely rather than reading or writing a key that
+ * every account on the device would share. The 2026-09 phone review found
+ * the previous workspace-only key would paint one viewer's page rows to a
+ * second account in the same workspace on a shared device, rows the second
+ * viewer's clearance may not permit. `clearLocalDocCaches` (sign-out) drops
+ * the whole store, so these keys never outlive the session either way.
+ */
+export function sidebarCacheKey(kind: SidebarCacheKind, workspaceId: string): string | null {
+  const userId = owner();
+  return userId ? `sidebar:${kind}:${workspaceId}:${userId}` : null;
+}
+
+export type CachedSidebarTree = {
+  saved: ViewListRow[];
+  drafts: ViewListRow[];
+  teamspaces: Teamspace[];
+};
+
+/**
+ * The last-known sidebar tree for the signed-in viewer, merged with any
+ * durable local page creations, or `null` when nothing is cached. This is
+ * what the sidebar-data provider paints on a full reload while the network
+ * fetch is still in flight (instant-navigation contract N1); it is never
+ * returned for a viewer other than the one who wrote it, because the key
+ * carries the viewer id.
+ */
+export async function readCachedSidebarTree(workspaceId: string): Promise<CachedSidebarTree | null> {
+  const savedKey = sidebarCacheKey("saved", workspaceId);
+  const draftsKey = sidebarCacheKey("drafts", workspaceId);
+  const teamspacesKey = sidebarCacheKey("teamspaces", workspaceId);
+  if (!savedKey || !draftsKey || !teamspacesKey) return null;
+  const [saved, drafts, teamspaces] = await Promise.all([
+    idbGet<ViewListRow[]>(savedKey),
+    idbGet<ViewListRow[]>(draftsKey),
+    idbGet<Teamspace[]>(teamspacesKey),
+  ]);
+  if (!saved && !drafts && !teamspaces) return null;
+  return {
+    saved: await mergeLocalPages(saved ?? [], workspaceId, "saved"),
+    drafts: await mergeLocalPages(drafts ?? [], workspaceId, "draft"),
+    teamspaces: teamspaces ?? [],
+  };
+}
+
 export async function readLocalPages(): Promise<LocalPage[]> {
   const userId = owner();
   return userId ? (await idbGet<LocalPage[]>(outboxKey(userId))) ?? [] : [];
@@ -61,15 +114,18 @@ export async function createLocalPage(input: DraftInput & { id: string }): Promi
   if (!userId) throw localError("offlinePageSessionMissing");
   const parent = input.nestParentId ? await readCachedPage(input.nestParentId) : null;
   // Sidebar-only parents are also legitimate offline nesting destinations.
-  const saved = (await idbGet<ViewListRow[]>(`sidebar:saved:${input.workspaceId}`)) ?? [];
-  const drafts = (await idbGet<ViewListRow[]>(`sidebar:drafts:${input.workspaceId}`)) ?? [];
+  const savedKey = sidebarCacheKey("saved", input.workspaceId);
+  const draftsKey = sidebarCacheKey("drafts", input.workspaceId);
+  const saved = (savedKey ? await idbGet<ViewListRow[]>(savedKey) : null) ?? [];
+  const drafts = (draftsKey ? await idbGet<ViewListRow[]>(draftsKey) : null) ?? [];
   const pending = await readLocalPages();
   const rows = [...saved, ...drafts, ...pending.map((p) => p.view)];
   const parentRow = parent ?? rows.find((p) => p.id === input.nestParentId);
   if (input.nestParentId && (!parentRow || parentRow.workspaceId !== input.workspaceId)) {
     throw localError("offlinePageParentMissing");
   }
-  const teamspaces = (await idbGet<Teamspace[]>(`sidebar:teamspaces:${input.workspaceId}`)) ?? [];
+  const teamspacesKey = sidebarCacheKey("teamspaces", input.workspaceId);
+  const teamspaces = (teamspacesKey ? await idbGet<Teamspace[]>(teamspacesKey) : null) ?? [];
   const teamspaceId = parentRow ? parentRow.teamspaceId : (input.teamspaceId !== undefined
     ? input.teamspaceId : teamspaces.find((t) => t.isDefault)?.id ?? null);
   const now = new Date().toISOString();

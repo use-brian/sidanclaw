@@ -13,7 +13,7 @@
  * The custom endpoint block can be omitted when Models renders it separately.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import {
   getLlmKeyStatus,
   setLlmKey,
@@ -22,11 +22,26 @@ import {
   type LlmKeyStatus,
 } from "@/lib/api/llm-keys";
 import { useWorkspaceContext } from "@/lib/workspace-context";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { llmKeyCacheKey } from "@/lib/surface-prefetch";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/skeleton";
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
 import { CustomLlmEndpointsBlock } from "./custom-llm-endpoints-block";
+
+/** The masked status, or the "BYO not configured / not owner" degrade. */
+type LlmKeyState = { unavailable: boolean; status: LlmKeyStatus | null };
+
+async function fetchLlmKeyState(workspaceId: string): Promise<LlmKeyState> {
+  try {
+    return { unavailable: false, status: await getLlmKeyStatus(workspaceId) };
+  } catch (e) {
+    if (e instanceof LlmKeyUnavailableError) return { unavailable: true, status: null };
+    throw e;
+  }
+}
 
 export function WorkspaceLlmKeyBlock({
   onCustomLlmChanged,
@@ -42,56 +57,48 @@ export function WorkspaceLlmKeyBlock({
   const workspaceId = ctx.workspaceId;
   const tk = t.workspaceLlmKey;
 
-  const [status, setStatus] = useState<LlmKeyStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [unavailable, setUnavailable] = useState(false);
+  // Paints from the surface cache (instant-navigation contract N1): reopening
+  // Providers renders the last-known masked status on its first frame and
+  // revalidates behind it; only a cold open shows the skeleton. The raw key
+  // is never in the cache: only `{ provider, isSet, last4 }`. No spine
+  // primitive names a BYO key, so the user's own save patches the cached
+  // row and remove awaits `refresh()`.
+  const keyStateKey = workspaceId ? llmKeyCacheKey(workspaceId) : null;
+  const keyState = useCachedResource<LlmKeyState>(keyStateKey, () =>
+    fetchLlmKeyState(workspaceId as string),
+  );
+  const { refresh } = keyState;
+  const status = keyState.data?.status ?? null;
+  // A save / remove can also learn BYO is unavailable (403 / 404 mid-session).
+  const [unavailableOverride, setUnavailableOverride] = useState(false);
+  const unavailable = (keyState.data?.unavailable ?? false) || unavailableOverride;
+  const loading = Boolean(workspaceId) && keyState.loading;
+  const loadFailed = keyState.error !== undefined && keyState.data === undefined;
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
-
-  const refetch = useCallback(async () => {
-    if (!workspaceId) {
-      setStatus(null);
-      setLoading(false);
-      return;
-    }
-    try {
-      const s = await getLlmKeyStatus(workspaceId);
-      setStatus(s);
-      setUnavailable(false);
-    } catch (e) {
-      if (e instanceof LlmKeyUnavailableError) {
-        setUnavailable(true);
-        setStatus(null);
-      } else {
-        setError(tk.loadFailed);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId, tk.loadFailed]);
-
-  useEffect(() => {
-    setLoading(true);
-    void refetch();
-  }, [refetch]);
+  const error = actionError || (loadFailed ? tk.loadFailed : "");
+  const setError = setActionError;
 
   async function save() {
-    if (!workspaceId) return;
+    if (!workspaceId || !keyStateKey) return;
     const next = keyInput.trim();
     if (!next || saving) return;
     setSaving(true);
     setError("");
     try {
       const s = await setLlmKey(workspaceId, next);
-      setStatus(s);
+      // The user's own write: the returned masked status IS the row.
+      mutateSurfaceCache<LlmKeyState>(keyStateKey, () => ({ unavailable: false, status: s }));
+      if (keyState.data === undefined) void refresh();
+      setUnavailableOverride(false);
       // Write-only: clear the input immediately; never echo the raw key back.
       setKeyInput("");
     } catch (e) {
       if (e instanceof LlmKeyUnavailableError) {
-        setUnavailable(true);
+        setUnavailableOverride(true);
       } else {
         setError(e instanceof Error ? e.message : tk.saveFailed);
       }
@@ -106,10 +113,10 @@ export function WorkspaceLlmKeyBlock({
     setError("");
     try {
       await deleteLlmKey(workspaceId);
-      await refetch();
+      await refresh();
     } catch (e) {
       if (e instanceof LlmKeyUnavailableError) {
-        setUnavailable(true);
+        setUnavailableOverride(true);
       } else {
         setError(tk.removeFailed);
       }
@@ -128,7 +135,12 @@ export function WorkspaceLlmKeyBlock({
       </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">{t.workspaceDetailInline.loading}</div>
+        // Cold open only: the status pill + the key field's geometry (N4).
+        <div aria-busy="true" data-testid="llm-key-skeleton" className="space-y-3">
+          <Skeleton className="h-9 w-full rounded-lg" />
+          <Skeleton className="h-3 w-32" />
+          <Skeleton className="h-9 w-full rounded-lg" />
+        </div>
       ) : unavailable ? (
         <div className="rounded-lg bg-muted/30 px-3 py-2 text-[13px] text-muted-foreground">
           {tk.unavailable}
@@ -162,7 +174,7 @@ export function WorkspaceLlmKeyBlock({
               placeholder={tk.inputPlaceholder}
               autoComplete="off"
               spellCheck={false}
-              className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 outline-none"
+              className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 outline-none"
             />
             <div className="flex items-center gap-2">
               <button

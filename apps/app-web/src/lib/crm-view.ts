@@ -23,7 +23,9 @@ import {
   type CrmCollectionQuery,
   type CrmCollectionSort,
   type CrmContactRow,
+  type CrmData,
   type CrmDealRow,
+  type CrmDirectories,
   type CrmFieldDefinition,
   type CrmPipeline,
   type CrmPipelineStage,
@@ -716,6 +718,47 @@ export type PipelineStageSummary = {
   /** Explicit per-currency totals. Mixed currencies are never combined. */
   currencyTotals: Record<string, number>;
 };
+
+/**
+ * Project the lookup directories into the `CrmData` shape the name joins and
+ * the email-approval queue read (`hint` is the contact email / company
+ * domain / deal source). Shared by the surface and its sidebar panel.
+ */
+export function crmDataFromDirectories(directories: CrmDirectories | null | undefined): CrmData {
+  if (!directories) return { deals: [], contacts: [], companies: [] };
+  return {
+    contacts: directories.contacts.map((row) => ({
+      id: row.id, name: row.name, email: row.hint, phone: null, companyId: null,
+      tags: [], ownerId: null, customFields: {}, archivedAt: null, updatedAt: "",
+    })),
+    companies: directories.companies.map((row) => ({
+      id: row.id, name: row.name, domain: row.hint, tags: [], ownerId: null,
+      customFields: {}, archivedAt: null, updatedAt: "",
+    })),
+    deals: directories.deals.map((row) => ({
+      id: row.id, name: row.name, stage: "lead", amount: null, closeDate: null,
+      contactId: null, companyId: null, ownerId: null, source: row.hint,
+      customFields: {}, archivedAt: null, updatedAt: "",
+    })),
+  };
+}
+
+/**
+ * The pipeline a CRM view is looking at: the URL's `pipeline`, else the
+ * default, else the first. ONE resolver for the surface and its sidebar
+ * panel, because the summary cache key carries the pipeline id
+ * (`crmRegionCacheKey(wid, "summary", id)`) and both must derive the same one
+ * to share the slot.
+ */
+export function resolveSelectedPipeline(
+  pipelines: readonly CrmPipeline[] | null | undefined,
+  pipelineId: string | null | undefined,
+): CrmPipeline | null {
+  if (!pipelines || pipelines.length === 0) return null;
+  return pipelines.find((pipeline) => pipeline.id === pipelineId)
+    ?? pipelines.find((pipeline) => pipeline.isDefault)
+    ?? pipelines[0];
+}
 
 /** Resolve a deal's stable stage, with the legacy key as the migration bridge. */
 export function resolveDealPipelineStage(

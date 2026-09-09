@@ -103,14 +103,14 @@ export function PlanWeek({
           type="button"
           onClick={() => shiftWeek(-7)}
           aria-label={tp.previousWeek}
-          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex size-9 md:size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ChevronLeft className="size-4" aria-hidden />
         </button>
         <button
           type="button"
           onClick={() => onAnchorChange(today.toISOString().slice(0, 10))}
-          className="h-7 rounded-md px-2 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="h-9 md:h-7 rounded-md px-2 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           {tp.today}
         </button>
@@ -118,13 +118,18 @@ export function PlanWeek({
           type="button"
           onClick={() => shiftWeek(7)}
           aria-label={tp.nextWeek}
-          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex size-9 md:size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ChevronRight className="size-4" aria-hidden />
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-border/60 shadow-xs">
+      {/* Below `md` the eight columns keep a 720px floor and the whole week
+          scrolls sideways inside this container; the 24-hour column is part
+          of the page scroll there rather than a nested 520px scroller
+          (responsive contract M1 / M8). */}
+      <div className="overflow-x-auto rounded-xl border border-border/60 shadow-xs md:overflow-hidden">
+        <div className="min-w-[720px] md:min-w-0">
         <div className="grid grid-cols-[3rem_repeat(7,1fr)] border-b border-border/60 bg-muted/30">
           <div />
           {days.map((day) => (
@@ -180,7 +185,7 @@ export function PlanWeek({
           ))}
         </div>
 
-        <div className="max-h-[520px] overflow-y-auto">
+        <div className="md:max-h-[520px] md:overflow-y-auto">
           <div className="grid grid-cols-[3rem_repeat(7,1fr)]">
             <div>
               {HOURS.map((h) => (
@@ -246,6 +251,7 @@ export function PlanWeek({
               </div>
             ))}
           </div>
+        </div>
         </div>
       </div>
     </div>

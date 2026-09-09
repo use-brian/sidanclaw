@@ -98,7 +98,7 @@ export function ChatDocumentViewer({
           onClick={copy}
           aria-label={copied ? t.copied : t.copy}
           title={copied ? t.copied : t.copy}
-          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:shadow-none"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:shadow-none sm:size-8"
         >
           {copied ? (
             <Check className="size-4" aria-hidden />
@@ -111,7 +111,7 @@ export function ChatDocumentViewer({
           onClick={onClose}
           aria-label={t.close}
           title={t.close}
-          className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:shadow-none"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:shadow-none sm:size-8"
         >
           <X className="size-4" aria-hidden />
         </button>

@@ -144,7 +144,7 @@ on, and every fact you still need before this could go live.`;
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Immunity Boost"
-            className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
+            className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm"
           />
         </Field>
         <Field label={t.shopifyApp.price}>
@@ -153,7 +153,7 @@ on, and every fact you still need before this could go live.`;
             inputMode="decimal"
             onChange={(e) => setPrice(e.target.value)}
             placeholder="24.00"
-            className="h-9 rounded-lg border border-border bg-background px-3 text-sm"
+            className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm"
           />
         </Field>
       </div>
@@ -208,7 +208,7 @@ on, and every fact you still need before this could go live.`;
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder={t.shopifyApp.notesHint}
-          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
         />
       </div>
 

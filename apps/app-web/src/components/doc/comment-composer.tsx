@@ -36,6 +36,7 @@ import {
 } from "@/components/doc/mentions/mention-popup";
 import { useT } from "@/lib/i18n/client";
 import { useAutoGrowTextarea } from "@/lib/use-auto-grow-textarea";
+import { clampPopupRect, measureViewport } from "@/lib/popup-clamp";
 import {
   activeMentionQuery,
   presentMentionIds,
@@ -167,6 +168,17 @@ export function CommentComposer({
   }
 
   const rect = mention && ref.current ? ref.current.getBoundingClientRect() : null;
+  // The popup is fixed at the textarea's bottom-left; clamp it inside the
+  // visible viewport and flip it above the field when the keyboard leaves no
+  // room below (responsive contract M5). The popup's own width is capped at
+  // `min(20rem, 100vw - 1rem)` (mention-popup.tsx), so measure with that.
+  const popupPos = rect
+    ? (() => {
+        const vp = measureViewport();
+        const width = Math.min(320, Math.max(0, vp.width - 16)) || 320;
+        return clampPopupRect(rect, { width, height: 300 }, vp);
+      })()
+    : null;
 
   return (
     <>
@@ -179,10 +191,10 @@ export function CommentComposer({
         placeholder={placeholder}
         className={
           className ??
-          "max-h-32 min-h-[24px] flex-1 resize-none border-0 bg-transparent p-0 text-[14px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70"
+          "max-h-32 min-h-[24px] flex-1 resize-none border-0 bg-transparent p-0 text-[16px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70 md:text-[14px]"
         }
       />
-      {rect && typeof document !== "undefined"
+      {rect && popupPos && typeof document !== "undefined"
         ? createPortal(
             <div
               // Marks the portaled popup so a host's outside-click handler (the
@@ -191,8 +203,8 @@ export function CommentComposer({
               data-mention-popup
               style={{
                 position: "fixed",
-                top: rect.bottom + 4,
-                left: rect.left,
+                top: popupPos.top,
+                left: popupPos.left,
                 zIndex: 60,
               }}
             >

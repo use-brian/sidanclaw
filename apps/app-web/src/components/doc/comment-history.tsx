@@ -127,7 +127,7 @@ export function CommentHistory({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
+        className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted md:size-8"
         aria-label={t.history.buttonAria}
         title={t.history.buttonAria}
       >
@@ -136,7 +136,10 @@ export function CommentHistory({
       <PopoverContent
         side="bottom"
         align="end"
-        className="flex max-h-[70vh] w-[380px] flex-col overflow-hidden p-0"
+        // 380px on desktop; on a 360px phone the Positioner can shift but not
+        // shrink a fixed width, so the width itself clamps to the viewport
+        // (responsive contract M5, graded: invariants/popover-width-clamp).
+        className="flex max-h-[70dvh] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden p-0"
       >
         {active ? (
           <HistoryTranscript

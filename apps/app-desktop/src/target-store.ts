@@ -5,8 +5,8 @@
  * shell fronts ONE target at a time — Use Brian Cloud or a local / self-hosted
  * brain. A target is a triple `{ appUrl (uiSource), apiUrl, auth }`, resolved
  * with the precedence env override (dev) > persisted userData record > cloud
- * default. Switching targets persists the record and relaunches the shell, so
- * a resolved config stays a process-lifetime constant.
+ * default. Switching persists the record and opens the selected account
+ * inside the running shell.
  *
  * The persisted record keeps the last local `appUrl` even while `kind` is
  * `cloud`, so "switch back to Local Brain" reuses the remembered address.
@@ -19,7 +19,7 @@
  * previously unreachable.
  *
  * Pure: serde + URL derivation only. The userData file I/O, the `/health`
- * probe, the config fetch, and the relaunch live in `main.ts`; `resolveConfig`
+ * probe, the config fetch, and account switching live in `main.ts`; `resolveConfig`
  * (config.ts) consumes `resolveTargetFromPersisted`'s output.
  *
  * Spec: docs/architecture/features/app-desktop.md → "Dual target"

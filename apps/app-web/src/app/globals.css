@@ -1279,6 +1279,23 @@
     max-width: 100%;
     padding: 22px 18px 18px 22px;
   }
+  /* Phone (responsive contract M5, report B row 33): a 4th column ran past
+     the right edge with nothing to scroll it, because the frame capped itself
+     at the column width and cells cannot shrink below 5rem. Below `md` the
+     block is a horizontal scroller around an uncapped frame - the grips and
+     append rails scroll with it since they live INSIDE the frame - the same
+     shape as the read-only renderer's `doc-public-table-wrap`. */
+  @media (max-width: 767px) {
+    .doc-collab-editor .ProseMirror .doc-table-block {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .doc-collab-editor .ProseMirror .doc-table-frame,
+    .doc-collab-editor .ProseMirror .doc-table-frame table {
+      max-width: none;
+    }
+  }
   .doc-collab-editor .ProseMirror .doc-table {
     margin: 0;
   }
@@ -1472,8 +1489,14 @@
     pointer-events: none;
     transition: opacity 0.1s ease, background 0.1s ease, color 0.1s ease;
   }
+  /* `data-caret-inside` (table-view.tsx, from the editor's selectionUpdate):
+     `:focus-within` never matches here because the focused element is the
+     ProseMirror root, an ANCESTOR of the frame, so the rails only ever showed
+     on hover - which a finger has none of (report B row 41). The caret
+     being inside the table is the signal that works on every pointer. */
   .doc-collab-editor .ProseMirror .doc-table-frame:hover .doc-table-add-rail,
   .doc-collab-editor .ProseMirror .doc-table-frame:focus-within .doc-table-add-rail,
+  .doc-collab-editor .ProseMirror .doc-table-frame[data-caret-inside="true"] .doc-table-add-rail,
   .doc-collab-editor .ProseMirror .doc-table-frame[data-menu-open="true"] .doc-table-add-rail {
     opacity: 1;
     pointer-events: auto;
@@ -1497,6 +1520,33 @@
   .doc-collab-editor .ProseMirror .doc-table-add-rail svg {
     width: 13px;
     height: 13px;
+  }
+  /* Touch (responsive contract M3): the 16px rails are 44px strips, and the
+     frame's right / bottom gutters grow to hold them so they never sit over
+     the last column or row. The drop indicators track the same gutters. */
+  @media (hover: none) {
+    .doc-collab-editor .ProseMirror .doc-table-frame {
+      padding-right: 44px;
+      padding-bottom: 44px;
+    }
+    .doc-collab-editor .ProseMirror .doc-table-add-column {
+      bottom: 44px;
+      width: 44px;
+    }
+    .doc-collab-editor .ProseMirror .doc-table-add-row {
+      right: 44px;
+      height: 44px;
+    }
+    .doc-collab-editor .ProseMirror .doc-table-drop-indicator-row {
+      right: 44px;
+    }
+    .doc-collab-editor .ProseMirror .doc-table-drop-indicator-column {
+      bottom: 44px;
+    }
+    .doc-collab-editor .ProseMirror .doc-table-add-rail svg {
+      width: 18px;
+      height: 18px;
+    }
   }
   /* Node-view blocks (callout / toggle / data+chart embed) carry tight
      Tailwind `my-1`/`my-2` margins; give them consistent breathing room
@@ -3004,6 +3054,30 @@ button.doc-comment-card:hover {
   box-shadow: 0 -6px 16px rgb(0 0 0 / 0.07), 0 6px 16px rgb(0 0 0 / 0.07);
   content: "";
   pointer-events: none;
+}
+/* Phones reflow the page to the viewport while editing (plan decision 6.2,
+   report B row 17): the canonical Letter / A4 geometry is kept for md+ and
+   for export (the core renderers never read these rules), but a 816px page
+   inside a 390px scroller meant every line needed panning. Below md the
+   stage stops forcing `max-content`, the section is never wider than the
+   viewport, the margins shrink to a touch gutter and the printed page height
+   stops padding the end of a short document. */
+@media (max-width: 767px) {
+  .office-document-stage { width: 100%; min-width: 0; }
+  .office-document-prosemirror { min-width: 0; }
+  .office-document-section {
+    width: min(var(--office-page-width, 612pt), 100%);
+    min-height: auto;
+    padding: 1.25rem 1rem;
+  }
+  .office-document-page-start {
+    margin-top: 3.25rem !important;
+  }
+  .office-document-page-start::before {
+    top: -2.25rem;
+    right: calc(-1rem - 1px);
+    left: calc(-1rem - 1px);
+  }
 }
 .office-document-prosemirror p { white-space: pre-wrap; }
 .office-document-prosemirror h1 { font-size: 2rem; font-weight: 700; }

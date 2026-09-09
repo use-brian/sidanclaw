@@ -227,7 +227,7 @@ export function FeedPolicy() {
           disabled={!isAdmin}
           rows={6}
           placeholder={t.policy.whitelistPlaceholder}
-          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-[16px] md:text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
         />
       </section>
 
@@ -240,12 +240,12 @@ export function FeedPolicy() {
           disabled={!isAdmin}
           rows={4}
           placeholder={t.policy.blockedPlaceholder}
-          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          className="w-full rounded-xl border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
         />
       </section>
 
       {isAdmin ? (
-        <div className="flex items-center gap-3 sticky bottom-4 backdrop-blur-sm">
+        <div className="flex items-center gap-3 sticky bottom-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur-sm">
           <button
             type="button"
             onClick={save}

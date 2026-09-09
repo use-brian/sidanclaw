@@ -479,6 +479,13 @@ export const zh: Dictionary = {
     continueBrowsing: "繼續瀏覽",
   },
   workspaceSwitcher: {
+    deploymentCloud: "雲端",
+    deploymentLocal: "本機",
+    deploymentSelfHosted: "自行託管",
+    deploymentSource: "來自 {url} 的帳戶",
+    useOwnDeployment: "使用自己的部署",
+    openCloudAccount: "開啟雲端帳戶",
+
     loading: "正在載入工作空間…",
     loadError: "無法載入工作空間",
     empty: "尚無工作空間",
@@ -1693,6 +1700,8 @@ export const zh: Dictionary = {
       propertyDragAria: "重新排序 {name}",
       close: "關閉",
       apply: "套用",
+      viewOptions: "檢視選項",
+      viewOptionsAria: "顯示檢視選項",
     },
     tableMenu: {
       sortAsc: "升序排序",
@@ -1779,6 +1788,8 @@ export const zh: Dictionary = {
       collabOfflineUnavailableBody:
         "此裝置尚未開啟過此頁面。恢復連線後將自動載入。",
     },
+    topbarTabsMenu: "{count} 個分頁",
+    topbarTabsMenuAria: "開啟的分頁",
   },
   settings: {
     nav: {
@@ -2575,6 +2586,7 @@ export const zh: Dictionary = {
       wsManageError: "無法更新此連接器。請重試。",
       wsToolPolicyTitle: "工作空間工具權限",
       wsToolPolicyDesc: "為整個工作空間允許、詢問或封鎖每個工具。團隊助理會遵循這些設定。",
+      backToList: "所有連接器",
     },
   },
   chrome: {
@@ -2883,6 +2895,7 @@ export const zh: Dictionary = {
     revokeInviteConfirmBody: "寄給 {email} 的連結將失效。之後可以重新發送邀請。",
     revokeInviteConfirm: "撤銷邀請",
     resend: "重新傳送",
+    rowActionsAria: "{name} 的操作",
   },
   workspaceLlmKey: {
     heading: "Gemini API 金鑰",
@@ -3387,6 +3400,9 @@ export const zh: Dictionary = {
         failed: "失敗",
         skipped: "已略過",
       },
+      editLayout: "編輯版面",
+      editLayoutHint:
+        "開啟：拖曳可移動步驟。關閉：點一下選取步驟，拖曳則捲動畫布。",
     },
     builder: {
       newPageTitle: "新工作流程",
@@ -3827,6 +3843,18 @@ export const zh: Dictionary = {
         sectionEmpty: "（無）",
       },
       runRowDuration: "{value}",
+      connectToLabel: "連接到",
+      connectToPlaceholder: "新增下一個步驟",
+      connectToSearchPlaceholder: "搜尋步驟",
+      connectToEmpty: "沒有其他可連接的步驟",
+      connectToTrueLabel: "為 true 時連接到",
+      connectToFalseLabel: "為 false 時連接到",
+      connectToCurrent: "目前：{names}",
+      enabledSwitch: "已啟用",
+      timezoneSearchPlaceholder: "搜尋時區",
+      timezoneEmpty: "沒有符合的時區",
+      timezoneDefaultOption: "預設 (UTC)",
+      timezoneCreate: "使用「{query}」",
     },
   },
   brainPage: {
@@ -4507,6 +4535,7 @@ export const zh: Dictionary = {
       filtersMany: "{count} 個篩選條件",
       clearFilters: "清除",
       suggestedCount: "{count} 個待確認",
+      skillActionsAria: "技能操作",
     },
     emptyState: {
       nudge: {
@@ -4992,6 +5021,7 @@ export const zh: Dictionary = {
       validation: "Token 須以 xoxb- 開頭，Secret 須為 16 個字元以上",
       show: "顯示",
       hide: "隱藏",
+      close: "關閉 Slack 設定",
     },
   },
   operatorBar: {
@@ -5963,6 +5993,9 @@ export const zh: Dictionary = {
     typeTitleToDelete: "請輸入以下完整標題，以確認永久刪除：",
     titleConfirmationPlaceholder: "輸入上方顯示的標題",
     deprecateTemplate: "棄用範本",
+    editorActions: "編輯器操作",
+    compactTextTools: "文字",
+    editText: "編輯文字",
   },
   // ── Chat operator app ([COMP:app-web/chat-surface]) ──
   // ── Custom Home apps ([COMP:app-web/home-app-frame]) ──
@@ -6654,6 +6687,7 @@ export const zh: Dictionary = {
       discardIdeaBody: "“{text}”将从待办清单中移除。",
       discardIdeaConfirm: "丢弃灵感",
       ideaSaveFailed: "无法保存这条灵感。",
+      dateLabel: "日期",
     },
     postEditor: {
       savedLocally: "已儲存在此裝置，等待同步。",
@@ -6768,6 +6802,7 @@ export const zh: Dictionary = {
       articleDescriptionPlaceholder: "链接卡片的简短摘要",
       articleFallbackTitle: "文章标题",
       articleFallbackDescription: "文章描述会显示在这里。",
+      refineOpenAria: "開啟修訂對話",
     },
     posts: {
       filterAria: "按状态筛选帖子",
@@ -7809,6 +7844,7 @@ export const zh: Dictionary = {
         budgetLabel: "每週提案額度",
         budgetHelp: "滾動 7 天內的提案上限。達到上限後代理會暫停，直到時間窗前進。",
       },
+      backToList: "所有來源",
     },
     ingestRules: {
       statusNote: "啟用來源後會立即暫存其路由規則。即時事件傳遞仍在逐一來源推出中；在功能上線前，已啟用的來源僅為暫存狀態，尚未從中擷取任何內容。",
@@ -8038,6 +8074,7 @@ export const zh: Dictionary = {
           unknown: "無法儲存規則，請再試一次。",
         },
       },
+      backToList: "所有來源",
     },
     channels: {
       whatsappOfficial: {
@@ -8451,6 +8488,7 @@ export const zh: Dictionary = {
       saving: "儲存中…",
       saveError: "無法儲存，請再試一次。",
       clearanceTooHighError: "無法將管道機密層級設定為高於您的成員機密層級。",
+      backToList: "所有管道",
     },
     assistants: {
       newCta: "新增助理",
@@ -8473,6 +8511,8 @@ export const zh: Dictionary = {
       createSubmitting: "正在建立…",
       createCancel: "取消",
       createError: "無法建立助理。請再試一次。",
+      loadError: "無法載入助理。請重新整理後再試一次。",
+      backToList: "所有助理",
     },
   },
   programmaticAccess: {
@@ -8653,6 +8693,7 @@ export const zh: Dictionary = {
     adding: "新增中…",
     byAuthor: "作者：",
     requiresPrefix: "需要：",
+    close: "關閉目錄",
   },
 
   connectorToolList: {
@@ -9198,13 +9239,13 @@ export const zh: Dictionary = {
     liveTranscriptLoading: "正在加载实时逐字稿...",
     liveTranscriptGap: "此处有{count}个实时逐字稿窗口不可用。",
     transcriptPending: "录音处理完成后,逐字稿会显示在这里。",
+    statusStagedTitle: "可以播放了",
+    statusStagedBody: "上传已完成。你可以播放并在笔记中添加时间戳。需要转录时，请让 Brian 处理。",
     statusProcessingTitle: "正在处理此录音",
     statusProcessingBody:
       "转录正在后台运行。完成后，逐字稿和行动项会显示在这里。",
     statusFailedTitle: "处理失败",
     statusFailedBody: "无法处理此录音。请打开录音重试。",
-    statusStagedTitle: "可以播放了",
-    statusStagedBody: "上传已完成。你可以播放并在笔记中添加时间戳。需要转录时，请让 Brian 处理。",
     statusFailedBodyDetail: "无法处理此录音: {detail}",
     statusAwaitingUploadTitle: "正在等待音频",
     statusAwaitingUploadBody:
@@ -9261,8 +9302,8 @@ export const zh: Dictionary = {
     meetingRecording: "会议录音",
     micAndComputerAudio: "麦克风 + 电脑音频",
     finishing: "保存中...",
-    pause: "暂停",
     savingBackground: "正在背景儲存錄音或錄影（{count} 個）。你可以繼續聊天或開始下一段錄製。",
+    pause: "暂停",
     resume: "继续",
     stop: "停止",
     discard: "丢弃",
@@ -9369,7 +9410,7 @@ export const zh: Dictionary = {
       railEmpty: "尚無即時工作階段",
       liveCount: "{count} 個執行中",
       selectTitle: "觀看即時瀏覽器",
-      selectHint: "在左側選擇一個工作階段來觀看或接管，或等待助理開啟瀏覽器。",
+      selectHint: "選擇一個即時工作階段來觀看或接管，或等待助理開啟瀏覽器。",
       liveView: "即時瀏覽器",
       profilesView: "瀏覽器身分",
       viewSwitcherAria: "瀏覽器檢視",
@@ -9535,5 +9576,6 @@ export const zh: Dictionary = {
       proxyInvalid: "請輸入有效的網址，或留空。",
       proxySave: "儲存",
     },
+    typeIntoPage: "在頁面中輸入",
   },
 };

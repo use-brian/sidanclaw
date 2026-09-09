@@ -117,8 +117,10 @@ export function SlackSetupInline({
           </p>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="text-muted-foreground hover:text-foreground transition-colors p-1"
+          aria-label={t.setup.slack.close}
+          className="h-11 w-11 sm:h-7 sm:w-7 shrink-0 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         >
           <CloseIcon />
         </button>
@@ -140,7 +142,7 @@ export function SlackSetupInline({
                 value={appName}
                 onChange={(e) => setAppName(e.target.value)}
                 maxLength={35}
-                className="w-full bg-muted/50 border border-border rounded-md px-2.5 py-1.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                className="w-full bg-muted/50 border border-border rounded-md px-2.5 py-1.5 text-[16px] md:text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
               />
             </div>
             <div>
@@ -150,7 +152,7 @@ export function SlackSetupInline({
                   type="color"
                   value={bgColor}
                   onChange={(e) => setBgColor(e.target.value)}
-                  className="w-8 h-8 rounded border border-border cursor-pointer p-0"
+                  className="w-11 h-11 sm:w-8 sm:h-8 rounded border border-border cursor-pointer p-0"
                 />
                 <input
                   type="text"
@@ -160,7 +162,7 @@ export function SlackSetupInline({
                     if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) setBgColor(v);
                   }}
                   maxLength={7}
-                  className="w-20 bg-muted/50 border border-border rounded-md px-2 py-1.5 text-[13px] text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="w-24 md:w-20 bg-muted/50 border border-border rounded-md px-2 py-1.5 text-[16px] md:text-[13px] text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-ring"
                 />
               </div>
             </div>
@@ -172,26 +174,28 @@ export function SlackSetupInline({
               value={appDescription}
               onChange={(e) => setAppDescription(e.target.value)}
               maxLength={140}
-              className="w-full bg-muted/50 border border-border rounded-md px-2.5 py-1.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              className="w-full bg-muted/50 border border-border rounded-md px-2.5 py-1.5 text-[16px] md:text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
           </div>
         </div>
 
-        <div className="relative">
-          <pre className="text-[11px] font-mono leading-relaxed px-3 py-2.5 rounded-lg bg-muted text-foreground overflow-x-auto max-h-48 overflow-y-auto border border-border">
-            {manifest}
-          </pre>
-          <div className="absolute top-1.5 right-1.5">
+        {/* Copy sits in its own row above the manifest (never floating over
+            its first line) so the target is reachable at 44px on a phone. */}
+        <div className="space-y-1.5">
+          <div className="flex justify-end">
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={copyManifest}
-              className="text-[11px] h-6 px-2"
+              className="text-[11px] h-11 sm:h-6 px-3 sm:px-2"
             >
               {manifestCopied ? t.setup.slack.copied : t.setup.slack.copy}
             </Button>
           </div>
+          <pre className="text-[11px] font-mono leading-relaxed px-3 py-2.5 rounded-lg bg-muted text-foreground overflow-x-auto max-h-48 overflow-y-auto border border-border">
+            {manifest}
+          </pre>
         </div>
       </StepCard>
 
@@ -401,14 +405,14 @@ function SecretInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         disabled={disabled}
-        className="flex-1 min-w-0 text-[12px] font-mono px-2.5 py-1.5 rounded-lg bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none transition-colors disabled:opacity-50"
+        className="flex-1 min-w-0 text-[16px] md:text-[12px] font-mono px-2.5 py-1.5 rounded-lg bg-background border border-border text-foreground placeholder:text-muted-foreground focus:outline-none transition-colors disabled:opacity-50"
       />
       <Button
         type="button"
         variant="outline"
         size="sm"
         onClick={onToggle}
-        className="shrink-0 h-auto text-[11px] px-2"
+        className="shrink-0 h-auto min-h-11 sm:min-h-0 text-[11px] px-2"
         disabled={disabled}
       >
         {visible ? t.setup.slack.hide : t.setup.slack.show}

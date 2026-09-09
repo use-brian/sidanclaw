@@ -140,7 +140,7 @@ export function PlanCalendar({
             onClick={() => onMonthChange(addMonths(month, -1))}
             aria-label={tp.previousMonth}
             title={tp.previousMonth}
-            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-9 md:size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ChevronLeft className="size-4" aria-hidden />
           </button>
@@ -153,7 +153,7 @@ export function PlanCalendar({
                 ).padStart(2, "0")}`,
               )
             }
-            className="h-7 rounded-md px-2 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="h-9 md:h-7 rounded-md px-2 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             {tp.today}
           </button>
@@ -162,7 +162,7 @@ export function PlanCalendar({
             onClick={() => onMonthChange(addMonths(month, 1))}
             aria-label={tp.nextMonth}
             title={tp.nextMonth}
-            className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-9 md:size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ChevronRight className="size-4" aria-hidden />
           </button>
@@ -183,7 +183,7 @@ export function PlanCalendar({
             <button
               type="button"
               onClick={onAcceptAllProposals}
-              className="shrink-0 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex h-9 md:h-auto shrink-0 items-center px-2 md:px-0 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
             >
               {tp.acceptAll}
             </button>
@@ -191,7 +191,12 @@ export function PlanCalendar({
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-border/60 shadow-xs">
+      {/* Below `md` the seven columns keep a readable 640px floor and the
+          grid scrolls sideways inside its own container (responsive contract
+          M1 / M8); the List view is the phone default, this is the fallback
+          when a phone asks for the month anyway. */}
+      <div className="overflow-x-auto rounded-xl border border-border/60 shadow-xs md:overflow-hidden">
+        <div className="min-w-[640px] md:min-w-0">
         <div className="grid grid-cols-7 border-b border-border/60 bg-muted/30">
           {weekdayLabels.map((label) => (
             <div
@@ -277,12 +282,12 @@ export function PlanCalendar({
                       onClick={() => onAddOnDay(day.iso)}
                       aria-label={tp.addOnDay}
                       title={tp.addOnDay}
-                      className="inline-flex size-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/day:opacity-100"
+                      className="inline-flex size-8 md:size-5 items-center justify-center rounded text-muted-foreground opacity-100 md:opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 md:group-hover/day:opacity-100"
                     >
                       <Plus className="size-3.5" aria-hidden />
                     </button>
                   ) : (
-                    <span className="size-5" aria-hidden />
+                    <span className="size-8 md:size-5" aria-hidden />
                   )}
                   <span
                     className={cn(
@@ -369,6 +374,7 @@ export function PlanCalendar({
               </div>
             );
           })}
+        </div>
         </div>
       </div>
     </div>

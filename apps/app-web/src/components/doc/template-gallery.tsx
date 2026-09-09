@@ -34,6 +34,7 @@ import {
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 
 export type TemplateGalleryProps = {
   /** Workspace custom templates (summaries), shown under "My templates". */
@@ -134,8 +135,10 @@ export function TemplateGallery({
     setSelectedIndex((i) => (i >= flatRows.length ? 0 : i));
   }, [flatRows.length]);
 
+  // Focus the search on open, except on a phone: the keyboard would cover
+  // half the gallery the user opened to tap a row (responsive contract M4).
   useEffect(() => {
-    inputRef.current?.focus();
+    if (!isPhoneViewport()) inputRef.current?.focus();
   }, []);
 
   const pickRow = useCallback(
@@ -202,7 +205,7 @@ export function TemplateGallery({
           aria-label={t.ariaLabel}
           onKeyDown={onKeyDown}
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[calc(100%-2rem)] max-w-md flex-col",
+            "fixed left-1/2 top-1/2 z-50 flex max-h-[80dvh] w-[calc(100%-2rem)] max-w-md flex-col",
             "-translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border",
             "bg-background shadow-xl ring-1 ring-foreground/5 transition-all duration-150",
             "data-[starting-style]:opacity-0 data-[starting-style]:scale-95",
@@ -233,7 +236,7 @@ export function TemplateGallery({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t.searchPlaceholder}
-                className="w-full bg-transparent text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
+                className="w-full bg-transparent text-[16px] text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground md:text-sm"
               />
             </div>
           </div>
@@ -283,7 +286,8 @@ export function TemplateGallery({
                             aria-label={t.deleteTemplate}
                             title={t.deleteTemplate}
                             onClick={() => handleDeleteCustom(tpl.id, tpl.name)}
-                            className="mr-1.5 shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                            // Always visible on touch, hover-revealed from `md` (M2); 36px on a phone.
+                            className="mr-1.5 shrink-0 rounded p-2.5 text-muted-foreground opacity-100 hover:bg-destructive/10 hover:text-destructive md:p-1 md:opacity-0 md:group-hover:opacity-100"
                           >
                             <Trash2 className="size-4" aria-hidden />
                           </button>

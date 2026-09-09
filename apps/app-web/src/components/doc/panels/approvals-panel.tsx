@@ -73,11 +73,13 @@ import {
   type SkillApprovalTargetWorkflow,
 } from "@/lib/api/approvals";
 import { listAssistants } from "@/lib/api/studio";
+import { requestApprovalsRefresh } from "@/lib/approvals-events";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
 import {
-  APPROVALS_REFRESH_EVENT,
-  requestApprovalsRefresh,
-  type ApprovalsRefreshDetail,
-} from "@/lib/approvals-events";
+  approvalSkillDetailsCacheKey,
+  approvalsCacheKey,
+} from "@/lib/surface-prefetch";
+import { ListSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 import {
   collapseContext,
   diffLines,
@@ -121,13 +123,34 @@ import {
 export function ApprovalsPanel() {
   const t = useT();
   const { activeId } = useWorkspaces();
-  const [rows, setRows] = useState<PendingApprovalRow[] | null>(null);
+  // The queue and the target-skill snapshots are TWO cache slots read in
+  // PARALLEL (instant-navigation contract N7): the snapshots used to be
+  // fetched only after the queue answered, so every staged_skill_* card paid
+  // two round trips before it could diff. Both keys sit in the
+  // `approvals:<wid>` family the spine map (`surface-cache-invalidation.ts`)
+  // marks stale on APPROVALS_REFRESH_EVENT - the server leg (an assistant
+  // staging an approval, an executor pause, another tab responding) AND the
+  // same-tab `requestApprovalsRefresh` this panel fires after its own
+  // responds - so it carries no refetch listener of its own. Re-opening the
+  // panel paints the last-known queue on the first frame and revalidates
+  // behind it; `setRows(null)` on mount is what used to blank it (N1).
+  const approvalsKey = activeId ? approvalsCacheKey(activeId) : null;
+  const skillDetailsKey = activeId ? approvalSkillDetailsCacheKey(activeId) : null;
+  const queue = useCachedResource<PendingApprovalRow[]>(approvalsKey, () =>
+    listApprovals(activeId ?? ""),
+  );
+  const snapshots = useCachedResource<Record<string, SkillApprovalDetail>>(
+    skillDetailsKey,
+    () => listSkillApprovalDetails(activeId ?? ""),
+  );
+  // `listApprovals` answers `[]` on a non-OK response, so a cold `error` here
+  // is a network failure; the queue then renders its empty state the way the
+  // pre-cache code did, rather than a skeleton forever.
+  const rows: PendingApprovalRow[] | null =
+    queue.data ?? (queue.loading ? null : []);
   // Target-skill snapshots for staged_skill_* cards, keyed by approval id.
-  // null = not fetched yet; {} = fetched (possibly failed — cards degrade).
-  const [skillDetails, setSkillDetails] = useState<Record<
-    string,
-    SkillApprovalDetail
-  > | null>(null);
+  // null = not answered yet (cards degrade); {} = answered (possibly failed).
+  const skillDetails = snapshots.data ?? null;
   const [assistantNames, setAssistantNames] = useState<Record<string, string>>(
     {},
   );
@@ -141,64 +164,17 @@ export function ApprovalsPanel() {
   // a stable reference keeps `filtered` from churning every render.
   const [now] = useState(() => Date.now());
 
-  // Bumped by the approvals event bus (same-tab respond actions AND the
-  // shell's server leg: an assistant staging an approval, an executor
-  // pause, another tab responding). Drives the SILENT refetch below —
-  // never the full reset the workspace-switch effect performs.
-  const [refreshTick, setRefreshTick] = useState(0);
-
-  useEffect(() => {
-    if (!activeId) return;
-    const handler = (ev: Event) => {
-      const detail = (ev as CustomEvent<ApprovalsRefreshDetail>).detail;
-      if (detail?.workspaceId && detail.workspaceId !== activeId) return;
-      setRefreshTick((n) => n + 1);
-    };
-    window.addEventListener(APPROVALS_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(APPROVALS_REFRESH_EVENT, handler);
-  }, [activeId]);
-
-  useEffect(() => {
-    if (!activeId || refreshTick === 0) return;
-    let cancelled = false;
-    void (async () => {
-      const list = await listApprovals(activeId);
-      if (cancelled) return;
-      setRows(list);
-      if (list.some((r) => isSkillApprovalKind(r.kind))) {
-        const details = await listSkillApprovalDetails(activeId);
-        if (!cancelled) setSkillDetails(details);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId, refreshTick]);
-
+  // A workspace switch resets the selection and filter (the rows themselves
+  // come from the new workspace's cache slot). Assistant names back the
+  // assistant filter labels — non-critical, so fetched independently: a
+  // failure here must not block the queue.
   useEffect(() => {
     if (!activeId) return;
     let cancelled = false;
-    setRows(null);
-    setSkillDetails(null);
     setAssistantNames({});
     setSelected(new Set());
     setFilter(NO_FILTER);
     setBatchError(null);
-    void (async () => {
-      const list = await listApprovals(activeId);
-      if (cancelled) return;
-      setRows(list);
-      // Skill cards render a diff against the target skill's current body —
-      // one snapshot fetch for the whole queue, only when skill rows exist.
-      if (list.some((r) => isSkillApprovalKind(r.kind))) {
-        const details = await listSkillApprovalDetails(activeId);
-        if (!cancelled) setSkillDetails(details);
-      } else {
-        setSkillDetails({});
-      }
-    })();
-    // Assistant names back the assistant filter labels — non-critical, so
-    // fetched independently: a failure here must not block the queue.
     void (async () => {
       const assistants = await listAssistants(activeId);
       if (!cancelled) {
@@ -211,6 +187,13 @@ export function ApprovalsPanel() {
       cancelled = true;
     };
   }, [activeId]);
+
+  /** Patch the cached queue after the user's own respond / revise (the
+   *  optimistic seam); the `requestApprovalsRefresh` that follows marks the
+   *  family stale, so the next read is authoritative while the rows stay up. */
+  const patchRows = (
+    updater: (prev: PendingApprovalRow[]) => PendingApprovalRow[],
+  ) => mutateSurfaceCache<PendingApprovalRow[]>(approvalsKey, updater);
 
   const filtered = useMemo(
     () => filterApprovals(rows ?? [], filter, now),
@@ -250,7 +233,7 @@ export function ApprovalsPanel() {
   );
 
   function handleResolved(id: string) {
-    setRows((prev) => (prev ? prev.filter((r) => r.id !== id) : prev));
+    patchRows((prev) => prev.filter((r) => r.id !== id));
     setSelected((prev) => {
       if (!prev.has(id)) return prev;
       const next = new Set(prev);
@@ -262,10 +245,8 @@ export function ApprovalsPanel() {
   }
 
   function handleRevised(previousId: string, replacement: PendingApprovalRow) {
-    setRows((prev) =>
-      prev
-        ? prev.map((row) => (row.id === previousId ? replacement : row))
-        : prev,
+    patchRows((prev) =>
+      prev.map((row) => (row.id === previousId ? replacement : row)),
     );
     setSelected((prev) => {
       if (!prev.has(previousId)) return prev;
@@ -322,7 +303,7 @@ export function ApprovalsPanel() {
         batchReason.trim() || undefined,
       );
       if (result.ok) {
-        setRows((prev) => (prev ? prev.filter((r) => r.id !== row.id) : prev));
+        patchRows((prev) => prev.filter((r) => r.id !== row.id));
       } else {
         failed.add(row.id);
       }
@@ -348,7 +329,8 @@ export function ApprovalsPanel() {
   const hasRows = rows !== null && rows.length > 0;
 
   return (
-    <div className="h-full w-full px-8 py-6 flex flex-col gap-5">
+    // `px-4 md:px-8`: 64px of gutter left ~170px for a card at 360px (C 24).
+    <div className="h-full w-full px-4 md:px-8 py-6 flex flex-col gap-5">
       <header className="flex flex-col gap-1">
         <h1 className="text-lg font-semibold flex items-center gap-2">
           {t.approvalsPage.title}
@@ -389,8 +371,11 @@ export function ApprovalsPanel() {
       )}
 
       {rows === null ? (
-        <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-          {t.approvalsPage.loading}
+        // Cold cache only (nothing known for this workspace + viewer yet): a
+        // geometry-matched skeleton, never a "Loading..." sentence (N4). A
+        // revisit never reaches this branch - the cached queue paints.
+        <div className="flex-1 min-h-0 overflow-hidden" aria-busy>
+          <ListSurfaceSkeleton rows={5} />
         </div>
       ) : rows.length === 0 ? (
         <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 border border-border rounded-md bg-card/50">
@@ -560,7 +545,7 @@ function FilterSelect({
           if (typeof v === "string") onChange(v);
         }}
       >
-        <SelectTrigger size="sm" className="min-w-[8rem] text-xs">
+        <SelectTrigger size="sm" className="min-w-[8rem] text-[16px] md:text-xs">
           <SelectValue>{renderValue(value)}</SelectValue>
         </SelectTrigger>
         <SelectContent align="start">
@@ -621,13 +606,14 @@ function SelectionToolbar({
             onChange={(e) => onReasonChange(e.target.value)}
             placeholder={t.approvalsPage.batch.reasonPlaceholder}
             disabled={busy}
-            className="text-xs px-2 py-1.5 rounded border border-border bg-background flex-1 min-w-[10rem] max-w-xs"
+            className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background flex-1 min-w-[10rem] max-w-xs"
           />
+          {/* 44px on touch (M3): the batch actions share the card recipe. */}
           <button
             type="button"
             disabled={busy}
             onClick={onApprove}
-            className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+            className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
           >
             {t.approvalsPage.batch.approveSelected}
           </button>
@@ -635,7 +621,7 @@ function SelectionToolbar({
             type="button"
             disabled={busy}
             onClick={onReject}
-            className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted disabled:opacity-50"
+            className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md border border-border hover:bg-muted disabled:opacity-50"
           >
             {t.approvalsPage.batch.rejectSelected}
           </button>
@@ -643,7 +629,7 @@ function SelectionToolbar({
             type="button"
             disabled={busy}
             onClick={onClear}
-            className="text-xs px-2 py-1.5 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            className="text-xs h-11 sm:h-7 px-2 text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
             {t.approvalsPage.batch.clearSelection}
           </button>
@@ -869,19 +855,23 @@ function ApprovalCard({
             className="mt-1 shrink-0"
           />
         )}
-        <span
-          className={cn(
-            "text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0 mt-0.5",
-            actionable
-              ? "bg-primary/15 text-primary"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {t.approvalsPage.kind[row.kind]}
-        </span>
         <div className="flex-1 min-w-0 flex flex-col gap-2">
-          <div>
-            <div className="text-sm font-medium truncate">{headline}</div>
+          {/* Below `sm` the kind chip takes its own line above the headline
+              (C 24): at 360px the chip column left ~170px for the body, so
+              every field of a preview wrapped word by word. */}
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
+            <span
+              className={cn(
+                "self-start text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0 sm:mt-0.5",
+                actionable
+                  ? "bg-primary/15 text-primary"
+                  : "bg-muted text-muted-foreground",
+              )}
+            >
+              {t.approvalsPage.kind[row.kind]}
+            </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-medium max-sm:break-words sm:truncate">{headline}</div>
             {!toolPreview &&
               row.approvalPayload.displayLines?.map((line, i) => (
                 <div key={i} className="text-xs text-muted-foreground truncate">
@@ -942,7 +932,7 @@ function ApprovalCard({
                         setRevisionNotice(null);
                         setEditingEmail(true);
                       }}
-                      className="ml-auto text-xs font-medium text-primary hover:underline disabled:opacity-50"
+                      className="ml-auto inline-flex min-h-11 sm:min-h-0 items-center px-2 sm:px-0 text-xs font-medium text-primary hover:underline disabled:opacity-50"
                     >
                       {t.approvalsPage.emailRevision.edit}
                     </button>
@@ -962,7 +952,7 @@ function ApprovalCard({
                       }}
                       maxLength={MAX_REVIEWED_EMAIL_BODY_CHARS}
                       disabled={revisionBusy}
-                      className="min-h-56 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+                      className="min-h-56 w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
                     />
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-[11px] tabular-nums text-muted-foreground">
@@ -980,13 +970,14 @@ function ApprovalCard({
                             setRevisionError(null);
                             setEditingEmail(false);
                           }}
-                          className="text-xs px-3 py-1.5 rounded-md border border-border bg-background hover:bg-muted disabled:opacity-50"
+                          className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md border border-border bg-background hover:bg-muted disabled:opacity-50"
                         >
                           {t.approvalsPage.emailRevision.cancel}
                         </button>
                         <Button
                           type="button"
                           size="sm"
+                          className="h-11 sm:h-7 px-4 sm:px-3"
                           disabled={
                             revisionBusy ||
                             emailBody.trim().length === 0 ||
@@ -1047,6 +1038,7 @@ function ApprovalCard({
               {metaLine}
             </div>
           </div>
+          </div>
 
           {actionable ? (
             <div className="flex flex-col gap-2">
@@ -1056,19 +1048,19 @@ function ApprovalCard({
                 onChange={(e) => setReason(e.target.value)}
                 placeholder={t.approvalsPage.reasonPlaceholder}
                 disabled={busy || batchBusy}
-                className="text-xs px-2 py-1.5 rounded border border-border bg-background w-full max-w-md"
+                className="text-[16px] md:text-xs px-2 py-1.5 rounded border border-border bg-background w-full max-w-md"
               />
               {row.kind === "browser_skill_send" ? (
                 // The R2-2 three-button card: Deny / Allow once / Allow always
                 // for this block+profile. "Allow always" mints the standing
                 // grant (the grant IS the review) — never offered on
-                // verb-ceiling sends.
+                // verb-ceiling sends. 44px on touch (M3, C 23 / B 40).
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     disabled={busy || batchBusy}
                     onClick={() => respond("rejected")}
-                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted disabled:opacity-50"
+                    className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md border border-border hover:bg-muted disabled:opacity-50"
                   >
                     {t.approvalsPage.browserSkillSend.deny}
                   </button>
@@ -1076,7 +1068,7 @@ function ApprovalCard({
                     type="button"
                     disabled={busy || batchBusy}
                     onClick={() => respond("approved")}
-                    className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+                    className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
                   >
                     {t.approvalsPage.browserSkillSend.allowOnce}
                   </button>
@@ -1085,7 +1077,7 @@ function ApprovalCard({
                       type="button"
                       disabled={busy || batchBusy}
                       onClick={() => respond("approved", { grantAlways: true })}
-                      className="text-xs px-3 py-1.5 rounded-md border border-primary/50 text-primary hover:bg-primary/10 disabled:opacity-50"
+                      className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md border border-primary/50 text-primary hover:bg-primary/10 disabled:opacity-50"
                     >
                       {format(t.approvalsPage.browserSkillSend.allowAlways, {
                         skill: row.approvalPayload.skillName ?? "",
@@ -1096,7 +1088,9 @@ function ApprovalCard({
                   {error && <span className="text-xs text-red-500">{error}</span>}
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
+                // Approve is THE tap on this surface: 44px on touch (M3).
+                // `flex-wrap` so the error line never squeezes the pair (C 75).
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     disabled={
@@ -1107,7 +1101,7 @@ function ApprovalCard({
                       editingEmail
                     }
                     onClick={() => respond("approved")}
-                    className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+                    className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
                   >
                     {reviewedEmail
                       ? t.approvalsPage.emailRevision.approveAndSend
@@ -1119,7 +1113,7 @@ function ApprovalCard({
                     type="button"
                     disabled={busy || batchBusy || revisionBusy || editingEmail}
                     onClick={() => respond("rejected")}
-                    className="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-muted disabled:opacity-50"
+                    className="text-xs h-11 sm:h-7 px-4 sm:px-3 rounded-md border border-border hover:bg-muted disabled:opacity-50"
                   >
                     {reviewedEmail
                       ? t.approvalsPage.emailRevision.discard
@@ -1528,7 +1522,7 @@ function AttachOffer({
             if (typeof v === "string" && v) onStepChange(v);
           }}
         >
-          <SelectTrigger size="sm" className="min-w-[12rem] text-xs">
+          <SelectTrigger size="sm" className="min-w-[12rem] text-[16px] md:text-xs">
             <SelectValue>
               {stepId ? stepLabel(stepId) : t.approvalsPage.attachOffer.pickStep}
             </SelectValue>

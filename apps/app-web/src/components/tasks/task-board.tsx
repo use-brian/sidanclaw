@@ -29,7 +29,7 @@ import {
   type TaskStatus,
 } from "@/lib/api/tasks";
 import { taskProject } from "@/lib/tasks-view";
-import { STATUS_DOT } from "./task-cells";
+import { STATUS_DOT, StatusCell } from "./task-cells";
 import type { ContextProject } from "@/lib/api/context-scopes";
 
 const LIVE_COLUMNS: readonly TaskStatus[] = ["todo", "in_progress", "in_review", "blocked"];
@@ -48,6 +48,7 @@ export function TaskBoard({
   projects,
   showCompleted,
   onStatusDrop,
+  onStatusChange,
   onOpenRecord,
 }: {
   rows: TaskRow[];
@@ -56,6 +57,12 @@ export function TaskBoard({
   /** Reveal the done/archived columns. */
   showCompleted: boolean;
   onStatusDrop: (row: TaskRow, status: TaskStatus) => void;
+  /**
+   * The tap path for a status change (responsive contract M9): HTML5 drag
+   * never fires from touch, so below `md` each card carries the table's
+   * `StatusCell` select, committing through the same wire as a drop.
+   */
+  onStatusChange?: (row: TaskRow, status: TaskStatus) => Promise<{ ok: boolean; error?: string }>;
   onOpenRecord: (row: TaskRow) => void;
 }) {
   const t = useT().tasksPage;
@@ -188,6 +195,18 @@ export function TaskBoard({
                         </span>
                       )}
                     </div>
+                    {onStatusChange && (
+                      <div
+                        className="mt-1.5 border-t border-border/40 pt-1 md:hidden"
+                        draggable={false}
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
+                        <StatusCell
+                          value={row.status}
+                          onCommit={(status) => onStatusChange(row, status)}
+                        />
+                      </div>
+                    )}
                   </div>
                 );
               })}
