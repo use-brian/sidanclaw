@@ -519,6 +519,7 @@ function applyOne(
         return
       }
       const merged = { ...current, ...op.patch, id } as Block
+      if (merged.kind === 'drawing' && 'scene' in op.patch) delete merged.preview
       if (loc.kind === 'top') {
         const rebuilt = buildBlockNodes(merged)
         if (rebuilt.length === 0) {

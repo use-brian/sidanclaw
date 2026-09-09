@@ -10,11 +10,41 @@ show a scene-derived canvas preview and can be reopened for editing.
 
 `drawing` is a member of the canonical core Block/schema union. Its versioned
 scene contains elements, a small durable app-state subset, and embedded raster
-files. No preview is authoritative or persisted. The existing embed JSON attr,
-ProseMirror transactions, Yjs encoding, server snapshots, and Page add/edit/delete
+files. An optional derived PNG preview is persisted alongside the scene, never
+as its authority. Browser Save exports a light-mode PNG using the scene's
+background (at most 1600 px per side and 1 MiB of PNG file bytes), bound to the canonical
+scene by SHA-256. Empty
+scenes save without a preview. Export failures leave the draft open without
+committing. The existing embed JSON attr, ProseMirror transactions, Yjs encoding,
+server snapshots, and Page add/edit/delete
 operations carry the same block. Brian can read and replace scenes with those
 existing selection/block-ID scoped operations; no human-only storage or new tool
 is introduced. Ordinary page authorization remains authoritative on the server.
+
+Brian's targeted `getBlock` read delivers a valid export as actual model image
+content through the existing tool-result image channel, for both the parent
+assistant and delegated document editor. Bulk reads do not attach images. Tool
+text excludes preview bytes and embedded raster bytes; file metadata remains.
+Do not reconstruct omitted file bytes when editing. Missing, invalid, or
+scene-mismatched exports are explicitly unavailable, not evidence of the drawing.
+Before declaring an export available, the server checks all chunk lengths and
+CRCs, bounds IDAT inflation by the validated image dimensions, and fully decodes
+and re-encodes the pixels with the existing image decoder. Ancillary metadata is
+not decompressed or forwarded. Invalid PNGs leave the canonical scene readable
+but the preview unavailable. The regenerated PNG must also fit the 1 MiB cap.
+The pixel limit is 2,560,000; the IDAT inflate cap is derived from dimensions
+and never exceeds 20,492,800 bytes (16-bit RGBA plus interlace filter overhead).
+Bulk block arrays are decoded serially rather than allocating for every drawing
+concurrently.
+AI scene edits invalidate the previous preview. New AI drawings and older scenes
+need a browser editor Save before visual reading; there is no server-side renderer,
+background mutation from read-only rendering, or remote image fetching.
+Text-only providers cannot visually read the attachment. Each targeted read adds
+at most one image; ordinary text-result truncation does not truncate image bytes.
+The existing executor caps tool text at 25,000 estimated tokens; scene geometry
+can still be truncated at that limit. Context fitting currently estimates 1,000
+tokens per image (actual provider usage varies) and may evict old messages. A
+fresh targeted read restores the visual evidence when needed.
 
 Save checks current editor authority and the original node's identity/content
 immediately before dispatch. A remotely changed or deleted block rejects the

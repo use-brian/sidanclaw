@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
+import type { BinaryFiles } from '@excalidraw/excalidraw/types';
 import { Dialog } from '@base-ui/react/dialog';
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types';
-import { drawingSceneSchema, type DrawingScene } from '@use-brian/shared/drawing';
+import { drawingSceneSchema, drawingPreviewSchema, drawingSceneDigest, MAX_DRAWING_PREVIEW_DIMENSION, type DrawingScene, type DrawingPreview } from '@use-brian/shared/drawing';
 import { useLocale, useT } from '@/lib/i18n/client';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
@@ -13,7 +15,7 @@ import '@excalidraw/excalidraw/index.css';
 export default function DrawingEditor({ scene, editable, onSave, onCancel }: {
   scene: DrawingScene;
   editable: boolean;
-  onSave: (scene: DrawingScene) => boolean;
+  onSave: (scene: DrawingScene, preview?: DrawingPreview) => boolean;
   onCancel: () => void;
 }) {
   const t = useT().docPage.diagramSource;
@@ -22,6 +24,10 @@ export default function DrawingEditor({ scene, editable, onSave, onCancel }: {
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof loadDrawingRuntime>> | null>(null);
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null);
   const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const latest = useRef({ editable, onSave, mounted: true });
+  latest.current = { editable, onSave, mounted: latest.current.mounted };
+  useEffect(() => { latest.current.mounted = true; return () => { latest.current.mounted = false; }; }, []);
   const [initial] = useState(() => structuredClone(scene));
   useEffect(() => {
     let active = true;
@@ -30,8 +36,8 @@ export default function DrawingEditor({ scene, editable, onSave, onCancel }: {
     return () => { active = false; };
   }, [t.drawingFailed]);
 
-  function save() {
-    if (!editable || !api) return;
+  async function save() {
+    if (!editable || !api || !runtime || saving) return;
     const elements = api.getSceneElements();
     const fileIds = new Set<string>();
     for (const element of elements) {
@@ -47,7 +53,25 @@ export default function DrawingEditor({ scene, editable, onSave, onCancel }: {
       files,
     });
     if (!result.success) { setError(t.drawingError); return; }
-    if (!onSave(result.data)) setError(t.drawingConflict);
+    if (!result.data.elements.some(element => !element.isDeleted)) {
+      if (!onSave(result.data)) setError(t.drawingConflict);
+      return;
+    }
+    setSaving(true);
+    try {
+      const canvas = await runtime.exportToCanvas({
+        elements: runtime.restoreElements(result.data.elements as unknown as ExcalidrawElement[], null),
+        appState: { ...result.data.appState, exportWithDarkMode: false, exportBackground: true },
+        files: result.data.files as unknown as BinaryFiles,
+        maxWidthOrHeight: MAX_DRAWING_PREVIEW_DIMENSION,
+      });
+      const preview = drawingPreviewSchema.parse({ mimeType: 'image/png',
+        data: canvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, ''),
+        width: canvas.width, height: canvas.height, sceneDigest: await drawingSceneDigest(result.data) });
+      if (!latest.current.mounted) return;
+      if (!latest.current.editable || !latest.current.onSave(result.data, preview)) setError(t.drawingConflict);
+    } catch { if (latest.current.mounted) setError(t.drawingFailed); }
+    finally { if (latest.current.mounted) setSaving(false); }
   }
 
   return <Dialog.Root open onOpenChange={(open) => { if (!open) onCancel(); }}>
@@ -63,7 +87,7 @@ export default function DrawingEditor({ scene, editable, onSave, onCancel }: {
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-3">
           <Dialog.Title className="mr-auto font-semibold">{t.drawing}</Dialog.Title>
           <Button variant="outline" onClick={onCancel}>{t.cancel}</Button>
-          <Button disabled={!editable || !api} onClick={save}>{t.drawingSave}</Button>
+          <Button disabled={!editable || !api || saving} onClick={save}>{t.drawingSave}</Button>
           <Dialog.Description className="w-full text-xs text-muted-foreground">{t.drawingHelp}</Dialog.Description>
           {error && <p role="alert" className="w-full text-sm text-destructive">{error}</p>}
         </div>
@@ -73,7 +97,7 @@ export default function DrawingEditor({ scene, editable, onSave, onCancel }: {
             initialData={{ ...initial, scrollToContent: true } as unknown as ExcalidrawInitialDataState}
             theme={resolved}
             langCode={locale === 'ja' ? 'ja-JP' : locale === 'zh' ? 'zh-TW' : locale === 'zh-CN' ? 'zh-CN' : 'en'}
-            viewModeEnabled={!editable}
+            viewModeEnabled={!editable || saving}
             handleKeyboardGlobally={false}
             autoFocus
             UIOptions={{ canvasActions: { loadScene: false, saveToActiveFile: false, export: false, toggleTheme: false }, tools: { image: true } }}

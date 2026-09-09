@@ -12,7 +12,12 @@ import { BlockDrawing } from '../block-drawing';
 import { saveDrawing } from '../drawing-transaction';
 import { executeSlashItem } from '../slash-execute';
 import { SLASH_MENU_ITEMS, filterSlashMenuItems } from '../slash-menu';
-import { drawingBlockSchema } from '@use-brian/shared/drawing';
+import { drawingBlockSchema, drawingSceneDigest } from '@use-brian/shared/drawing';
+import { webcrypto } from 'node:crypto';
+
+Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==';
+const exporting = vi.hoisted(() => ({ wait: null as Promise<void> | null, invalid: false }));
 
 vi.mock('@/lib/theme', () => ({ useTheme: () => ({ resolved: 'light' }) }));
 // Mock only the canvas engine. The real dialog, Save/Cancel, validation, and
@@ -36,7 +41,13 @@ vi.mock('../drawing-runtime', () => ({ loadDrawingRuntime: async () => ({
   },
   MainMenu: () => null,
   restoreElements: (elements: unknown) => elements,
-  exportToCanvas: async () => document.createElement('canvas'),
+  exportToCanvas: async () => {
+    if (exporting.wait) await exporting.wait;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    canvas.toDataURL = () => exporting.invalid ? 'data:,' : `data:image/png;base64,${png}`;
+    return canvas;
+  },
 }) }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,7 +56,7 @@ const t = en.docPage.diagramSource;
 let root: Root;
 let host: HTMLDivElement;
 let editor: Editor | undefined;
-afterEach(() => { act(() => root?.unmount()); host?.remove(); editor?.destroy(); editor = undefined; });
+afterEach(() => { act(() => root?.unmount()); host?.remove(); editor?.destroy(); editor = undefined; exporting.wait = null; exporting.invalid = false; });
 async function render(node: React.ReactNode) {
   if (!host?.isConnected) { host = document.createElement('div'); document.body.append(host); root = createRoot(host); }
   await act(async () => { root.render(<I18nProvider locale="en" dict={en}>{node}</I18nProvider>); });
@@ -75,7 +86,7 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingError);
     await click('engine delete retained image');
     await click(t.drawingSave);
-    expect(write).toHaveBeenCalledWith(block, block);
+    await act(async () => { await vi.waitFor(() => expect(write).toHaveBeenCalledWith(expect.objectContaining({ ...block, preview: expect.objectContaining({ data: png }) }), block)); });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
   it('discovers Drawing by alias and slash-inserts a schema-valid canonical embed', () => {
@@ -97,7 +108,9 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     await click(t.drawingEdit);
     await click('engine draw 0');
     await click(t.drawingSave);
-    expect(write).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1)); });
+    expect(write.mock.calls[0][0].preview).toEqual({ mimeType: 'image/png', data: png, width: 1, height: 1,
+      sceneDigest: await drawingSceneDigest(write.mock.calls[0][0].scene) });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(host.querySelector('canvas')).toBeTruthy();
     await click(t.drawingEdit);
@@ -116,6 +129,33 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     expect(write).not.toHaveBeenCalled();
     await click(t.cancel);
   });
+  it.each(['cancel', 'permission', 'remote'])('rejects an in-flight export after %s changes authority', async reason => {
+    const write = vi.fn(() => true);
+    await render(<BlockDrawing block={original} editable onSave={write} />);
+    await click(t.drawingEdit);
+    await click('engine draw 0');
+    let release!: () => void;
+    exporting.wait = new Promise<void>(resolve => { release = resolve; });
+    await click(t.drawingSave);
+    expect(write).not.toHaveBeenCalled();
+    if (reason === 'cancel') await click(t.cancel);
+    else await render(<BlockDrawing block={reason === 'remote' ? { ...original, scene: { ...original.scene, appState: { viewBackgroundColor: '#000' } } } : original} editable={reason !== 'permission'} onSave={write} />);
+    await act(async () => { release(); await drawingSceneDigest(original.scene); });
+    expect(write).not.toHaveBeenCalled();
+  });
+  it('keeps failed exports open and saves empty scenes without retaining an old image', async () => {
+    const write = vi.fn(() => true);
+    await render(<BlockDrawing block={original} editable onSave={write} />);
+    await click(t.drawingEdit);
+    await click('engine draw 0');
+    exporting.invalid = true;
+    await click(t.drawingSave);
+    expect(write).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingFailed);
+    await click('engine delete retained image');
+    await click(t.drawingSave);
+    expect(write).toHaveBeenCalledWith({ ...original, preview: undefined }, original);
+  });
   it('keeps a stale draft open with an error instead of overwriting a remote scene', async () => {
     const write = vi.fn(() => true);
     await render(<BlockDrawing block={original} editable onSave={write} />);
@@ -123,7 +163,7 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     await render(<BlockDrawing block={{ ...original, scene: { ...original.scene, appState: { viewBackgroundColor: '#000' } } }} editable onSave={write} />);
     await click(t.drawingSave);
     expect(write).not.toHaveBeenCalled();
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingConflict);
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingConflict));
     await click(t.cancel);
   });
   it('refuses incomplete images without writing or closing, and isolates drawing shortcuts', async () => {

@@ -1,6 +1,41 @@
 import { z } from 'zod'
 
 export const MAX_DRAWING_BYTES = 2 * 1024 * 1024
+export const MAX_DRAWING_PREVIEW_BYTES = 1024 * 1024
+export const MAX_DRAWING_PREVIEW_DIMENSION = 1600
+
+// Portable envelope checks only. Core must fully decode before model delivery.
+export const drawingPreviewSchema = z.object({
+  mimeType: z.literal('image/png'),
+  data: z.string().max(4 * Math.ceil(MAX_DRAWING_PREVIEW_BYTES / 3)).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  width: z.number().int().min(1).max(MAX_DRAWING_PREVIEW_DIMENSION),
+  height: z.number().int().min(1).max(MAX_DRAWING_PREVIEW_DIMENSION),
+  sceneDigest: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict().superRefine((preview, ctx) => {
+  if (preview.data.length > 4 * Math.ceil(MAX_DRAWING_PREVIEW_BYTES / 3)) return
+  let bytes: string
+  try { bytes = atob(preview.data) } catch {
+    ctx.addIssue({ code: 'custom', message: 'Invalid drawing PNG base64' })
+    return
+  }
+  const uint32 = (at: number) => [...bytes.slice(at, at + 4)].reduce((n, c) => n * 256 + c.charCodeAt(0), 0)
+  if (bytes.length > MAX_DRAWING_PREVIEW_BYTES || bytes.length < 57 ||
+    bytes.slice(0, 8) !== '\x89PNG\r\n\x1a\n' || uint32(8) !== 13 || bytes.slice(12, 16) !== 'IHDR' ||
+    uint32(16) !== preview.width || uint32(20) !== preview.height ||
+    bytes.slice(-12) !== '\x00\x00\x00\x00IEND\xae\x42\x60\x82' || btoa(bytes) !== preview.data) {
+    ctx.addIssue({ code: 'custom', message: 'Invalid drawing PNG export or dimensions' })
+  }
+})
+export type DrawingPreview = z.infer<typeof drawingPreviewSchema>
+
+export async function drawingSceneDigest(scene: DrawingScene): Promise<string> {
+  // JSONB may reorder object keys. Hash canonical parsed data, not storage order.
+  const json = JSON.stringify(drawingSceneSchema.parse(scene), (_key, value) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value)
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json))
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
 
 // Preserve versioned element fields; refuse executable embeds and remote files.
 const pointSchema = z.tuple([z.number().finite(), z.number().finite()])
@@ -94,6 +129,7 @@ export const drawingBlockSchema = z.object({
   kind: z.literal('drawing'),
   id: z.string().min(1).max(128),
   scene: drawingSceneSchema,
+  preview: drawingPreviewSchema.optional(),
 })
 export type DrawingScene = z.infer<typeof drawingSceneSchema>
 export type DrawingBlock = z.infer<typeof drawingBlockSchema>

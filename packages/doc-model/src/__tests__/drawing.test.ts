@@ -12,6 +12,20 @@ const block: Block = { kind: 'drawing', id: 'drawing-1', scene: {
 } }
 
 describe('[COMP:doc-model/drawing] canonical persistence', () => {
+  it('roundtrips a PNG through API/Yjs and removes it on both Brian scene edit paths', async () => {
+    const preview = { mimeType: 'image/png' as const, width: 1, height: 1,
+      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+      sceneDigest: 'a'.repeat(64) }
+    const page = pageSchema.parse({ blocks: [{ ...block, preview }] })
+    expect(snapshotFromUpdate(pageToYDocUpdate(page, '')).page).toEqual(page)
+    const scene = { ...block.scene, appState: { viewBackgroundColor: '#123456' } }
+    const ops = opsSchema.parse([{ op: 'edit', blockId: block.id, patch: { scene, preview } }])
+    expect(applyOps(page, ops).page.blocks[0]).toEqual({ ...block, scene })
+    const doc = pageToYDoc(page, '')
+    applyOpsToYDoc(doc, [{ op: 'edit', blockId: block.id, patch: { scene, preview } }])
+    expect(yDocToSnapshot(doc).page.blocks[0]).toEqual({ ...block, scene })
+    doc.destroy()
+  })
   it('survives API schema, embed mapping, Yjs binary reload, and snapshot validation without stripping images', () => {
     const page = pageSchema.parse({ blocks: [block] })
     expect(snapshotFromUpdate(pageToYDocUpdate(page, 'Sketch')).page).toEqual(page)

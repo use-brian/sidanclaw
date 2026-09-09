@@ -3,7 +3,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import type { BinaryFiles } from '@excalidraw/excalidraw/types';
-import { drawingSceneSchema, type DrawingBlock, type DrawingScene } from '@use-brian/shared/drawing';
+import { drawingSceneSchema, type DrawingBlock, type DrawingScene, type DrawingPreview } from '@use-brian/shared/drawing';
 import { useT } from '@/lib/i18n/client';
 import { useTheme } from '@/lib/theme';
 import { loadDrawingRuntime } from './drawing-runtime';
@@ -47,9 +47,9 @@ export function BlockDrawing({ block, editable = false, onSave }: {
     return () => { active = false; };
   }, [block.scene, resolved]);
 
-  function save(scene: DrawingScene) {
+  function save(scene: DrawingScene, preview?: DrawingPreview) {
     if (!editable || !draft || !onSave || JSON.stringify(block) !== JSON.stringify(draft)) return false;
-    if (!onSave({ ...draft, scene }, draft)) return false;
+    if (!onSave({ ...draft, scene, preview }, draft)) return false;
     setDraft(null);
     return true;
   }

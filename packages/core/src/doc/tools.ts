@@ -62,7 +62,8 @@
 
 import { z } from 'zod'
 import { stripFollowUps } from '@use-brian/shared'
-import { buildTool, type Tool } from '../tools/types.js'
+import type { Tool } from '../tools/types.js'
+import { buildDrawingAwareTool as buildTool } from './drawing-result.js'
 import { formatToolError } from '../engine/tool-executor.js'
 import type { CrmStore } from '../crm/types.js'
 import type { TaskStore } from '../tasks/types.js'
@@ -1125,7 +1126,7 @@ export function createGetBlockTool(deps: DocToolDeps): Tool {
       '\n\n' +
       'For the full page (all blocks at once), use `getCurrentPage`. For a data block\'s rows, use `queryDataBlock`. ' +
       '\n\n' +
-      'Returns `{ block: <Block> }` — the discriminated union variant matching the block\'s kind.',
+      'Returns `{ block: <Block> }`. Drawings also attach a scene-matched exported PNG as model image content when available; previewStatus explains missing exports. Raster bytes are omitted from text. Do not reconstruct omitted files or claim to see an unavailable image.',
     inputSchema: getBlockInputSchema,
     isConcurrencySafe: true,
     isReadOnly: true,
@@ -1159,7 +1160,8 @@ export function createGetBlockTool(deps: DocToolDeps): Tool {
       // Round-trip the block through Zod so the response is guaranteed
       // to satisfy the doc wire-format contract (catches corruption
       // in the JSONB column at read time, surfaces cleanly to the model).
-      const parsed = blockSchema.safeParse(block)
+      // A bad derived export must not hide an otherwise editable scene.
+      const parsed = blockSchema.safeParse(block.kind === 'drawing' ? { ...block, preview: undefined } : block)
       if (!parsed.success) {
         // `parsed.error.message` is a JSON dump of the whole issue array;
         // formatToolError renders the compact `path: message` lines instead.
@@ -1179,7 +1181,7 @@ export function createGetBlockTool(deps: DocToolDeps): Tool {
         eventCtx(context),
       )
 
-      return { data: { block: parsed.data } }
+      return { data: { block: block.kind === 'drawing' ? { ...parsed.data, preview: block.preview } : parsed.data } }
     },
   })
 }
