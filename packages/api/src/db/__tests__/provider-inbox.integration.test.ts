@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type { Pool } from 'pg'
 import { afterAll, describe, expect, it } from 'vitest'
 import { type AssociationActor, type AssociationProviderEventInput, ProviderEntitlementEventSchema } from '@use-brian/core'
@@ -73,6 +76,39 @@ async function membership(f: Awaited<ReturnType<typeof fixture>>) {
 }
 describe('[COMP:crm/provider-inbox] Actual durable normalized receipts', () => {
   afterAll(async () => { _resetCoalescerForTests(); await pool.end(); await appPool.end() })
+  it('reconciles missed fake-provider order and membership events through actual canonical transactions', async () => {
+    const { ProviderCheckpoint, createFakeProvider, createProviderReconciler } = await import(new URL('../../../../../scripts/crm/provider-reference.mjs', import.meta.url).href)
+    const f = await fixture(), m = await membership(f); await f.bind()
+    const root = mkdtempSync(join(tmpdir(), 'provider-db-reference-'))
+    const provider = createFakeProvider({ provider: 'fixture', webhookSecret: 'fictional_webhook_secret_for_local_tests_only', events: [
+      { target: 'order', orderId: f.orderId, event: f.evidence }, { target: 'entitlement', event: m.event },
+    ] })
+    const checkpoint = new ProviderCheckpoint({ databasePath: join(root, 'checkpoint.sqlite'), sourceId: 'fictional-provider', provider: 'fixture', workspaceId: f.workspaceId, apiUrl: 'http://127.0.0.1:4444' })
+    const client = { forward: async (envelope: { target: string; event: unknown; orderId?: string }) => {
+      try {
+        const result = envelope.target === 'order' ? await store.reconcileProviderEvent(f.workspaceId, envelope.orderId!, envelope.event as AssociationProviderEventInput, f.actor)
+          : await m.submit(ProviderEntitlementEventSchema.parse(envelope.event))
+        return result.receipt
+      } catch (error) {
+        const details = (error as { details?: { receiptId: string; receiptState: string } }).details
+        if (details?.receiptId) return { id: details.receiptId, state: details.receiptState }
+        throw error
+      }
+    } }
+    try {
+      const worker = createProviderReconciler({ provider, checkpoint, client, pageSize: 1 })
+      const signed = provider.signWebhook({ target: 'order', orderId: f.orderId, event: f.evidence })
+      expect((await worker.receiveWebhook(signed.body, signed.signature)).state).toBe('applied')
+      expect(await worker.reconcile()).toMatchObject({ state: 'caught_up', processed: 2 })
+      expect(await counts(f.workspaceId)).toEqual({ evidence: 1, transitions: 1, notifications: 2 })
+      provider.append({ target: 'order', orderId: f.orderId, event: { ...f.evidence, eventId: randomUUID(), targetStatus: 'refunded' } })
+      provider.append({ target: 'order', orderId: f.orderId, event: { ...f.evidence, eventId: randomUUID() } })
+      expect(await worker.reconcile()).toMatchObject({ state: 'caught_up', processed: 2 })
+      expect((await store.getOrder(f.workspaceId, f.orderId))?.status).toBe('refunded')
+      expect(checkpoint.issues().items).toMatchObject([{ cursor: 4, state: 'needs_reconciliation' }])
+      expect((await receipt(f.workspaceId, m.event.eventId)).state).toBe('applied')
+    } finally { checkpoint.close(); rmSync(root, { recursive: true, force: true }) }
+  })
   it('retains invalid evidence as a reconciliation receipt and retries the same input after the binding is repaired', async () => {
     const f = await fixture()
     await expect(f.apply()).rejects.toMatchObject({ code: 'conflict', details: { receiptState: 'needs_reconciliation' } })
