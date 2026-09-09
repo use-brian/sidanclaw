@@ -33,7 +33,7 @@ export async function listCrmMailboxes(workspaceId:string):Promise<Array<{id:str
   if(!response.ok)throw new AssociationApiError("mailboxes_unavailable",response.status);
   const body=await response.json();if(!Array.isArray(body?.connectors))throw new AssociationApiError("invalid_response",502);
   // Intentionally only the three prepared transports, not every built-in connector.
-  return body.connectors.filter((row:{id?:unknown;connectorInstanceId?:unknown})=>["gmail","imap","agentmail"].includes(String(row.id))&&typeof row.connectorInstanceId==="string")
+  return body.connectors.filter((row:{id?:unknown;connectorInstanceId?:unknown})=>["gmail","imap","agentmail"].includes(String(row.id))&&typeof row.connectorInstanceId==="string") // drift-sweep: intentionally-narrow: managed CRM mail transports
     .map((row:{id:string;connectorInstanceId:string;label?:string;name:string;connectedEmail?:string})=>({id:row.connectorInstanceId,provider:row.id,label:row.label||row.connectedEmail||row.name}));
 }
 export function getCrmMailboxPolicy(workspaceId:string,instanceId:string){return request<{policy:CrmManagedMailboxPolicy|null}>(workspaceId,`mailbox-policies/${encodeURIComponent(instanceId)}`);}
