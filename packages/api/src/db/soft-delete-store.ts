@@ -25,7 +25,9 @@
  * [COMP:corrections/soft-delete-store]
  */
 
-import { HardPurgeError, SoftDeleteError, type RowSnapshot, type SoftDeletePrimitive, type SoftDeleteRepository } from '@use-brian/core'
+import {acquireCrmPrivacyAdmission} from '../crm-operations/privacy-admission.js'
+import { HardPurgeError, SoftDeleteError, type RowSnapshot, type SoftDeletePrimitive, type SoftDeleteRepository, type SoftDeleteApplyHardPurgeInput } from '@use-brian/core'
+import type {PoolClient} from 'pg'
 import { getPool, query } from './client.js'
 import { redactCrmOperationsForContact } from '../crm-operations/privacy.js'
 
@@ -100,7 +102,12 @@ async function readSnapshot(
   }
 }
 
-export function createSoftDeleteStore(): SoftDeleteRepository {
+/** Trusted server callbacks participate in the existing purge transaction. */
+export type SoftDeleteStoreOptions = {
+  prepareHardPurge?:(client:PoolClient,input:SoftDeleteApplyHardPurgeInput)=>Promise<'skip'|void>
+  validateHardPurge?:(client:PoolClient,input:SoftDeleteApplyHardPurgeInput)=>Promise<void>
+}
+export function createSoftDeleteStore(options:SoftDeleteStoreOptions={}): SoftDeleteRepository {
   return {
     readForSoftDelete(primitive, workspaceId, rowId) {
       return readSnapshot(primitive, workspaceId, rowId)
@@ -156,12 +163,18 @@ export function createSoftDeleteStore(): SoftDeleteRepository {
       const client = await getPool().connect()
       try {
         await client.query('BEGIN')
+        if(await options.prepareHardPurge?.(client,input)==='skip') {
+          await client.query('COMMIT')
+          return
+        }
+        if(table==='entities')await acquireCrmPrivacyAdmission(client,input.workspaceId)
         const target = await client.query<{ isPerson: boolean }>(
           `SELECT ${table === 'entities' ? "kind='person'" : 'false'} AS "isPerson"
              FROM ${table} WHERE id=$1 AND workspace_id=$2 FOR UPDATE`,
           [input.rowId, input.workspaceId],
         )
         if (!target.rows.length) throw new HardPurgeError('row_not_found', 'The purge target no longer exists in this workspace.')
+        await options.validateHardPurge?.(client,input)
         const erasingPerson = target.rows[0]!.isPerson
         if (erasingPerson) await redactCrmOperationsForContact(client, input.workspaceId, input.rowId)
         // D.7 retains an existence record. A person's receipt must not copy

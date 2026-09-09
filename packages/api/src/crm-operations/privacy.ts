@@ -13,6 +13,7 @@ import type { CrmPageQuery } from '@use-brian/core'
 import { queryCrmPage } from './pagination.js'
 import { getPool, query } from '../db/client.js'
 import { retireCrmIntakeReceipts } from './privacy-policy.js'
+import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
 import { retainCrmAddressSuppression } from './suppression-tombstones.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
@@ -22,6 +23,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_credential_definitions',
   'crm_intake_idempotency',
   'crm_privacy_policies',
+  'crm_privacy_previews',
   'crm_address_suppression_tombstones',
   'crm_managed_mailbox_policies',
   'crm_mailbox_integration_grants',
@@ -76,6 +78,8 @@ EXPORT_PROJECTIONS.crm_import_sources = [
 ].join(',')
 EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
 
+EXPORT_PROJECTIONS.crm_privacy_previews='id,workspace_id,owner_user_id,subject_id,policy_version,domain_summary,blockers,status,created_at,expires_at,consumed_at,receipt'
+
 // Claim tokens and raw request fingerprints are private replay machinery.
 EXPORT_PROJECTIONS.crm_delivery_receipts = 'workspace_id,delivery_id,connector_instance_id,provider_key,purpose_key,actor_kind,actor_credential_id,acting_user_id,envelope,status,provider_receipt,error_code,accepted_at,confirmed_at,redacted_at,created_at,updated_at'
 
@@ -126,6 +130,7 @@ export async function redactCrmOperationsForContact(
     [workspaceId, contactId],
   )
   if (!person.rows[0]?.isPerson) return
+  await client.query('DELETE FROM crm_privacy_previews WHERE workspace_id=$1 AND subject_id=$2',[workspaceId,contactId])
   await retainCrmAddressSuppression(client,workspaceId,contactId)
   await redactCrmDeliveryReceipts(client,workspaceId,contactId)
   // All four native aliases share the entity identity. Keep an existence
@@ -231,6 +236,7 @@ export async function pruneCrmOperationsRetention(
   const deleted: Record<string, number> = {}
   try {
     await client.query('BEGIN')
+    await acquireCrmPrivacyAdmission(client,workspaceId)
     const enquiries = await client.query<{ id: string }>(
       `SELECT id FROM association_enquiries WHERE workspace_id=$1
         AND status IN ('resolved','spam') AND updated_at<$2 ORDER BY id FOR UPDATE`, [workspaceId, before])

@@ -87,6 +87,8 @@ export async function createLocalFixture({ pgBin, migrationDirs = [], env = proc
   const fixtureEnv = {
     ...runtime, PATH: pgBin ? `${resolve(pgBin)}${delimiter}${runtime.PATH ?? ''}` : runtime.PATH,
     DATABASE_URL: adminUrl, DATABASE_URL_APP: appUrl, APP_DATABASE_URL: appUrl,
+    PGHOST: '127.0.0.1', PGPORT: String(port), PGUSER: 'assurance_owner',
+    PGPASSWORD: password, PGDATABASE: 'brian_assurance',
     MIGRATION_DIRS: migrationDirs.map((path) => resolve(path)).join(delimiter),
     BRIAN_ASSURANCE_FIXTURE: marker, BRIAN_ASSURANCE_TOKEN: token,
     PG_POOL_MAX: '8', NODE_ENV: 'test',

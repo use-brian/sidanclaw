@@ -65,7 +65,7 @@ describe('[COMP:crm/operations-privacy] Correction history in actual person eras
     expect((await readHistory(f.workspaceId)).filter((row) => row.action==='purge')).toHaveLength(1)
   })
 
-  it.each(['purge','soft_delete'] as const)('rejects a stale %s after another transaction deletes the locked person, without resurrecting audit content', async (action) => {
+  it.each(['purge','soft_delete'] as const)('preserves %s atomicity during a competing person deletion without resurrecting audit content', async (action) => {
     const f = await fixture(), snapshot = await repo.readForSoftDelete('contact',f.workspaceId,f.contactId)
     const blocker = await pool.connect()
     let deleting: Promise<void> | undefined
@@ -86,10 +86,23 @@ describe('[COMP:crm/operations-privacy] Correction history in actual person eras
         if (!waiting) await new Promise((resolve) => setTimeout(resolve,10))
       }
       expect(waiting).toBe(true)
-      await blocker.query('DELETE FROM entities WHERE id=$1', [f.contactId])
-      const rejected = expect(deleting).rejects.toMatchObject({ code: 'row_not_found' })
-      await blocker.query('COMMIT'); await rejected
-      expect(await readHistory(f.workspaceId)).toEqual([])
+      if (action === 'purge') {
+        // The purge already holds exclusive privacy admission while it waits for this row.
+        await expect(blocker.query('DELETE FROM entities WHERE id=$1', [f.contactId]))
+          .rejects.toMatchObject({ code: '55P03', message: 'crm_privacy_operation_busy' })
+        await blocker.query('ROLLBACK'); await deleting
+        const receipts = await readHistory(f.workspaceId)
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]).toMatchObject({ action: 'purge', reason: 'Personal data erased',
+          ticket_reference: null, row_snapshot: { erased: true }, detail: null })
+        expect(JSON.stringify(receipts)).not.toContain('person@example.com')
+      } else {
+        await blocker.query('DELETE FROM entities WHERE id=$1', [f.contactId])
+        const rejected = expect(deleting).rejects.toMatchObject({ code: 'row_not_found' })
+        await blocker.query('COMMIT'); await rejected
+        expect(await readHistory(f.workspaceId)).toEqual([])
+      }
+      expect((await pool.query('SELECT id FROM entities WHERE id=$1', [f.contactId])).rowCount).toBe(0)
     } finally {
       await blocker.query('ROLLBACK'); blocker.release()
       await deleting?.catch(() => {})

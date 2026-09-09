@@ -213,3 +213,6 @@ export async function prepareCrmSuppressionPrivacy(client:PoolClient,workspaceId
     }
   } finally {await client.query('CLOSE privacy_suppression_methods')}
 }
+
+/** Preview prerequisite; does not expose key material. */
+export function assertCrmSuppressionKeyringAvailable():void {keyring()}

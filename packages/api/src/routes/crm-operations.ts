@@ -26,6 +26,8 @@ import {
   SaveCrmConsentPurposeCommandSchema,
   SaveCrmSegmentCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
+  PreviewCrmContactErasureCommandSchema,
+  EraseCrmContactWithPreviewCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
   SaveCrmManagedMailboxPolicyCommandSchema,
   SaveCrmMailboxIntegrationGrantCommandSchema,
@@ -985,6 +987,27 @@ export function crmOperationsRoutes(options: Options): Router {
       const contactId=CrmOperationsUuidSchema.parse(req.params.contactId)
       await sendCrmPrivacyExport(res,ctx,{contactId})
     } catch(error) {writeError(res,error)}
+  })
+
+  router.post('/:workspaceId/operations/privacy/erasure-preview',async(req,res)=>{
+    const ctx=await context(req,res)
+    if(!ctx)return
+    try {
+      const body=PreviewCrmContactErasureCommandSchema.omit({kind:true}).strict().parse(req.body)
+      const preview=await options.service.execute(ctx,{kind:'preview_contact_erasure',...body})
+      res.setHeader('Cache-Control','no-store')
+      res.json(preview.record)
+    }catch(error){writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/privacy/erase',async(req,res)=>{
+    const ctx=await context(req,res)
+    if(!ctx)return
+    try {
+      const body=EraseCrmContactWithPreviewCommandSchema.omit({kind:true}).strict().parse(req.body)
+      const erased=await options.service.execute(ctx,{kind:'erase_contact_with_preview',...body})
+      res.setHeader('Cache-Control','no-store')
+      res.json({...erased.record,duplicate:erased.duplicate})
+    }catch(error){writeError(res,error)}
   })
 
   router.post('/:workspaceId/operations/retention', async (req, res) => {

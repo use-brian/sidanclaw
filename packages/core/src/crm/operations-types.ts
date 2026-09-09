@@ -515,7 +515,31 @@ export const SaveCrmManagedMailboxPolicyCommandSchema = z.object({
   }
 })
 
+export const PreviewCrmContactErasureCommandSchema = z.object({
+  kind:z.literal('preview_contact_erasure'),
+  contactId:CrmOperationsUuidSchema,
+}).strict()
+export const EraseCrmContactWithPreviewCommandSchema = z.object({
+  kind:z.literal('erase_contact_with_preview'),
+  contactId:CrmOperationsUuidSchema,
+  previewId:CrmOperationsUuidSchema,
+  previewHash:z.string().regex(/^[a-f0-9]{64}$/),
+  confirmed:z.literal(true),
+}).strict()
+export type CrmPrivacyDomainReview = {domain:string;action:'delete'|'redact'|'retire'|'retain'|'blocked';count:number}
+export type CrmPrivacyBlocker = {domain:string;reason:string;count:number}
+export type CrmErasurePreview = {
+  id:string;workspaceId:string;contactId:string;previewHash:string;expiresAt:string;
+  policyVersion:number;domains:CrmPrivacyDomainReview[];blockers:CrmPrivacyBlocker[];scopeLimits:string[];status:'ready'|'blocked'
+}
+export interface CrmPrivacyServicePort {
+  preview(context:CrmOperationsContext,command:z.infer<typeof PreviewCrmContactErasureCommandSchema>):Promise<CrmErasurePreview>
+  erase(context:CrmOperationsContext,command:z.infer<typeof EraseCrmContactWithPreviewCommandSchema>):Promise<{receipt:Record<string,unknown>;duplicate:boolean}>
+}
+
 export const CrmOperationsCommandSchema = z.union([
+  PreviewCrmContactErasureCommandSchema,
+  EraseCrmContactWithPreviewCommandSchema,
   CrmConfigCommandSchema,
   SaveCrmPrivacyPolicyCommandSchema,
   ReleaseCrmAddressSuppressionCommandSchema,
@@ -649,6 +673,8 @@ export function commandRequiresConfigurationAuthority(command: CrmOperationsComm
     || command.kind === 'revoke_intake_credential'
     || command.kind === 'save_consent_purpose'
     || command.kind === 'save_privacy_policy'
+    || command.kind === 'preview_contact_erasure'
+    || command.kind === 'erase_contact_with_preview'
     || command.kind === 'release_address_suppression'
     || command.kind === 'save_managed_mailbox_policy'
     || command.kind === 'save_mailbox_integration_grant'
@@ -658,7 +684,7 @@ export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
-  if (['save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy', 'save_mailbox_integration_grant'].includes(command.kind) && (context.actor.kind !== 'user'
+  if (['preview_contact_erasure', 'erase_contact_with_preview', 'save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy', 'save_mailbox_integration_grant'].includes(command.kind) && (context.actor.kind !== 'user'
     || !['owner', 'admin'].includes(context.authority.role))) {
     throw new CrmOperationsError('not_authorized', 'Policy approval and suppression release require a workspace owner or admin member.')
   }

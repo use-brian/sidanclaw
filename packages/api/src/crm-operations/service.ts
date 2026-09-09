@@ -29,6 +29,7 @@ import {
   type CrmOperationsContext,
   type CrmOperationsServicePort,
   type CrmDeliveryServicePort,
+  type CrmPrivacyServicePort,
 } from '@use-brian/core'
 import type {
   AuditIdentity,
@@ -38,6 +39,7 @@ import type {
   CrmOperationsTransaction,
   StoredIntakeDefinition,
 } from '../db/crm-operations-store.js'
+import {createCrmPrivacyService} from './privacy-previews.js'
 import { hashSecret } from '../db/api-key-store.js'
 import { assertIntakeVerificationConfiguration, verifyIntakeIdentity } from './identity-verification.js'
 
@@ -45,6 +47,7 @@ type ServiceClock = () => Date
 
 export type CrmOperationsServiceOptions = {
   deliveries?: CrmDeliveryServicePort
+  privacy?:CrmPrivacyServicePort
   now?: ServiceClock
   randomCredentialId?: () => string
   randomSecret?: () => string
@@ -453,6 +456,14 @@ export function createCrmOperationsService(
         if(!options.deliveries) throw new CrmOperationsError('conflict','CRM delivery is unavailable.',{reason:'delivery_unavailable'})
         const sent=await options.deliveries.send(context,command)
         return result(command.kind,{...sent.receipt},{created:!sent.duplicate,duplicate:sent.duplicate})
+      }
+      if(command.kind==='preview_contact_erasure') {
+        const preview=await (options.privacy ?? createCrmPrivacyService()).preview(context,command)
+        return result(command.kind,{...preview},{created:true})
+      }
+      if(command.kind==='erase_contact_with_preview') {
+        const erased=await (options.privacy ?? createCrmPrivacyService()).erase(context,command)
+        return result(command.kind,erased.receipt,{created:!erased.duplicate,duplicate:erased.duplicate})
       }
       const now = clock()
       const occurredAt = now.toISOString()

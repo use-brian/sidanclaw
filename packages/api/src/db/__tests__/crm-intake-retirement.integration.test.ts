@@ -13,6 +13,7 @@ import { createSoftDeleteStore } from '../soft-delete-store.js'
 import { WORKSPACE_FLUSH_TABLES, WORKSPACE_FLUSH_PRESERVED_TABLES } from '../workspace-flush.js'
 import { createCrmOperationsService } from '../../crm-operations/service.js'
 import { readCrmPrivacyPolicy, retireCrmIntakeReceipts } from '../../crm-operations/privacy-policy.js'
+import { acquireCrmPrivacyAdmission } from '../../crm-operations/privacy-admission.js'
 import { exportCrmOperationsPrivacy, pruneCrmOperationsRetention, redactCrmOperationsForContact } from '../../crm-operations/privacy.js'
 import { crmIntakeRoutes } from '../../routes/crm-intake.js'
 import { crmOperationsRoutes } from '../../routes/crm-operations.js'
@@ -233,25 +234,20 @@ describe('[COMP:crm/operations-privacy] Actual retired intake replay and policy'
     expect((await pool.query('SELECT id FROM crm_privacy_policies WHERE workspace_id=$1',[f.workspaceId])).rowCount).toBe(0)
   })
 
-  it('serializes contact erasure behind retention without holding the receipt in the opposite order', async () => {
+  it('refuses contact erasure during admitted retention and safely retries after retention commits', async () => {
     const f = await fixture(), accepted = await f.submit(), client = await pool.connect()
-    let erasure: Promise<void> | undefined
     try {
       await client.query('BEGIN')
+      await acquireCrmPrivacyAdmission(client,f.workspaceId)
       await client.query('SELECT id FROM association_enquiries WHERE id=$1 FOR UPDATE',[accepted.body.submissionId])
-      erasure = f.erase(accepted.body.contactId)
-      let blocked = false
-      for (let attempt = 0; attempt < 100 && !blocked; attempt++) {
-        blocked = (await pool.query(`SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid()
-          AND wait_event_type='Lock' AND query LIKE '%association_enquiries%'`)).rowCount! > 0
-        if (!blocked) await setTimeout(10)
-      }
-      expect(blocked).toBe(true)
+      await expect(f.erase(accepted.body.contactId)).rejects.toMatchObject({
+        code: 'conflict', details: { reason: 'privacy_operation_busy' },
+      })
       await retireCrmIntakeReceipts(client,f.workspaceId,{ submissionIds: [accepted.body.submissionId] })
       await client.query('DELETE FROM association_enquiries WHERE id=$1',[accepted.body.submissionId])
-      await client.query('COMMIT'); await erasure
+      await client.query('COMMIT'); await f.erase(accepted.body.contactId)
       expect((await f.submit()).body).toEqual(retired)
       expect(await counts(f.workspaceId)).toMatchObject({ people: 0,submissions: 0,receipts: 1 })
-    } finally { await client.query('ROLLBACK'); client.release(); await erasure }
+    } finally { await client.query('ROLLBACK'); client.release() }
   })
 })

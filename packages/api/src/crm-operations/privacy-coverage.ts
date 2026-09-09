@@ -8,6 +8,7 @@ export type CrmPrivacyCoverageEntry = {
   columns:readonly string[]
   excludedColumns:readonly string[]
   workspaceWhere:string
+  workspacePredicate?:string
   subjectWhere:string|null
   subjectRedactions:Record<string,string>
   transforms:Record<string,string>
@@ -414,6 +415,33 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     "subjectRedactions": {},
     "transforms": {},
     "reason": "Rows follow explicit CRM attribution."
+  },
+  {
+    "domain": "brain_row_versions",
+    "columns": [
+      "id",
+      "primitive",
+      "row_id",
+      "version_no",
+      "before_image",
+      "erased_at",
+      "valid_from",
+      "valid_to",
+      "mutation_actor",
+      "mutation_reason",
+      "mutation_event_id",
+      "sensitivity",
+      "workspace_id",
+      "created_at"
+    ],
+    "excludedColumns": [],
+    "workspacePredicate": "(t.workspace_id=$1 OR (t.workspace_id IS NULL AND EXISTS(SELECT 1 FROM entities e WHERE e.workspace_id=$1 AND e.id=t.row_id AND e.kind IN('person','company','deal'))))",
+    "workspaceWhere": "t.primitive IN('contact','company','deal') OR (t.primitive='entity' AND (t.before_image->>'kind' IN('person','company','deal') OR EXISTS(SELECT 1 FROM entities e WHERE e.workspace_id=$1 AND e.id=t.row_id AND e.kind IN('person','company','deal'))))",
+    "subjectWhere": "t.primitive IN('entity','contact','company','deal') AND t.row_id=$2",
+    "subjectRedactions": {},
+    "transforms": {},
+    "orderBy": "t.id",
+    "reason": "CRM history follows the explicit row id; a legacy missing workspace is resolved only through its current canonical CRM parent."
   },
   {
     "domain": "correction_audit",
@@ -1221,6 +1249,37 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     "reason": "Workspace configuration is outside a single-person slice."
   },
   {
+    "domain": "crm_privacy_previews",
+    "columns": [
+      "id",
+      "workspace_id",
+      "owner_user_id",
+      "subject_id",
+      "request_hash",
+      "snapshot_hash",
+      "preview_hash",
+      "policy_version",
+      "domain_summary",
+      "blockers",
+      "status",
+      "created_at",
+      "expires_at",
+      "consumed_at",
+      "receipt"
+    ],
+    "excludedColumns": [
+      "request_hash",
+      "snapshot_hash",
+      "preview_hash"
+    ],
+    "workspaceWhere": "true",
+    "subjectWhere": "t.subject_id=$2",
+    "subjectRedactions": {},
+    "transforms": {},
+    "orderBy": "t.id",
+    "reason": "Approval hashes remain private; content-free review and consumption metadata is included."
+  },
+  {
     "domain": "crm_saved_views",
     "columns": [
       "id",
@@ -1695,7 +1754,7 @@ export function crmPrivacyDomainSql(entry:CrmPrivacyCoverageEntry,scope:CrmPriva
   const where=scope==='contact'?entry.subjectWhere ?? 'false':entry.workspaceWhere
   return 'WITH privacy_args AS (SELECT $1::uuid workspace_id,$2::uuid subject_id),'
     +' projected AS (SELECT jsonb_build_object('+fields.join(',')+')::text AS payload FROM '+entry.domain+' t'
-    +' WHERE t.workspace_id=$1 AND ('+where+') ORDER BY '+entry.orderBy+')'
+    +' WHERE '+(entry.workspacePredicate ?? 't.workspace_id=$1')+' AND ('+where+') ORDER BY '+entry.orderBy+')'
     +' SELECT CASE WHEN octet_length(payload)<=67108864 THEN payload ELSE NULL END AS payload,octet_length(payload) AS bytes FROM projected'
 }
 export function crmPrivacyClassification(entry:CrmPrivacyCoverageEntry,scope:CrmPrivacyScope):CrmPrivacyClassification {

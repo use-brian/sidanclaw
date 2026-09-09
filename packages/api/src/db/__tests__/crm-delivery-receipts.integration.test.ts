@@ -13,6 +13,7 @@ import { createSoftDeleteStore } from '../soft-delete-store.js'
 import { flushWorkspaceData } from '../workspace-flush.js'
 import { createCrmOperationsService } from '../../crm-operations/service.js'
 import { createCrmDeliveryService, type PrepareCrmDelivery } from '../../crm-operations/delivery-service.js'
+import {acquireCrmPrivacyAdmission} from '../../crm-operations/privacy-admission.js'
 import { createCrmDeliveryProvider } from '../../crm-operations/delivery-providers.js'
 import { exportCrmOperationsPrivacy } from '../../crm-operations/privacy.js'
 import { crmOperationsRoutes } from '../../routes/crm-operations.js'
@@ -259,4 +260,17 @@ describe('[COMP:crm/delivery-receipts] Durable email acceptance and replay',()=>
       expect((await client.query('SELECT * FROM crm_delivery_receipt_contacts WHERE workspace_id=$1',[f.workspaceId])).rowCount).toBe(0)
     } finally {await client.query('ROLLBACK');client.release()}
   })
+  it('refuses dispatch before a provider call when privacy owns workspace write admission, then admits a safe retry',async()=>{
+    const f=await fixture(),{deliveries}=make(),send=transport(),privacy=await pool.connect()
+    try {
+      await privacy.query('BEGIN');await acquireCrmPrivacyAdmission(privacy,f.workspaceId)
+      await expect(deliveries.send(f.context,f.command)).rejects.toMatchObject({details:{reason:'privacy_operation_busy'}})
+      expect(send).not.toHaveBeenCalled()
+      expect((await pool.query('SELECT delivery_id FROM crm_delivery_receipts WHERE workspace_id=$1',[f.workspaceId])).rows).toEqual([])
+      await privacy.query('ROLLBACK')
+      expect((await deliveries.send(f.context,f.command)).receipt.status).toBe('sent')
+      expect(send).toHaveBeenCalledTimes(1)
+    }finally{await privacy.query('ROLLBACK');privacy.release()}
+  })
+
 })

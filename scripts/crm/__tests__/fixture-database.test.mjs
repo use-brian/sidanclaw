@@ -4,6 +4,21 @@ import { test } from 'node:test'
 import pg from 'pg'
 import { assertLocalFixture } from '../local-fixture.mjs'
 
+test('[COMP:crm/assurance-fixture] Default PostgreSQL clients remain inside the disposable cluster', async () => {
+  const marker = await assertLocalFixture()
+  const defaults = new pg.Client()
+  try {
+    await defaults.connect()
+    const result = await defaults.query(`SELECT current_database() AS database, current_user AS role,
+      host(inet_server_addr()) AS host, inet_server_port() AS port`)
+    assert.deepEqual(result.rows, [{ database: 'brian_assurance', role: 'assurance_owner', host: '127.0.0.1', port: marker.port }])
+  } finally { await defaults.end() }
+  // An explicit database name must still target this server, never an ambient instance.
+  const missing = new pg.Client({ database: `fixture_missing_${randomUUID().replaceAll('-', '')}` })
+  try { await assert.rejects(missing.connect(), { code: '3D000' }) }
+  finally { await missing.end() }
+})
+
 test('[COMP:crm/assurance-fixture] Actual migrations and application-role RLS', async () => {
   await assertLocalFixture()
   const owner = new pg.Client({ connectionString: process.env.DATABASE_URL })

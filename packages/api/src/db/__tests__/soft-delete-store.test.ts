@@ -28,6 +28,8 @@ vi.mock('../client.js', () => ({
   query: (text: string, values?: unknown[]) => fakePool.query(text, values),
 }))
 
+vi.mock('../../crm-operations/privacy-admission.js',()=>({acquireCrmPrivacyAdmission:vi.fn(async()=>{})}))
+
 import { createSoftDeleteStore } from '../soft-delete-store.js'
 import type { RowSnapshot } from '@use-brian/core'
 

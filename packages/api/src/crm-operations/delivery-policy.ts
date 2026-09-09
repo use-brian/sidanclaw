@@ -1,4 +1,5 @@
 /** Shared managed-mailbox policy and final recipient admission. [COMP:crm/delivery-policy] */
+import {acquireCrmPrivacyWriterAdmission} from './privacy-admission.js'
 import type { PoolClient } from 'pg'
 import { z } from 'zod'
 import { CrmOperationsError, evaluateCrmSendability, type CrmOperationsCommand, type CrmOperationsContext, CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, requireCrmIntegrationResources, type CrmIntegrationAuthority } from '@use-brian/core'
@@ -120,6 +121,7 @@ async function runCrmMailAdmission<T>(rawScope: CrmMailContext | undefined, prov
     const current = integration ? await lockCrmIntegrationCredential(client,scope.data.workspaceId!,integration.credentialId) : undefined
     if(integration && current) for(const authority of [integration,current]) requireCrmIntegrationOperation(authority,'crm.delivery.dispatch')
     const workspaceId = 'userId' in scope.data ? await member(client,scope.data) : scope.data.workspaceId
+    await acquireCrmPrivacyWriterAdmission(client,workspaceId)
     const instance = await connector(client,workspaceId,scope.data,provider)
     await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',[lockKey(workspaceId,instance.id)])
     const policy = (await client.query<Policy>(`SELECT ${projection} FROM crm_managed_mailbox_policies WHERE workspace_id=$1 AND connector_instance_id=$2 FOR SHARE`,[workspaceId,instance.id])).rows[0]

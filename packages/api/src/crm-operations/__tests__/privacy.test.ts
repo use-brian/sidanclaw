@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../db/client.js', () => ({ query: mocks.query, getPool: mocks.getPool }))
 
+vi.mock('../privacy-admission.js',()=>({acquireCrmPrivacyAdmission:vi.fn(async()=>{})}))
+
 import {
   CRM_OPERATIONS_PRIVACY_TABLES,
   exportCrmOperationsPrivacy,
