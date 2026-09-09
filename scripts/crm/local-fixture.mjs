@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
@@ -62,7 +62,7 @@ async function availablePort() {
 }
 
 /** Creates only a new cluster. No caller-supplied database or data directory. */
-export async function createLocalFixture({ pgBin, migrationDirs = [], env = process.env } = {}) {
+export async function createLocalFixture({ pgBin, migrationDirs = [], env = process.env, walArchive = false } = {}) {
   validateAmbientDatabase(env)
   const runtime = cleanRuntimeEnvironment(env)
   const executable = (name) => pgBin ? join(resolve(pgBin), name) : name
@@ -108,6 +108,16 @@ export async function createLocalFixture({ pgBin, migrationDirs = [], env = proc
     await writeFile(pwfile, password, { mode: 0o600 })
     await runCommand(executable('initdb'), ['-D', data, '-U', 'assurance_owner', '--encoding=UTF8', '--locale=C', '--auth-local=trust', '--auth-host=scram-sha-256', `--pwfile=${pwfile}`], { env: runtime, logPath: join(directory, 'initdb.log') })
     await rm(pwfile)
+    if(walArchive) {
+      const archive=join(directory,'wal-archive'),keyFile=join(directory,'wal-key'),config=join(directory,'wal-config.json')
+      await mkdir(archive,{mode:0o700});await writeFile(keyFile,randomBytes(32),{mode:0o600})
+      await writeFile(config,JSON.stringify({keyFile,keyReference:'disposable-fixture/wal',walArchiveDirectory:archive}),{mode:0o600})
+      const shellQuote=(value)=>"'"+value.replaceAll("'","'\\''")+"'"
+      const command=[process.execPath,fileURLToPath(new URL('../operations/brian-wal-archive.mjs',import.meta.url)),
+        '--config',config,'--source','%p','--name','%f'].map(shellQuote).join(' ')
+      await writeFile(join(data,'postgresql.auto.conf'),"archive_mode=on\narchive_command='"+command.replaceAll("'","''")+"'\n",{mode:0o600})
+      fixtureEnv.BRIAN_ASSURANCE_WAL_CONFIG=config
+    }
     await runCommand(executable('pg_ctl'), ['-D', data, '-l', join(directory, 'postgres.log'), '-o', `-h 127.0.0.1 -p ${port} -k ''`, '-w', 'start'], { env: runtime })
     started = true
     const admin = new pg.Client({ connectionString: makeUrl('assurance_owner', password, 'postgres') })
@@ -152,13 +162,15 @@ export async function assertLocalFixture(env = process.env) {
 
 async function main(args) {
   if (args.includes('--help')) {
-    console.log('Usage: node scripts/crm/local-fixture.mjs [--pg-bin DIR] [--migration-dir DIR] -- COMMAND [ARGS...]\nCreates a disposable loopback PostgreSQL 18 database using actual migrations. Requires pgvector/pg_trgm. Never uses an ambient DB.')
+    console.log('Usage: node scripts/crm/local-fixture.mjs [--pg-bin DIR] [--migration-dir DIR] [--wal-archive-fixture] -- COMMAND [ARGS...]\nCreates a disposable loopback PostgreSQL 18 database using actual migrations. Requires pgvector/pg_trgm. Never uses an ambient DB.')
     return
   }
   let pgBin
+  let walArchive=false
   const migrationDirs = []
   while (args[0] && args[0] !== '--') {
     const option = args.shift()
+    if(option==='--wal-archive-fixture'){walArchive=true;continue}
     const value = args.shift()
     if (!value || value.startsWith('--')) throw new Error(`Missing value for ${option}`)
     if (option === '--pg-bin') pgBin = value
@@ -166,7 +178,7 @@ async function main(args) {
     else throw new Error(`Unknown option ${option}`)
   }
   if (args.shift() !== '--' || !args.length) throw new Error('Supply an explicit test command after --; see --help')
-  const fixture = await createLocalFixture({ pgBin, migrationDirs })
+  const fixture = await createLocalFixture({ pgBin, migrationDirs, walArchive })
   try {
     await runCommand(args[0], args.slice(1), { env: fixture.env, inherit: true })
   } finally { await fixture.dispose() }

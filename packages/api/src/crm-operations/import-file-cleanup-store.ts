@@ -1,4 +1,5 @@
 /** CRM staged-file eligibility and the affected-set proof. [COMP:crm/file-cleanup] */
+import {captureCrmErasure} from './erasure-journal.js'
 import {createHash} from 'node:crypto'
 import type {PoolClient} from 'pg'
 import {canonicalCrmRequest,type CrmPrivacyBlocker,type CrmPrivacyDomainReview} from '@use-brian/core'
@@ -85,6 +86,7 @@ export async function inspectCrmImportFileCleanup(client:PoolClient,workspaceId:
 
 /** Caller holds exclusive privacy admission and revalidated the complete plan. */
 export async function deleteCrmStagedFileIndex(client:PoolClient,workspaceId:string,plan:CrmImportFilePlan):Promise<void> {
+  await captureCrmErasure(client)
   const file=plan.file!
   await client.query(`UPDATE workspace_audit_log SET details=jsonb_build_object('erased',true)
     WHERE workspace_id=$1 AND subject_id=$2`,[workspaceId,file.id])

@@ -17,6 +17,19 @@ export type CrmPrivacyCoverageEntry = {
 }
 export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
   {
+    domain:'crm_erasure_journal_targets',columns:['table_name','key_columns','capture_inserts'],
+    excludedColumns:['table_name','key_columns','capture_inserts'],workspaceWhere:'false',workspacePredicate:'false',
+    subjectWhere:null,subjectRedactions:{},transforms:{},orderBy:'t.table_name',
+    reason:'Database schema registry has no workspace content and is excluded.',
+  },
+  {
+    domain:'crm_erasure_journal',
+    columns:['sequence','id','workspace_id','table_name','operation','row_key','effect','captured_at'],
+    excludedColumns:['sequence','row_key','effect'],workspaceWhere:'true',subjectWhere:null,
+    subjectRedactions:{},transforms:{},orderBy:'t.id',
+    reason:'Protected recovery evidence has separate custody. Only existence metadata is included; keys and mutation values are excluded.',
+  },
+  {
     domain: 'association_integration_events',
     columns: ['id','workspace_id','provider','provider_event_id','provider_reference','occurred_at','target_kind','order_id','entitlement_id','contact_id','plan_id',
       'request_fingerprint','normalized_payload','admitted_actor','execution_actor','state','attempts','cycle_attempts','lease_token','lease_expires_at','next_attempt_at','last_error_code','created_at','updated_at','applied_at'],
@@ -1912,6 +1925,6 @@ export function crmPrivacyDomainSql(entry:CrmPrivacyCoverageEntry,scope:CrmPriva
     +' SELECT CASE WHEN octet_length(payload)<=67108864 THEN payload ELSE NULL END AS payload,octet_length(payload) AS bytes FROM projected'
 }
 export function crmPrivacyClassification(entry:CrmPrivacyCoverageEntry,scope:CrmPrivacyScope):CrmPrivacyClassification {
-  if(scope==='contact' && entry.subjectWhere===null)return 'excluded'
+  if(scope==='workspace' && entry.workspaceWhere==='false' || scope==='contact' && entry.subjectWhere===null)return 'excluded'
   return entry.excludedColumns.length || (scope==='contact' && Object.keys(entry.subjectRedactions).length)?'redacted':'included'
 }

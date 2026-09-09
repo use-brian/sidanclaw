@@ -1,4 +1,5 @@
 /** Exact affected-set selection and mutation. [COMP:crm/retention] */
+import {captureCrmErasure} from './erasure-journal.js'
 import {createHash} from 'node:crypto'
 import type {PoolClient} from 'pg'
 import {canonicalCrmRequest,type CrmPrivacyDomainReview,type CrmPrivacyBlocker,type CrmRetentionPolicy} from '@use-brian/core'
@@ -145,6 +146,7 @@ export async function inspectCrmRetention(client:PoolClient,workspaceId:string,b
 
 /** Called only after current review/policy validation under exclusive admission. */
 export async function applyCrmRetention(client:PoolClient,workspaceId:string,plan:CrmRetentionPlan):Promise<Record<string,number>> {
+  await captureCrmErasure(client)
   const changed:Record<string,number>={}
   async function apply(key:string,sql:string,values:unknown[]=[]) {
     const ids=plan.targets[key] ?? [];if(!ids.length)return

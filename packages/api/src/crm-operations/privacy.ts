@@ -27,6 +27,7 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_credential_definitions',
   'crm_intake_idempotency',
   'crm_privacy_policies',
+  'crm_erasure_journal',
   'crm_privacy_previews',
   'crm_retention_runs',
   'crm_import_file_cleanups',
@@ -89,6 +90,7 @@ EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_ver
 EXPORT_PROJECTIONS.association_integration_events = 'id,workspace_id,provider,provider_event_id,provider_reference,occurred_at,target_kind,order_id,entitlement_id,contact_id,plan_id,state,attempts,cycle_attempts,next_attempt_at,last_error_code,created_at,updated_at,applied_at'
 
 EXPORT_PROJECTIONS.crm_import_file_cleanups='id,workspace_id,owner_user_id,file_id,before_at,policy_version,summary,status,attempts,next_attempt_at,leased_until,error_code,created_at,expires_at,queued_at,completed_at,replay_expires_at'
+EXPORT_PROJECTIONS.crm_erasure_journal='id,workspace_id,table_name,operation,captured_at'
 EXPORT_PROJECTIONS.crm_retention_runs='id,workspace_id,owner_user_id,policy_version,mode,before_at,captured_at,expires_at,summary,status,receipt,error_code,completed_at,created_at'
 
 EXPORT_PROJECTIONS.crm_privacy_previews='id,workspace_id,owner_user_id,subject_id,policy_version,domain_summary,blockers,status,created_at,expires_at,consumed_at,receipt'

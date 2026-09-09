@@ -25,6 +25,7 @@
  * [COMP:corrections/soft-delete-store]
  */
 
+import {captureCrmErasure} from '../crm-operations/erasure-journal.js'
 import {acquireCrmPrivacyAdmission} from '../crm-operations/privacy-admission.js'
 import { HardPurgeError, SoftDeleteError, type RowSnapshot, type SoftDeletePrimitive, type SoftDeleteRepository, type SoftDeleteApplyHardPurgeInput } from '@use-brian/core'
 import type {PoolClient} from 'pg'
@@ -175,6 +176,7 @@ export function createSoftDeleteStore(options:SoftDeleteStoreOptions={}): SoftDe
         )
         if (!target.rows.length) throw new HardPurgeError('row_not_found', 'The purge target no longer exists in this workspace.')
         await options.validateHardPurge?.(client,input)
+        await captureCrmErasure(client)
         const erasingPerson = target.rows[0]!.isPerson
         if (erasingPerson) await redactCrmOperationsForContact(client, input.workspaceId, input.rowId)
         // D.7 retains an existence record. A person's receipt must not copy

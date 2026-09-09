@@ -39,6 +39,7 @@
  * [COMP:api/workspace-flush]
  */
 
+import {captureCrmErasure} from '../crm-operations/erasure-journal.js'
 import { getPool } from './client.js'
 import { notifyWorkspaceChange } from '../brain-stream/notify.js'
 import { redactCrmDeliveryReceipts } from '../crm-operations/privacy.js'
@@ -204,6 +205,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   // Settings + config + authored structure
   'workspace_tool_policy',
   'crm_privacy_policies',
+  'crm_erasure_journal',
   'crm_address_suppression_tombstones',
   'crm_import_file_cleanups', // Preserve pending blob deletion across a workspace reset.
   'crm_managed_mailbox_policies',
@@ -277,6 +279,7 @@ export async function flushWorkspaceData(
     if (owner.rowCount === 0) {
       throw new WorkspaceFlushNotOwnerError()
     }
+    await captureCrmErasure(client)
     await retainWorkspaceAddressSuppression(client,workspaceId)
     await redactCrmDeliveryReceipts(client,workspaceId)
 
