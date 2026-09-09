@@ -249,7 +249,9 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "provider_message_id",
       "last_error",
       "created_at",
-      "updated_at"
+      "updated_at",
+      "retired_at",
+      "retired_from_status"
     ],
     "excludedColumns": [
       "last_error"
@@ -677,7 +679,9 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "last_error",
       "occurred_at",
       "created_at",
-      "delivered_at"
+      "delivered_at",
+      "retired_at",
+      "retired_from_status"
     ],
     "excludedColumns": [
       "lease_owner",
@@ -1648,6 +1652,78 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     },
     "transforms": {},
     "reason": "Explicit CRM task roots, descendant cascades and connected supersession copies."
+  },
+  {
+    "domain": "workflow_runs",
+    "columns": [
+      "id",
+      "workflow_id",
+      "workspace_id",
+      "triggered_by",
+      "trigger_kind",
+      "status",
+      "input",
+      "vars",
+      "current_step_id",
+      "error",
+      "started_at",
+      "finished_at",
+      "last_active_at",
+      "outcome",
+      "trigger_page_id",
+      "claimed_at",
+      "claim_attempts",
+      "webhook_idempotency_key",
+      "webhook_body_sha256",
+      "context_group_id",
+      "context_project_id",
+      "context_compartments",
+      "context_project_ids",
+      "crm_event_id"
+    ],
+    "excludedColumns": [
+      "webhook_body_sha256"
+    ],
+    "workspaceWhere": "t.id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows)",
+    "subjectWhere": "t.id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows)",
+    "subjectRedactions": {
+      "triggered_by": "NULL"
+    },
+    "transforms": {
+      "input": "'{}'::jsonb",
+      "vars": "'{}'::jsonb",
+      "outcome": "NULL",
+      "error": "NULL"
+    },
+    "orderBy": "t.id",
+    "reason": "CRM event workflow lineage is included; arbitrary run content is redacted and remains a review dependency."
+  },
+  {
+    "domain": "workflow_step_runs",
+    "columns": [
+      "id",
+      "run_id",
+      "step_id",
+      "step_type",
+      "status",
+      "input",
+      "output",
+      "error",
+      "started_at",
+      "finished_at"
+    ],
+    "excludedColumns": [],
+    "workspacePredicate": "EXISTS(SELECT 1 FROM workflow_runs r WHERE r.workspace_id=$1 AND r.id=t.run_id)",
+    "workspaceWhere": "t.run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows)",
+    "subjectWhere": "t.run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows)",
+    "subjectRedactions": {},
+    "transforms": {
+      "input": "'{}'::jsonb",
+      "output": "NULL",
+      "error": "NULL"
+    },
+    "orderBy": "t.id",
+    "reason": "Steps follow their CRM-triggered parent run; content is redacted and remains a review dependency."
   },
   {
     "domain": "workspace_audit_log",

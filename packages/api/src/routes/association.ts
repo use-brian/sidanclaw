@@ -504,7 +504,7 @@ export function associationRoutes(opts: Options): Router {
       cursor: z.string().optional(),
       createdAfter: z.string().datetime({ offset: true }).optional(),
       createdBefore: z.string().datetime({ offset: true }).optional(),
-      status: z.enum(['pending', 'sending', 'sent', 'failed', 'suppressed']).optional(),
+      status: z.enum(['pending', 'sending', 'sent', 'failed', 'suppressed', 'retired']).optional(),
     }), req.query, res)
     if (!query) return
     const pagination = listInput(query, res)

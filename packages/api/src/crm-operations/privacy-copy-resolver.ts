@@ -2,13 +2,15 @@
 import type { PoolClient } from 'pg'
 import { CrmOperationsError, type CrmPrivacyBlocker } from '@use-brian/core'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
-import { CRM_WORKSPACE_TASK_ROOT, CRM_OTHER_CONTACT_EMAILS, CRM_SUBJECT_EMAILS, CRM_TASK_COPY_ROOT, CRM_SHARED_TASK_ROOT, crmDraftHasSubjectRecipient } from './privacy-copy-attribution.js'
+import { CRM_WORKFLOW_COPY_ROOT, CRM_WORKSPACE_TASK_ROOT, CRM_OTHER_CONTACT_EMAILS, CRM_SUBJECT_EMAILS, CRM_TASK_COPY_ROOT, CRM_SHARED_TASK_ROOT, crmDraftHasSubjectRecipient } from './privacy-copy-attribution.js'
 
 /** Caller owns a transaction. Only row ids are materialized, never content. */
 export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: string, contactId: string | null): Promise<void> {
   await client.query(`CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_tasks(id uuid PRIMARY KEY,shared boolean NOT NULL DEFAULT false) ON COMMIT DROP;
     CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_drafts(id uuid PRIMARY KEY) ON COMMIT DROP;
-    TRUNCATE pg_temp.crm_privacy_copy_tasks,pg_temp.crm_privacy_copy_drafts`)
+    CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_events(id uuid PRIMARY KEY) ON COMMIT DROP;
+    CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_workflows(id uuid PRIMARY KEY) ON COMMIT DROP;
+    TRUNCATE pg_temp.crm_privacy_copy_tasks,pg_temp.crm_privacy_copy_drafts,pg_temp.crm_privacy_copy_events,pg_temp.crm_privacy_copy_workflows`)
   await client.query(`WITH RECURSIVE args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id), selected(id) AS(
       SELECT t.id FROM tasks t WHERE t.workspace_id=$1 AND (($2::uuid IS NULL AND (${CRM_WORKSPACE_TASK_ROOT})) OR ($2::uuid IS NOT NULL AND (${CRM_TASK_COPY_ROOT})))
       UNION
@@ -28,6 +30,15 @@ export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: s
           OR t.superseded_by=s.id OR t.id=linked_task.superseded_by)
         JOIN pg_temp.crm_privacy_copy_tasks included ON included.id=t.id
     ) UPDATE pg_temp.crm_privacy_copy_tasks SET shared=true WHERE id IN(SELECT id FROM shared)`, [workspaceId,contactId])
+  const eventDomain=CRM_PRIVACY_COVERAGE.find(e=>e.domain==='crm_domain_event_outbox')!
+  await client.query(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+    INSERT INTO pg_temp.crm_privacy_copy_events SELECT t.id FROM crm_domain_event_outbox t
+    WHERE t.workspace_id=$1 AND ($2::uuid IS NULL OR (${eventDomain.subjectWhere}))`,[workspaceId,contactId])
+  await client.query(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+    INSERT INTO pg_temp.crm_privacy_copy_workflows SELECT t.id FROM workflow_runs t WHERE t.workspace_id=$1 AND (
+      ($2::uuid IS NULL AND (t.crm_event_id IS NOT NULL OR (t.trigger_kind='event' AND t.input#>>'{trigger,sourceType}'='crm')))
+      OR ($2::uuid IS NOT NULL AND (${CRM_WORKFLOW_COPY_ROOT})))`,[workspaceId,contactId])
+
 }
 
 /** Preview and canonical purge both refuse shared or ambiguous copy ownership. */
@@ -51,13 +62,19 @@ export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspa
     WHERE EXISTS(SELECT 1 FROM tasks other WHERE other.workspace_id<>$1 AND
       (other.parent_id=t.id OR other.superseded_by=t.id OR other.id=t.superseded_by))`, [workspaceId])
   if(foreign.rows[0]?.count)blockers.push({domain:'tasks',reason:'cross_workspace_task_dependency',count:foreign.rows[0].count})
+  const notificationDomain=CRM_PRIVACY_COVERAGE.find(e=>e.domain==='association_notification_outbox')!
+  const notifications=await client.query<{count:number}>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+    SELECT count(*)::int count FROM association_notification_outbox t WHERE t.workspace_id=$1
+      AND (${notificationDomain.subjectWhere}) AND t.status<>'retired'
+      AND t.recipient_kind='contact' AND t.recipient_ref<>$2::text`,[workspaceId,contactId])
+  if(notifications.rows[0]?.count)blockers.push({domain:'association_notification_outbox',reason:'shared_notification_dependency',count:notifications.rows[0].count})
   return blockers
 }
 
 /** Preserve attribution until unsupported dependent artifacts are resolved. */
 export async function assertCrmPrivacyCopiesResolvable(client: PoolClient, workspaceId: string, contactId: string): Promise<void> {
   const blockers = await inspectCrmPrivacyCopyConflicts(client,workspaceId,contactId)
-  for(const domain of ['crm_segments','workspace_files','crm_import_sources','decision_events','decision_applications','decision_derivations']) {
+  for(const domain of ['workflow_runs','workflow_step_runs','crm_segments','workspace_files','crm_import_sources','decision_events','decision_applications','decision_derivations']) {
     const entry = CRM_PRIVACY_COVERAGE.find(candidate => candidate.domain===domain)!
     const result=await client.query<{count:number}>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
       SELECT count(*)::int count FROM ${domain} t WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId,contactId])
@@ -72,5 +89,18 @@ export async function deleteCrmPrivacyCopies(client: PoolClient, workspaceId: st
     const entry = CRM_PRIVACY_COVERAGE.find(candidate => candidate.domain===domain)!
     await client.query(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
       DELETE FROM ${domain} t WHERE t.workspace_id=$1 AND (${entry.subjectWhere})`, [workspaceId,contactId])
+  }
+}
+
+/** Retire dispatchable copies before their source attribution disappears. */
+export async function retireCrmNotificationCopies(client:PoolClient,workspaceId:string,contactId:string):Promise<void> {
+  for(const [domain,assignments] of [
+    ['crm_domain_event_outbox',"subject_id='00000000-0000-0000-0000-000000000000'::uuid,payload=jsonb_build_object('erased',true,'eventType',event_type),lease_owner=NULL,leased_until=NULL,last_error=NULL"],
+    ['association_notification_outbox',"source_id='00000000-0000-0000-0000-000000000000'::uuid,recipient_ref='erased:'||t.id::text,payload=jsonb_build_object('erased',true),provider_message_id=NULL,last_error=NULL,next_attempt_at=NULL"],
+  ] as const) {
+    const entry=CRM_PRIVACY_COVERAGE.find(e=>e.domain===domain)!
+    await client.query(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+      UPDATE ${domain} t SET retired_from_status=status,status='retired',retired_at=clock_timestamp(),${assignments}
+      WHERE t.workspace_id=$1 AND t.status<>'retired' AND (${entry.subjectWhere})`,[workspaceId,contactId])
   }
 }

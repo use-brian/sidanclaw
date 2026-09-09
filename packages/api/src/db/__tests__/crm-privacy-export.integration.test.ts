@@ -74,7 +74,7 @@ describe('[COMP:crm/privacy-export] Actual privacy projection coverage',()=>{
     }finally{await client.query('ROLLBACK');client.release()}
   })
   it('classifies every physical CRM/association table column so schema changes cannot silently bypass coverage',async()=>{
-    const actual=(await pool.query("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public' AND (table_name LIKE 'crm_%' OR table_name LIKE 'association_%') ORDER BY table_name,ordinal_position")).rows
+    const actual=(await pool.query("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public' AND (table_name LIKE 'crm_%' OR table_name LIKE 'association_%' OR table_name IN('workflow_runs','workflow_step_runs')) ORDER BY table_name,ordinal_position")).rows
     for(const row of actual) {
       const entry=CRM_PRIVACY_COVERAGE.find(e=>e.domain===row.table_name)
       expect(entry?.columns,'Unclassified '+row.table_name+'.'+row.column_name).toContain(row.column_name)

@@ -41,7 +41,8 @@ const actions:Record<string,CrmPrivacyDomainReview['action']>={
   tasks:'delete',entity_links:'delete',crm_segments:'blocked',workspace_files:'blocked',crm_import_sources:'blocked',
   crm_email_drafts:'delete',crm_email_draft_versions:'delete',crm_email_draft_session_anchors:'delete',
   decision_events:'blocked',decision_applications:'blocked',decision_derivations:'blocked',
-  association_notification_outbox:'blocked',crm_domain_event_outbox:'blocked',
+  association_notification_outbox:'retire',crm_domain_event_outbox:'retire',
+  workflow_runs:'blocked',workflow_step_runs:'blocked',
 }
 async function inspect(client:PoolClient,workspaceId:string,contactId:string) {
   const person=await client.query("SELECT id FROM entities WHERE workspace_id=$1 AND id=$2 AND kind='person'",[workspaceId,contactId])

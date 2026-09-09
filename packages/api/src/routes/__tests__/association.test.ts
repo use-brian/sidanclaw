@@ -77,6 +77,15 @@ function makeApp(
 }
 
 describe('[COMP:api/association-route] credential and workspace authority', () => {
+  it('lists retired notifications with their prior delivery state through the compatibility route', async () => {
+    const store=fakeStore()
+    vi.mocked(store.listNotifications).mockResolvedValue({items:[{id:RECORD_ID,status:'retired',retiredFromStatus:'sending',retiredAt:'2026-01-01T00:00:00Z'}],nextCursor:null})
+    const result=await request(makeApp(store,auth({scope:'read'}))).get('/api/association/notifications').query({status:'retired',limit:'10'})
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({notifications:[{status:'retired',retiredFromStatus:'sending'}],nextCursor:null})
+    expect(store.listNotifications).toHaveBeenCalledWith(WID,expect.objectContaining({status:'retired',limit:10}))
+  })
+
   it('requires a valid Brain credential', async () => {
     const store = fakeStore()
     const response = await request(makeApp(store, null)).get('/api/association/events')

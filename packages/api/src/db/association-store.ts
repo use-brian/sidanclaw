@@ -204,7 +204,7 @@ const NOTIFICATION_SELECT = `
   id, workspace_id AS "workspaceId", source_kind AS "sourceKind",
   source_id AS "sourceId", template_key AS "templateKey",
   recipient_kind AS "recipientKind", recipient_ref AS "recipientRef", payload,
-  status, attempts, next_attempt_at AS "nextAttemptAt",
+  status, attempts, retired_at AS "retiredAt", retired_from_status AS "retiredFromStatus", next_attempt_at AS "nextAttemptAt",
   provider_message_id AS "providerMessageId", last_error AS "lastError",
   created_at AS "createdAt", updated_at AS "updatedAt"`
 

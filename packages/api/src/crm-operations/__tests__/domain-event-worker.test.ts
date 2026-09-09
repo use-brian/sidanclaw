@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { WorkflowEventInput } from '@use-brian/core'
+import type { WorkflowEventInput, CrmDomainEventEnvelope } from '@use-brian/core'
 import {
   crmWorkflowAdmission,
   createCrmDomainEventWorker,
@@ -7,7 +7,7 @@ import {
   type LeasedCrmDomainEvent,
 } from '../domain-event-worker.js'
 
-function event(index = 1): LeasedCrmDomainEvent {
+function event(index = 1): LeasedCrmDomainEvent & CrmDomainEventEnvelope {
   return {
     id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
     workspaceId: '11111111-1111-4111-8111-111111111111',
@@ -18,10 +18,12 @@ function event(index = 1): LeasedCrmDomainEvent {
   }
 }
 
-function store(rows: LeasedCrmDomainEvent[]) {
+function store(rows: (LeasedCrmDomainEvent & CrmDomainEventEnvelope)[]) {
   return {
-    leaseBatch: vi.fn(async () => rows),
-    markDelivered: vi.fn(async () => undefined),
+    leaseBatch: vi.fn(async () => rows.map(({id,workspaceId,attempts})=>({id,workspaceId,attempts}))),
+    dispatchLeased: vi.fn(async(lease:LeasedCrmDomainEvent,_worker:string,dispatch:(event:CrmDomainEventEnvelope)=>Promise<void>)=>{
+      await dispatch(rows.find(row=>row.id===lease.id)!);return 'delivered' as const
+    }),
     markFailed: vi.fn(async () => undefined),
   } satisfies CrmDomainEventOutboxStore
 }
@@ -33,24 +35,25 @@ describe('[COMP:crm/domain-events] durable outbox worker', () => {
     const delivery = createCrmDomainEventWorker({ store: outbox, dispatcher: { dispatchStrict }, workerId: 'worker-1' })
     await expect(delivery.tick()).resolves.toBe(1)
     expect(dispatchStrict).toHaveBeenCalledWith(expect.objectContaining({ source: { type: 'crm' } }))
-    expect(outbox.markDelivered).toHaveBeenCalledWith(event().id, 'worker-1')
+    expect(outbox.dispatchLeased).toHaveBeenCalledWith({id:event().id,workspaceId:event().workspaceId,attempts:1}, 'worker-1',expect.any(Function))
     expect(outbox.markFailed).not.toHaveBeenCalled()
   })
 
   it('retains a failed event with bounded exponential retry state', async () => {
     const row = { ...event(), attempts: 3 }
     const outbox = store([row])
-    const now = new Date('2026-08-30T12:00:00.000Z')
+    const now = new Date('2026-08-30T12:00:00.000Z'),onError=vi.fn()
     const delivery = createCrmDomainEventWorker({
       store: outbox,
-      dispatcher: { dispatchStrict: vi.fn(async () => { throw new Error('temporary') }) },
-      workerId: 'worker-1', now: () => now,
+      dispatcher: { dispatchStrict: vi.fn(async () => { throw new Error('Private failed payload person@example.com') }) },
+      workerId: 'worker-1', now: () => now,onError,
     })
     await expect(delivery.tick()).resolves.toBe(1)
-    expect(outbox.markDelivered).not.toHaveBeenCalled()
     expect(outbox.markFailed).toHaveBeenCalledWith(
-      row.id, 'worker-1', 'temporary', new Date('2026-08-30T12:00:08.000Z'),
+      {id:row.id,workspaceId:row.workspaceId,attempts:3}, 'worker-1', new Date('2026-08-30T12:00:08.000Z'),
     )
+    expect(onError.mock.calls[0][0].message).toBe('CRM workflow dispatch failed')
+    expect(JSON.stringify(onError.mock.calls)).not.toContain('person@example.com')
   })
 
   it('caps import/event bursts to fifty leases per tick', async () => {
@@ -62,7 +65,7 @@ describe('[COMP:crm/domain-events] durable outbox worker', () => {
     })
     await expect(delivery.tick()).resolves.toBe(50)
     expect(outbox.leaseBatch).toHaveBeenCalledWith('worker-1', 50, 60_000)
-    expect(outbox.markDelivered).toHaveBeenCalledTimes(50)
+    expect(outbox.dispatchLeased).toHaveBeenCalledTimes(50)
   })
 
   it('derives a stable workflow admission key and digest from the domain event id', () => {

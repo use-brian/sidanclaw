@@ -16,7 +16,7 @@ import { retireCrmIntakeReceipts } from './privacy-policy.js'
 import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
 import { retainCrmAddressSuppression } from './suppression-tombstones.js'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
-import { prepareCrmPrivacyCopies, assertCrmPrivacyCopiesResolvable, deleteCrmPrivacyCopies } from './privacy-copy-resolver.js'
+import { prepareCrmPrivacyCopies, assertCrmPrivacyCopiesResolvable, deleteCrmPrivacyCopies, retireCrmNotificationCopies } from './privacy-copy-resolver.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_definitions',
@@ -149,6 +149,7 @@ export async function redactCrmOperationsForContact(
       UPDATE ${domain} t SET ${assignments}
       WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId, contactId])
   }
+  await retireCrmNotificationCopies(client,workspaceId,contactId)
   await redactCrmDeliveryReceipts(client,workspaceId,contactId)
   // Match retention's enquiry -> receipt ordering. Holding a receipt before
   // its enquiry would deadlock against a concurrent retention transaction.
@@ -179,16 +180,6 @@ export async function redactCrmOperationsForContact(
   await client.query(
     `UPDATE crm_import_rows SET entity_id=NULL
       WHERE workspace_id=$1 AND entity_id=$2`,
-    [workspaceId, contactId],
-  )
-  await client.query(
-    `UPDATE crm_domain_event_outbox
-        SET subject_id='00000000-0000-0000-0000-000000000000'::uuid,
-            payload=jsonb_build_object('erased',true,'eventType',event_type)
-      WHERE workspace_id=$1 AND (
-        subject_id=$2 OR payload->>'contactId'=$2::text
-        OR payload->>'dealId'=$2::text OR payload->>'submissionId'=$2::text
-      )`,
     [workspaceId, contactId],
   )
   // The remaining direct contact FKs are CASCADE-bound to entities. The
@@ -240,8 +231,10 @@ export async function pruneCrmOperationsRetention(
         AND status IN ('completed','cancelled','failed') AND updated_at < $2`,
       [workspaceId, before])
     await remove('crm_domain_event_outbox',
-      `DELETE FROM crm_domain_event_outbox WHERE workspace_id=$1
-        AND status='delivered' AND created_at < $2`,
+      `DELETE FROM crm_domain_event_outbox e WHERE workspace_id=$1
+        AND status='delivered' AND created_at < $2
+        AND NOT EXISTS(SELECT 1 FROM workflow_runs r
+          WHERE r.workspace_id=e.workspace_id AND r.crm_event_id=e.id)`,
       [workspaceId, before])
     await remove('crm_intake_idempotency',
       `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND status='retired'
@@ -277,7 +270,8 @@ export async function listCrmEventDelivery(workspaceId: string, filters: CrmPage
   return queryCrmPage(query, { workspaceId, resource: 'crm.event-delivery', key: 'events', query: filters,
     sql: `SELECT id,event_type AS "eventType",subject_kind AS "subjectKind",
             subject_id AS "subjectId",status,attempts,created_at AS "createdAt",
-            occurred_at AS "occurredAt",delivered_at AS "deliveredAt"
+            occurred_at AS "occurredAt",delivered_at AS "deliveredAt",
+            retired_at AS "retiredAt",retired_from_status AS "retiredFromStatus"
        FROM crm_domain_event_outbox WHERE workspace_id=$1`,
     params: [workspaceId],
   })

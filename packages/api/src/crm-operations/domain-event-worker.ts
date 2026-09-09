@@ -12,12 +12,14 @@ import { createHash } from 'node:crypto'
 import {
   crmDomainEventToDispatchEvent,
   type CrmDomainEventEnvelope,
-  type CrmDomainEventType,
   type WorkflowEventInput,
 } from '@use-brian/core'
-import { query } from '../db/client.js'
+import { query, getPool } from '../db/client.js'
+import { acquireCrmPrivacyWriterAdmission } from './privacy-admission.js'
 
-export type LeasedCrmDomainEvent = CrmDomainEventEnvelope & {
+export type LeasedCrmDomainEvent = {
+  id: string
+  workspaceId: string
   attempts: number
 }
 
@@ -38,29 +40,21 @@ export function crmWorkflowAdmission(input: WorkflowEventInput): {
 
 export type CrmDomainEventOutboxStore = {
   leaseBatch(workerId: string, limit: number, leaseMs: number): Promise<LeasedCrmDomainEvent[]>
-  markDelivered(eventId: string, workerId: string): Promise<void>
-  markFailed(eventId: string, workerId: string, message: string, retryAt: Date): Promise<void>
+  dispatchLeased(lease: LeasedCrmDomainEvent, workerId: string,
+    dispatch: (event: CrmDomainEventEnvelope) => Promise<void>): Promise<'delivered' | 'skipped'>
+  markFailed(lease: LeasedCrmDomainEvent, workerId: string, retryAt: Date): Promise<void>
 }
 
 export function createDbCrmDomainEventOutboxStore(): CrmDomainEventOutboxStore {
   return {
     async leaseBatch(workerId, limit, leaseMs) {
       const bounded = Math.min(50, Math.max(1, limit))
-      const result = await query<{
-        id: string
-        workspaceId: string
-        eventType: CrmDomainEventType
-        subjectKind: string
-        subjectId: string
-        payload: Record<string, unknown>
-        actorKind: string
-        occurredAt: Date
-        attempts: number
-      }>(
+      const result = await query<LeasedCrmDomainEvent>(
         `WITH candidates AS (
            SELECT id FROM crm_domain_event_outbox
-            WHERE (status IN ('pending','failed') AND next_attempt_at <= now())
-               OR (status='leased' AND leased_until < now())
+            WHERE ((status IN ('pending','failed') AND next_attempt_at <= now())
+               OR (status='leased' AND leased_until < now()))
+              AND pg_try_advisory_xact_lock_shared(hashtextextended('crm-privacy-admission:'||workspace_id::text,0))
             ORDER BY next_attempt_at,created_at,id
             FOR UPDATE SKIP LOCKED LIMIT $2
          )
@@ -69,30 +63,43 @@ export function createDbCrmDomainEventOutboxStore(): CrmDomainEventOutboxStore {
                 leased_until=now()+($3::int * interval '1 millisecond'),
                 attempts=e.attempts+1,last_error=NULL
            FROM candidates c WHERE e.id=c.id
-         RETURNING e.id,e.workspace_id AS "workspaceId",e.event_type AS "eventType",
-                   e.subject_kind AS "subjectKind",e.subject_id AS "subjectId",
-                   e.payload,e.actor_kind AS "actorKind",e.occurred_at AS "occurredAt",
-                   e.attempts`,
+         RETURNING e.id,e.workspace_id AS "workspaceId",e.attempts`,
         [workerId, bounded, leaseMs],
       )
       return result.rows
     },
-    async markDelivered(eventId, workerId) {
-      await query(
-        `UPDATE crm_domain_event_outbox
-            SET status='delivered',delivered_at=now(),lease_owner=NULL,
-                leased_until=NULL,last_error=NULL
-          WHERE id=$1 AND status='leased' AND lease_owner=$2`,
-        [eventId, workerId],
-      )
+    async dispatchLeased(lease, workerId, dispatch) {
+      const client=await getPool().connect()
+      try {
+        await client.query('BEGIN')
+        await acquireCrmPrivacyWriterAdmission(client,lease.workspaceId)
+        // NO KEY UPDATE admits the new workflow run's source FK/key-share
+        // check on another connection while fencing competing dispatchers.
+        const result=await client.query<CrmDomainEventEnvelope>(`SELECT id,workspace_id AS "workspaceId",
+          event_type AS "eventType",subject_kind AS "subjectKind",subject_id AS "subjectId",
+          payload,actor_kind AS "actorKind",occurred_at AS "occurredAt"
+          FROM crm_domain_event_outbox WHERE id=$1 AND workspace_id=$2
+            AND status='leased' AND lease_owner=$3 AND attempts=$4 AND leased_until>clock_timestamp()
+          FOR NO KEY UPDATE`,[lease.id,lease.workspaceId,workerId,lease.attempts])
+        const current=result.rows[0]
+        if(!current) {await client.query('COMMIT');return 'skipped'}
+        await dispatch(current)
+        await client.query(`UPDATE crm_domain_event_outbox SET status='delivered',delivered_at=clock_timestamp(),
+          lease_owner=NULL,leased_until=NULL,last_error=NULL WHERE id=$1 AND workspace_id=$2`,[lease.id,lease.workspaceId])
+        await client.query('COMMIT')
+        return 'delivered'
+      } catch(error) {
+        await client.query('ROLLBACK').catch(()=>{})
+        throw error
+      } finally {client.release()}
     },
-    async markFailed(eventId, workerId, message, retryAt) {
+    async markFailed(lease, workerId, retryAt) {
       await query(
         `UPDATE crm_domain_event_outbox
-            SET status='failed',next_attempt_at=$3,lease_owner=NULL,
-                leased_until=NULL,last_error=$4
-          WHERE id=$1 AND status='leased' AND lease_owner=$2`,
-        [eventId, workerId, retryAt, message.slice(0, 2_000)],
+            SET status='failed',next_attempt_at=$5,lease_owner=NULL,
+                leased_until=NULL,last_error='CRM workflow dispatch failed'
+          WHERE id=$1 AND workspace_id=$2 AND status='leased' AND lease_owner=$3 AND attempts=$4`,
+        [lease.id,lease.workspaceId,workerId,lease.attempts,retryAt],
       )
     },
   }
@@ -126,17 +133,17 @@ export function createCrmDomainEventWorker(options: {
     const rows = await options.store.leaseBatch(options.workerId, batchSize, leaseMs)
     for (const row of rows) {
       try {
-        await options.dispatcher.dispatchStrict(crmDomainEventToDispatchEvent(row))
-        await options.store.markDelivered(row.id, options.workerId)
-      } catch (error) {
+        await options.store.dispatchLeased(row,options.workerId,
+          current=>options.dispatcher.dispatchStrict(crmDomainEventToDispatchEvent(current)))
+      } catch {
         const delaySeconds = Math.min(3_600, Math.max(5, 2 ** Math.min(row.attempts, 11)))
-        await options.store.markFailed(
-          row.id,
-          options.workerId,
-          error instanceof Error ? error.message : String(error),
-          new Date(now().getTime() + delaySeconds * 1_000),
-        )
-        options.onError?.(error, row)
+        try {
+          await options.store.markFailed(row,options.workerId,new Date(now().getTime()+delaySeconds*1_000))
+        } catch {
+          // A privacy operation or newer lease can win after dispatch fails.
+          // Never copy the original error/row payload into logs or retry state.
+        }
+        options.onError?.(new Error('CRM workflow dispatch failed'),row)
       }
     }
     return rows.length
@@ -144,7 +151,7 @@ export function createCrmDomainEventWorker(options: {
 
   const tick = () => {
     if (running) return running
-    running = runTick().finally(() => { running = null })
+    running = runTick().catch(() => { throw new Error('CRM domain event processing failed') }).finally(() => { running = null })
     return running
   }
 
