@@ -152,6 +152,8 @@ const CRM_TOOLS_STUB: BrainCrmTools = {
   setDealPipelineStage: stubCoreTool('setDealPipelineStage'),
   saveCrmEntitlementPlan: { ...stubCoreTool('saveCrmEntitlementPlan'), requiresCapability: 'configure', homeAppToolSet: { app: 'crm', set: 'write' } },
   saveCrmEvent: { ...stubCoreTool('saveCrmEvent'), requiresCapability: 'configure', homeAppToolSet: { app: 'crm', set: 'write' } },
+  sendCrmMessage: {...stubCoreTool('sendCrmMessage'),requiresCapability:'crm',homeAppToolSet:{app:'crm',set:'write'}},
+  getCrmDelivery: {...stubCoreTool('getCrmDelivery',true),requiresCapability:'crm',homeAppToolSet:{app:'crm',set:'read'}},
 }
 
 const RETRIEVAL_TOOLS_STUB: BrainRetrievalTools = {
@@ -354,6 +356,14 @@ describe('[COMP:api/brain-mcp] buildBrainTools — scope gating', () => {
     expect(result).toMatchObject({ isError: true })
     expect(JSON.stringify(result)).toContain('not_authorized')
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('gates managed delivery discovery on CRM read/write grants and credential scope',()=>{
+    for(const scope of ['read','read_write'] as const) for(const caps of [[],['crm'],['crm','home_app:crm:read'],['crm','home_app:crm:write'],['crm','home_app:crm:read','home_app:crm:write']]) {
+      const names=buildBrainTools({workspaceId:'ws',keyId:'k',maxClearance:null,scope,...ALL_STUBS,agentActiveCapabilities:new Set(caps)}).map(tool=>tool.name)
+      expect(names.includes('getCrmDelivery')).toBe(caps.includes('home_app:crm:read'))
+      expect(names.includes('sendCrmMessage')).toBe(scope==='read_write' && caps.includes('home_app:crm:write'))
+    }
   })
 
   it('keeps generic plan/event configuration behind configure plus CRM write and write scope', () => {

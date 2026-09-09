@@ -73,7 +73,7 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
       'grantCrmEntitlement', 'updateCrmEntitlement',
       'recordCrmParticipation', 'updateCrmParticipation',
       'setDealPipelineStage',
-      'saveCrmEntitlementPlan', 'saveCrmEvent',
+      'saveCrmEntitlementPlan', 'saveCrmEvent', 'sendCrmMessage', 'getCrmDelivery',
     ])
     expect(Object.values(tools).filter(tool => !['saveCrmEntitlementPlan', 'saveCrmEvent'].includes(tool.name)).every((tool) => tool.requiresCapability === 'crm')).toBe(true)
     expect(tools.listCrmSubmissions.isReadOnly).toBe(true)
@@ -215,5 +215,28 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
       kind: 'set_deal_pipeline_stage', dealId: CONTACT_ID,
       pipelineId, stageId,
     })
+  })
+})
+
+
+describe('[COMP:crm/operations-tools] Managed delivery adapters',()=>{
+  const input={deliveryId:'88888888-8888-4888-8888-888888888888',connectorInstanceId:'99999999-9999-4999-8999-999999999999',purposeKey:'updates',to:['person@example.com'],subject:'Fixture',body:'Fixture'}
+  it('keeps native authority out of the schema and preserves the original principal and turn ceiling',async()=>{
+    expect(tools.sendCrmMessage.requiresConfirmation).toBe(true)
+    expect(tools.sendCrmMessage.inputSchema.safeParse({...input,nativeDelivery:{assistantId:CONTACT_ID}}).success).toBe(false)
+    const ctx=context({activeCapabilities:new Set(['crm','home_app:crm:write']),compartments:[],projectIds:[],programmaticPrincipal:{kind:'brain_key',credentialId:CONTACT_ID}})
+    await tools.sendCrmMessage.execute(input,ctx)
+    expect(execute).toHaveBeenLastCalledWith(expect.objectContaining({actor:{kind:'brain_key',credentialId:CONTACT_ID},authority:expect.objectContaining({nativeDelivery:{assistantId:ctx.assistantId,compartments:[],projectIds:[]}})}),expect.objectContaining({...input,kind:'send_message',cc:[],bcc:[]}))
+  })
+  it('refuses a revoked CRM child grant on direct invocation before the command',async()=>{
+    expect(await tools.sendCrmMessage.execute(input,context({activeCapabilities:new Set(['crm'])}))).toMatchObject({isError:true,data:{error:'not_authorized'}})
+    expect(execute).not.toHaveBeenCalled()
+  })
+  it('uses the original id for receipt inspection and does not dispatch',async()=>{
+    const get=vi.fn(async()=>null)
+    const receiptTools=createCrmOperationsTools({reads,service:{execute},deliveries:{get,send:vi.fn()}})
+    expect(await receiptTools.getCrmDelivery.execute({deliveryId:input.deliveryId},context({activeCapabilities:new Set(['crm','home_app:crm:read'])}))).toMatchObject({data:{receipt:null}})
+    expect(get).toHaveBeenCalledWith(expect.anything(),input.deliveryId)
+    expect(execute).not.toHaveBeenCalled()
   })
 })

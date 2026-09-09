@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createCrmOperationsTools, createCrmTools, createTaskTools, WorkflowDefinitionSchema, WorkflowTriggerSchema,
   interpolateValue, evaluateBoolean,
-  SendCrmMessageCommandSchema, type CrmOperationsReadPort, type CrmOperationsServicePort, type CrmStore, type TaskStore, type Tool, type ToolContext,
+  type CrmOperationsReadPort, type CrmOperationsServicePort, type CrmStore, type TaskStore, type Tool, type ToolContext,
 } from '@use-brian/core'
 const fixture = JSON.parse(readFileSync(new URL('../../../../../scripts/crm/fixtures/association-workflows.json', import.meta.url), 'utf8'))
 type Recipe = { key: string; enabled: boolean; trigger: unknown; definition: { startStepId: string; steps: Array<Record<string, any>> }; sampleInput: Record<string, any>; sampleVars: Record<string, any> }
@@ -15,9 +15,7 @@ const tools: Record<string, Tool> = { ...operationTools, ...createCrmTools({} as
 const recipe = (key: string) => recipes.find(item => item.key === key)!
 function inputFor(value: Recipe, step: Record<string, any>) { return interpolateValue(step.arguments, { input: value.sampleInput, vars: value.sampleVars }) }
 function validate(tool: string, args: unknown) {
-  // P5 checks the already implemented delivery command contract. P6 additionally
-  // proves that the identically shaped send/get tools are in the effective registry.
-  return tool === 'sendCrmMessage' ? SendCrmMessageCommandSchema.parse({ ...(args as object), kind: 'send_message' }) : tools[tool].inputSchema.parse(args)
+  return tools[tool].inputSchema.parse(args)
 }
 describe('[COMP:crm/assurance-workflows] Fictional typed workflow recipes', () => {
   it('ships exactly five disabled definitions using canonical workflow and event schemas', () => {
@@ -28,7 +26,7 @@ describe('[COMP:crm/assurance-workflows] Fictional typed workflow recipes', () =
       expect(WorkflowTriggerSchema.safeParse(item.trigger).success, item.key).toBe(true)
     }
   })
-  it('validates every interpolated deterministic step against the real tool or canonical delivery schema', () => {
+  it('validates every interpolated deterministic step against the registered native tool schema', () => {
     for (const item of recipes) for (const step of item.definition.steps) if (step.type === 'tool_call') {
       const args = inputFor(item, step)
       expect(JSON.stringify(args)).not.toContain('{{')

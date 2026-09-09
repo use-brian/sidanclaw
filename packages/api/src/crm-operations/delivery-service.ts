@@ -6,6 +6,7 @@ import {
   actorAuditIdentity, crmOperationsSha256, requireCrmIntegrationOperation, requireCrmIntegrationResources,
   type CrmOperationsContext, type CrmDeliveryReceipt, type CrmDeliveryServicePort, type SendCrmMessageCommand,
 } from '@use-brian/core'
+import { lockNativeDeliveryPrincipal } from './delivery-native-authority.js'
 import { getPool } from '../db/client.js'
 import { lockCrmIntegrationCredential } from '../db/crm-integration-store.js'
 import { inspectCrmMailAdmission, type CrmMailContext } from './delivery-policy.js'
@@ -36,7 +37,8 @@ function mailScope(context:CrmOperationsContext,connectorInstanceId:string):CrmM
   if(context.actor.kind==='integration_key' && context.authority.integration?.credentialId===context.actor.credentialId) {
     return {workspaceId:context.workspaceId,connectorInstanceId,integration:context.authority.integration}
   }
-  throw new CrmOperationsError('not_authorized','CRM delivery requires a member session or a scoped CRM integration credential.')
+  if(context.authority.nativeDelivery) return {workspaceId:context.workspaceId,connectorInstanceId,native:{actor:context.actor,ceiling:context.authority.nativeDelivery}}
+  throw new CrmOperationsError('not_authorized','CRM delivery requires authenticated sending authority.')
 }
 async function transaction<T>(fn:(client:PoolClient)=>Promise<T>):Promise<T> {
   const client=await getPool().connect()
@@ -56,6 +58,8 @@ async function authorize(client:PoolClient,context:CrmOperationsContext,operatio
   } else if(context.actor.kind==='user') {
     const member=await client.query('SELECT role FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 FOR SHARE',[context.workspaceId,context.actor.userId])
     if(!member.rowCount) throw new CrmOperationsError('not_authorized','Current workspace membership is required for CRM delivery.')
+  } else if(context.authority.nativeDelivery) {
+    await lockNativeDeliveryPrincipal(client,context.workspaceId,{actor:context.actor,ceiling:context.authority.nativeDelivery},operation==='crm.delivery.dispatch')
   } else throw new CrmOperationsError('not_authorized','This principal has no CRM delivery authority.')
   if(operation==='crm.delivery.dispatch' && !context.authority.canWrite) throw new CrmOperationsError('not_authorized','CRM delivery write authority is required.')
 }

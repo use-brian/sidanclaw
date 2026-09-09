@@ -225,6 +225,9 @@ import { brainInboxRoutes } from './routes/brain-inbox.js'
 import { crmRoutes } from './routes/crm.js'
 import { crmIntakeRoutes } from './routes/crm-intake.js'
 import { crmOperationsRoutes } from './routes/crm-operations.js'
+import { createCrmDeliveryService } from './crm-operations/delivery-service.js'
+import { createCrmDeliveryProvider } from './crm-operations/delivery-providers.js'
+import { getGlobalEmailInboxProvider } from './agentmail/provider.js'
 import { createCrmOperationsService } from './crm-operations/service.js'
 import { createCrmProductionImportService } from './crm-operations/import-service.js'
 import { createCrmImportSources } from './db/crm-import-sources.js'
@@ -1597,7 +1600,11 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   })
   const crmStore = createDbCrmStore()
   const crmEmailDraftStore = createDbCrmEmailDraftStore()
-  const crmOperationsService = createCrmOperationsService(createDbCrmOperationsStore())
+  const crmDeliveries = createCrmDeliveryService(createCrmDeliveryProvider({
+    encryptionKey: env.CHANNEL_CREDENTIAL_KEY ? loadChannelCredentialKey(env.CHANNEL_CREDENTIAL_KEY) : null,
+    emailProvider: getGlobalEmailInboxProvider,
+  }))
+  const crmOperationsService = createCrmOperationsService(createDbCrmOperationsStore(), { deliveries: crmDeliveries })
   const associationStore = createAssociationStore()
   const workspaceModulesStore = createWorkspaceModulesStore()
   const associationService = createAssociationService({ store: associationStore, modules: workspaceModulesStore, crmService: crmOperationsService })
@@ -3832,6 +3839,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   allTools.set('listCrmFields', crmTools.listCrmFields)
   allTools.set('setCrmCustomFields', crmTools.setCrmCustomFields)
   const crmOperationsTools = createCrmOperationsTools({
+    deliveries: crmDeliveries,
     reads: crmIntakeReadStore,
     service: crmOperationsService,
   })
@@ -4798,6 +4806,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     operationsForTransaction: (client) => createCrmOperationsService(createDbCrmOperationsStore(getPool(), client)), entityLinks: entityLinksStore,
   })
   app.use('/api/crm/integration', crmIntegrationRoutes({
+    deliveries: crmDeliveries,
     credentials: crmIntegrationStore, service: crmOperationsService, association: associationService,
     imports: crmProductionImports, importSources: crmImportSources,
   }))
@@ -6534,6 +6543,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   }))
   app.use('/api/crm', requireAuth(env.JWT_SECRET), crmIntegrationCredentialRoutes({ workspaceStore, credentials: crmIntegrationStore }))
   app.use('/api/crm', requireAuth(env.JWT_SECRET), crmOperationsRoutes({
+    deliveries: crmDeliveries,
     workspaceStore,
     service: crmOperationsService,
     readStore: crmIntakeReadStore,

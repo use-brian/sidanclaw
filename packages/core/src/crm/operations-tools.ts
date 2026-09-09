@@ -21,6 +21,7 @@ import {
   CrmOperationsError,
   CrmOperationsStableKeySchema,
   CrmOperationsUuidSchema,
+  SendCrmMessageInputSchema, SendCrmMessageCommandSchema, type CrmDeliveryServicePort,
   CrmWordingLocaleSchema,
   RecordCrmSubmissionCommandSchema,
   type CrmOperationsActor,
@@ -121,6 +122,8 @@ export type CrmOperationsTools = {
   setDealPipelineStage: Tool
   saveCrmEntitlementPlan: Tool
   saveCrmEvent: Tool
+  sendCrmMessage: Tool
+  getCrmDelivery: Tool
 }
 
 const PageInput = {
@@ -309,6 +312,7 @@ function failure(error: unknown) {
 export function createCrmOperationsTools(options: {
   reads: CrmOperationsReadPort
   service: CrmOperationsServicePort
+  deliveries?: CrmDeliveryServicePort
 }): CrmOperationsTools {
   function configure<Input extends z.ZodType>(name: string, description: string, inputSchema: Input,
     toCommand: (input: z.infer<Input>) => CrmOperationsCommand): Tool<Input> {
@@ -338,6 +342,36 @@ export function createCrmOperationsTools(options: {
   const saveCrmEvent = configure('saveCrmEvent',
     'Save a generic CRM event by stable slug using the declared timezone and registration windows. Read the event catalog first. Requires explicit configuration and CRM write grants; no Association module is required. This does not create a ticket or registration.',
     z.object({ event: AssociationEventInputSchema }).strict(), input => ({ kind: 'save_event', ...input.event }))
+  function delivery<Input extends z.ZodType>(name:string,description:string,inputSchema:Input,read:boolean):Tool<Input> {
+    const tool:Tool<Input>=buildTool({name,description,inputSchema,requiresCapability:'crm',
+      homeAppToolSet:{app:'crm',set:read?'read':'write'},isReadOnly:read,requiresConfirmation:!read,
+      async execute(input,context) {
+        const missing=missingToolCapability(tool,context.activeCapabilities)
+        if(missing) return {isError:true,data:{error:'not_authorized',requiredCapability:missing}}
+        const caller=crmOperationsToolContext(context)
+        if(!caller) return workspaceError()
+        caller.authority.nativeDelivery={assistantId:context.assistantId,compartments:context.compartments ?? null,projectIds:context.projectIds ?? null}
+        try {
+          const parsed=inputSchema.parse(input)
+          if(read) {
+            if(!options.deliveries) throw new CrmOperationsError('conflict','CRM delivery is unavailable.',{reason:'delivery_unavailable'})
+            return {data:{receipt:await options.deliveries.get(caller,parsed.deliveryId)}}
+          }
+          return {data:await options.service.execute(caller,SendCrmMessageCommandSchema.parse({...parsed,kind:'send_message'}))}
+        } catch(error) {
+          if(error instanceof CrmOperationsError) return failure(error)
+          return {isError:true,data:{error:error instanceof z.ZodError?'invalid_input':'internal',message:'CRM delivery could not complete. Inspect the original delivery identity before another attempt.'}}
+        }
+      },
+    })
+    return tool
+  }
+  const sendCrmMessage=delivery('sendCrmMessage',
+    'Send one managed CRM email with a stable deliveryId and exact connectorInstanceId. Requires CRM write and the current mailbox send grant. All To/Cc/Bcc recipients are checked for this purpose immediately before dispatch. Inspect uncertain results with getCrmDelivery using the SAME deliveryId; never invent a new identity to retry. Sent means provider acceptance, not confirmed recipient delivery.',
+    SendCrmMessageInputSchema,false)
+  const getCrmDelivery=delivery('getCrmDelivery',
+    'Inspect a durable CRM delivery receipt by its original deliveryId, including provider acceptance, blocked or uncertain outcomes. This never resends a message and does not expose message content.',
+    z.object({deliveryId:CrmOperationsUuidSchema}).strict(),true)
   const write = <T extends CrmOperationsCommand>(
     command: (input: Record<string, unknown>) => T,
   ) => async (input: Record<string, unknown>, context: ToolContext) => {
@@ -697,7 +731,7 @@ export function createCrmOperationsTools(options: {
     saveCrmSegment, archiveCrmSegment,
     grantCrmEntitlement, updateCrmEntitlement,
     recordCrmParticipation, updateCrmParticipation, setDealPipelineStage,
-    saveCrmEntitlementPlan, saveCrmEvent,
+    saveCrmEntitlementPlan, saveCrmEvent, sendCrmMessage, getCrmDelivery,
   }
 }
 

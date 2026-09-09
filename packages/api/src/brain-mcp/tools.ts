@@ -437,6 +437,7 @@ const READ_TOOL_NAMES = new Set<string>([
   'listCrmEvents',
   'listCrmParticipation',
   'listCrmPipelines',
+  'getCrmDelivery',
   // Workspace files (read) — present only when fileTools are wired
   'fileRead',
   'fileSearch',
@@ -1637,6 +1638,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     bridgeCoreTool(opts.crmTools.recordCrmParticipation, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.updateCrmParticipation, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.setDealPipelineStage, resolveCtx, workspaceId),
+    ...[...filterToolsByCapabilities(new Map([opts.crmTools.sendCrmMessage,opts.crmTools.getCrmDelivery].map(tool=>[tool.name,tool])),opts.agentActiveCapabilities ?? new Set()).values()].map(tool=>bridgeCoreTool(tool,resolveCtx,workspaceId)),
   ]
 
   const visibleAssociation = filterToolsByCapabilities(
@@ -1851,6 +1853,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       t.name === 'listCrmSegments' || t.name === 'previewCrmSegment' ||
       t.name === 'listCrmEntitlementPlans' || t.name === 'listCrmEntitlements' ||
       t.name === 'listCrmEvents' || t.name === 'listCrmParticipation' ||
+      t.name === 'getCrmDelivery' ||
       t.name === 'listCrmPipelines'
     ),
     ...fileBridges.filter((t) => t.name === 'fileRead' || t.name === 'fileSearch'),
@@ -1878,7 +1881,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       t.name === 'saveCrmSegment' || t.name === 'archiveCrmSegment' ||
       t.name === 'grantCrmEntitlement' || t.name === 'updateCrmEntitlement' ||
       t.name === 'recordCrmParticipation' || t.name === 'updateCrmParticipation' ||
-      t.name === 'setDealPipelineStage' ||
+      t.name === 'setDealPipelineStage' || t.name === 'sendCrmMessage' ||
       t.name === 'saveCrmEntitlementPlan' || t.name === 'saveCrmEvent'
     ),
     ...fileBridges.filter((t) =>

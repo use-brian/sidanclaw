@@ -2,16 +2,17 @@
 import {acquireCrmPrivacyWriterAdmission} from './privacy-admission.js'
 import type { PoolClient } from 'pg'
 import { z } from 'zod'
-import { CrmOperationsError, evaluateCrmSendability, type CrmOperationsCommand, type CrmOperationsContext, CrmIntegrationAuthoritySchema, requireCrmIntegrationOperation, requireCrmIntegrationResources, type CrmIntegrationAuthority } from '@use-brian/core'
+import { CrmOperationsError, evaluateCrmSendability, type CrmOperationsCommand, type CrmOperationsContext, CrmIntegrationAuthoritySchema, CrmOperationsActorSchema, CrmNativeDeliveryAuthoritySchema, requireCrmIntegrationOperation, requireCrmIntegrationResources, type CrmIntegrationAuthority } from '@use-brian/core'
 import { getPool, query } from '../db/client.js'
 import { lockCrmIntegrationCredential } from '../db/crm-integration-store.js'
 import { crmDeliveryHooks, crmMailboxAccountHash, type CrmMailAdmission } from './delivery-scope.js'
+import { lockNativeDeliveryPrincipal, lockNativeDeliveryMailbox, type NativeDeliveryPrincipal } from './delivery-native-authority.js'
 import { readCrmAddressSuppressions } from './suppression-tombstones.js'
 
 type MemberMailContext = { userId: string; workspaceId?: string; connectorInstanceId?: string; expectedAccountHash?: string }
 export type CrmMailContext = MemberMailContext | {
   workspaceId: string; connectorInstanceId: string; integration: CrmIntegrationAuthority; expectedAccountHash?: string
-}
+} | {workspaceId:string;connectorInstanceId:string;native:NativeDeliveryPrincipal;expectedAccountHash?:string}
 export type CrmMailIntent = { crmPurposeKey?: string; crmTemplateKey?: string }
 type Provider = 'gmail' | 'imap' | 'agentmail'
 // This is the closed set of mail transports wired below, not all built-ins.
@@ -30,6 +31,7 @@ type Policy = { id: string; connectorInstanceId: string; providerKey: string; ve
 const projection = `id,connector_instance_id AS "connectorInstanceId",provider_key AS "providerKey",version,managed,
   purpose_keys AS "purposeKeys",template_purposes AS "templatePurposes",created_at AS "createdAt",updated_at AS "updatedAt"`
 const scopeSchema = z.union([
+  z.object({workspaceId:z.string().uuid(),connectorInstanceId:z.string().uuid(),native:z.object({actor:CrmOperationsActorSchema,ceiling:CrmNativeDeliveryAuthoritySchema}).strict(),expectedAccountHash:z.string().regex(/^[a-f0-9]{64}$/).optional()}).strict(),
   z.object({ userId:z.string().uuid(),workspaceId:z.string().uuid().optional(),connectorInstanceId:z.string().uuid().optional(),expectedAccountHash:z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
   z.object({ workspaceId:z.string().uuid(),connectorInstanceId:z.string().uuid(),integration:CrmIntegrationAuthoritySchema,expectedAccountHash:z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
 ])
@@ -55,7 +57,7 @@ async function connector(client: PoolClient, workspaceId: string, scope: CrmMail
   if (!row || !isMailTransport(row.provider) || (provider && row.provider!==provider)
     || !row.connected || row.health==='auth_failed') throw denied('delivery_connector_unavailable')
   if (row.scope==='workspace' && row.workspaceId!==workspaceId) throw new CrmOperationsError('not_authorized','The mailbox is unavailable in this workspace.')
-  if (row.workspaceId!==workspaceId && row.userId!==userId) {
+  if (!('native' in scope) && row.workspaceId!==workspaceId && row.userId!==userId) {
     const grant = await client.query(`SELECT id FROM connector_grant WHERE connector_instance_id=$1 AND target_type='workspace' AND target_id=$2 FOR SHARE`,[row.id,workspaceId])
     if (!grant.rowCount) throw new CrmOperationsError('not_authorized','The mailbox is unavailable in this workspace.')
   }
@@ -121,7 +123,10 @@ async function runCrmMailAdmission<T>(rawScope: CrmMailContext | undefined, prov
     const current = integration ? await lockCrmIntegrationCredential(client,scope.data.workspaceId!,integration.credentialId) : undefined
     if(integration && current) for(const authority of [integration,current]) requireCrmIntegrationOperation(authority,'crm.delivery.dispatch')
     const workspaceId = 'userId' in scope.data ? await member(client,scope.data) : scope.data.workspaceId
+    const native = 'native' in scope.data ? scope.data.native : undefined
+    if(native) await lockNativeDeliveryPrincipal(client,workspaceId,native,true)
     await acquireCrmPrivacyWriterAdmission(client,workspaceId)
+    if(native) await lockNativeDeliveryMailbox(client,workspaceId,native,scope.data.connectorInstanceId!)
     const instance = await connector(client,workspaceId,scope.data,provider)
     await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',[lockKey(workspaceId,instance.id)])
     const policy = (await client.query<Policy>(`SELECT ${projection} FROM crm_managed_mailbox_policies WHERE workspace_id=$1 AND connector_instance_id=$2 FOR SHARE`,[workspaceId,instance.id])).rows[0]
@@ -178,6 +183,7 @@ async function runCrmMailAdmission<T>(rawScope: CrmMailContext | undefined, prov
         FROM crm_integration_credentials WHERE workspace_id=$1 AND id=$2`,[workspaceId,integration.credentialId])
       if(!active.rows[0]?.active) throw new CrmOperationsError('credential_revoked','The CRM integration credential is no longer active.')
     }
+    if(native) await lockNativeDeliveryPrincipal(client,workspaceId,native,true)
     invoking = providerInvocation
     const result = await invoke(admission,client)
     accepted = providerInvocation

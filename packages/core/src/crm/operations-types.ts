@@ -93,12 +93,21 @@ export const CrmOperationsActorSchema = z.discriminatedUnion('kind', [
 ])
 export type CrmOperationsActor = z.infer<typeof CrmOperationsActorSchema>
 
+/** Trusted native adapter ceiling, never command input. */
+export const CrmNativeDeliveryAuthoritySchema = z.object({
+  assistantId: CrmOperationsUuidSchema,
+  compartments: z.array(z.string()).max(1000).nullable(),
+  projectIds: z.array(CrmOperationsUuidSchema).max(1000).nullable(),
+}).strict()
+export type CrmNativeDeliveryAuthority = z.infer<typeof CrmNativeDeliveryAuthoritySchema>
+
 export const CrmOperationsAuthoritySchema = z.object({
   role: z.enum(['member', 'admin', 'owner', 'system']),
   canWrite: z.boolean(),
   canConfigure: z.boolean(),
   trustedIdentitySources: z.array(CrmOperationsStableKeySchema).max(50).default([]),
   integration: CrmIntegrationAuthoritySchema.optional(),
+  nativeDelivery: CrmNativeDeliveryAuthoritySchema.optional(),
 })
 export type CrmOperationsAuthority = z.infer<typeof CrmOperationsAuthoritySchema>
 
@@ -482,8 +491,7 @@ const DeliveryAttachment = z.object({
   mime: z.string().min(1).max(150).regex(/^[a-zA-Z0-9!#$&^_.+-]+\/[a-zA-Z0-9!#$&^_.+-]+$/),
   contentBase64: z.string().max(8 * 1024 * 1024).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
 }).strict()
-export const SendCrmMessageCommandSchema = z.object({
-  kind: z.literal('send_message'),
+export const SendCrmMessageInputSchema = z.object({
   deliveryId: CrmOperationsUuidSchema,
   connectorInstanceId: CrmOperationsUuidSchema,
   purposeKey: CrmOperationsStableKeySchema,
@@ -494,7 +502,8 @@ export const SendCrmMessageCommandSchema = z.object({
   subject: z.string().max(998).refine(value => !/[\r\n\0]/.test(value)),
   body: z.string().max(200_000),
   attachments: z.array(DeliveryAttachment).max(20).default([]),
-}).strict().superRefine((value,ctx) => {
+}).strict()
+export const SendCrmMessageCommandSchema = SendCrmMessageInputSchema.extend({kind:z.literal('send_message')}).superRefine((value,ctx) => {
   if(value.to.length+value.cc.length+value.bcc.length>1000) ctx.addIssue({code:z.ZodIssueCode.custom,message:'A delivery may contain at most 1000 recipients.'})
   if(new TextEncoder().encode(JSON.stringify(value)).byteLength>8*1024*1024) ctx.addIssue({code:z.ZodIssueCode.custom,message:'A delivery envelope may contain at most 8 MiB.'})
 })

@@ -196,7 +196,7 @@ export function brainMcpRoutes(opts: Options): Router {
     // agent write tools appear only when the bound primary assistant holds
     // the `configure` capability (resolved fresh per request so a revoked
     // grant takes effect immediately).
-    const agentActiveCapabilities = opts.agentTools || opts.associationTools
+    const agentActiveCapabilities = opts.agentTools || opts.associationTools || opts.crmTools
       ? await resolveAgentCapabilities(auth.workspaceId)
       : new Set<string>()
     const agentWritesEnabled =
