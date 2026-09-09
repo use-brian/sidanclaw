@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../client.js', () => ({
   query: vi.fn(),
   queryWithRLS: vi.fn(),
+  getPool: vi.fn(),
 }))
 
 import {
@@ -24,7 +25,7 @@ import {
   findEventTriggeredWorkflowsSystem,
   getWorkflowCreatorSystem,
 } from '../workflow-store.js'
-import { query, queryWithRLS } from '../client.js'
+import { query, queryWithRLS, getPool } from '../client.js'
 
 const mockQuery = vi.mocked(query)
 const mockRls = vi.mocked(queryWithRLS)
@@ -404,45 +405,46 @@ describe('[COMP:api/workflow-store] createDbWorkflowRunStore', () => {
     expect(values.some((v) => typeof v === 'string' && v.includes('"summary":"done"'))).toBe(true)
   })
 
-  it('getLatestOutcomeForWorkflowSystem reads the latest TERMINAL run, excluding the current one, no RLS (mig 279)', async () => {
-    const outcome = { status: 'completed', summary: 's', logs: [], blockers: [], todo: [], state: {}, finishedAt: '2026-06-22T00:00:00Z' }
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'run-prior', outcome }], rowCount: 1 } as never)
-    // No blueprint record for that run → the plain outcome comes back.
-    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as never)
-    const got = await runs.getLatestOutcomeForWorkflowSystem('wf-1', 'run-current')
-    const [sql, values] = mockQuery.mock.calls[0] as [string, unknown[]]
-    expect(sql).toContain("status IN ('completed', 'failed', 'timeout')")
-    expect(sql).toContain('id <> $2')
-    expect(sql).toContain('ORDER BY finished_at DESC NULLS LAST, started_at DESC')
-    expect(values).toEqual(['wf-1', 'run-current'])
-    expect(got).toEqual(outcome)
-  })
-
-  it("getLatestOutcomeForWorkflowSystem enriches lastRun with the run's blueprint-record output", async () => {
-    const outcome = { status: 'completed', summary: 's', logs: [], blockers: [], todo: [], state: {}, finishedAt: '2026-06-22T00:00:00Z' }
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 'run-prior', outcome }], rowCount: 1 } as never)
-    mockQuery.mockResolvedValueOnce({
-      rows: [{ fields: { summary: 'typed', budget: 12 }, status: 'complete' }],
-      rowCount: 1,
-    } as never)
-    const got = await runs.getLatestOutcomeForWorkflowSystem('wf-1', 'run-current')
-    // The record query joins on the PRIOR run's id — this is what
-    // `{{lastRun.output.<key>}}` resolves from. Both run-stamped producers
-    // match: direct saves ('workflow') and the research-synthesis arm
-    // ('research', whose sourceRef is the runId on workflow-origin fills).
-    const [recSql, recValues] = mockQuery.mock.calls[1] as [string, unknown[]]
-    expect(recSql).toContain("source_kind IN ('workflow', 'research') AND source_id = $1")
-    expect(recValues).toEqual(['run-prior'])
-    expect(got).toMatchObject({
-      summary: 's',
-      output: { summary: 'typed', budget: 12 },
-      outputStatus: 'complete',
+  function outcomeClient(outcome:Record<string,unknown>|null,record:Record<string,unknown>|null=null) {
+    const release=vi.fn(),commands:string[]=[]
+    const clientQuery=vi.fn(async(sql:string)=>{
+      commands.push(sql)
+      if(sql.includes('AS acquired'))return {rows:[{acquired:true}],rowCount:1}
+      if(sql.startsWith('SELECT workspace_id'))return {rows:[{workspace_id:'workspace-1'}],rowCount:1}
+      if(sql.startsWith('SELECT id FROM workflow_runs'))return {rows:[{id:'run-current'}],rowCount:1}
+      if(sql.includes('SELECT id,outcome,privacy_erased'))return {rows:outcome?[{id:'run-prior',outcome,privacy_erased:false}]:[],rowCount:outcome?1:0}
+      if(sql.includes('SELECT fields,status'))return {rows:record?[record]:[],rowCount:record?1:0}
+      return {rows:[],rowCount:0}
     })
+    vi.mocked(getPool).mockReturnValue({connect:async()=>({query:clientQuery,release})} as never)
+    return {clientQuery,release,commands}
+  }
+  it('records outcome lineage and commits before returning the prior result',async()=>{
+    const outcome={status:'completed',summary:'prior'},client=outcomeClient(outcome)
+    expect(await runs.getLatestOutcomeForWorkflowSystem('wf-1','run-current')).toEqual(outcome)
+    expect(client.commands.some(sql=>sql.includes('INSERT INTO workflow_run_copy_sources'))).toBe(true)
+    expect(client.commands.at(-1)).toBe('COMMIT');expect(client.release).toHaveBeenCalledOnce()
+    expect(mockRls).not.toHaveBeenCalled()
   })
-
-  it('getLatestOutcomeForWorkflowSystem returns null when there is no prior terminal run', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 } as never)
-    expect(await runs.getLatestOutcomeForWorkflowSystem('wf-1', 'run-current')).toBeNull()
+  it('enriches the copied result from a workspace-bound blueprint output',async()=>{
+    const client=outcomeClient({status:'completed',summary:'prior'},{fields:{budget:12},status:'complete'})
+    expect(await runs.getLatestOutcomeForWorkflowSystem('wf-1','run-current')).toMatchObject({summary:'prior',output:{budget:12},outputStatus:'complete'})
+    const i=client.commands.findIndex(sql=>sql.includes('SELECT fields,status'))
+    expect(client.clientQuery.mock.calls[i]).toEqual([expect.stringContaining('workspace_id=$1'),['workspace-1','run-prior']])
+  })
+  it('returns no outcome without a prior result and does not invent a source edge',async()=>{
+    const client=outcomeClient(null)
+    expect(await runs.getLatestOutcomeForWorkflowSystem('wf-1','run-current')).toBeNull()
+    expect(client.commands.some(sql=>sql.includes('INSERT INTO workflow_run_copy_sources'))).toBe(false)
+    expect(client.release).toHaveBeenCalledOnce()
+  })
+  it('withholds a copied outcome when its lineage transaction fails to commit',async()=>{
+    const client=outcomeClient({status:'completed',summary:'private copy'}),original=client.clientQuery.getMockImplementation()!
+    client.clientQuery.mockImplementation(async(sql:string)=>{if(sql==='COMMIT')throw new Error('private provider context');return original(sql)})
+    await expect(runs.getLatestOutcomeForWorkflowSystem('wf-1','run-current')).rejects.toThrow('Workflow outcome copy could not be recorded')
+    expect(client.clientQuery.mock.calls.some(([sql])=>sql==='COMMIT')).toBe(true)
+    expect(client.commands.some(sql=>sql.includes('INSERT INTO workflow_run_copy_sources'))).toBe(true)
+    expect(client.commands.at(-1)).toBe('ROLLBACK');expect(client.release).toHaveBeenCalledOnce()
   })
 })
 

@@ -65,6 +65,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'crm_entity_separations',
   'decision_events',
   'decision_applications',
+  'workflow_run_copy_sources',
   'workflows',
   'workflow_runs', // cascade-covered by `workflows`; kept explicit for the classifier
   'sandbox_tasks',

@@ -1679,7 +1679,10 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "context_project_id",
       "context_compartments",
       "context_project_ids",
-      "crm_event_id"
+      "crm_event_id",
+      "privacy_lineage_version",
+      "privacy_erased",
+      "privacy_erased_at"
     ],
     "excludedColumns": [
       "webhook_body_sha256"
@@ -1726,6 +1729,17 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     "reason": "Steps follow their CRM-triggered parent run; content is redacted and remains a review dependency."
   },
   {
+    "domain": "workflow_run_copy_sources",
+    "columns": ["workspace_id","run_id","source_run_id","created_at"],
+    "excludedColumns": [],
+    "orderBy": "t.run_id,t.source_run_id",
+    "workspaceWhere": "t.run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows) OR t.source_run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows)",
+    "subjectWhere": "t.run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows) OR t.source_run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows)",
+    "subjectRedactions": {"source_run_id":"CASE WHEN t.source_run_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows) THEN t.source_run_id ELSE NULL END"},
+    "transforms": {},
+    "reason": "Immutable outcome-copy lineage; related content is redacted in the run and step domains."
+  },
+  {
     "domain": "workspace_audit_log",
     "columns": [
       "id",
@@ -1738,8 +1752,8 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     ],
     "excludedColumns": [],
     "orderBy": "t.id",
-    "subjectWhere": "(t.subject_id=$2 OR t.details->>'contactId'=$2::text) OR (t.subject_id IN(SELECT id FROM pg_temp.crm_privacy_copy_tasks) AND (t.event_type LIKE 'crm.%' OR t.event_type LIKE 'association.%' OR t.event_type LIKE 'task.%'))",
-    "workspaceWhere": "t.event_type LIKE 'crm.%' OR t.event_type LIKE 'association.%' OR t.event_type LIKE 'workspace.module_%'",
+    "subjectWhere": "(t.subject_id=$2 OR t.details->>'contactId'=$2::text) OR (t.subject_id IN(SELECT id FROM pg_temp.crm_privacy_copy_tasks) AND (t.event_type LIKE 'crm.%' OR t.event_type LIKE 'association.%' OR t.event_type LIKE 'task.%')) OR (t.event_type LIKE 'workflow.%' AND t.subject_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows))",
+    "workspaceWhere": "t.event_type LIKE 'crm.%' OR t.event_type LIKE 'association.%' OR t.event_type LIKE 'workspace.module_%' OR (t.event_type LIKE 'workflow.%' AND t.subject_id IN(SELECT id FROM pg_temp.crm_privacy_copy_workflows))",
     "subjectRedactions": {
       "details": "'{}'::jsonb",
       "subject_id": "CASE WHEN EXISTS(SELECT 1 FROM entities e WHERE e.workspace_id=$1 AND e.kind='person' AND e.id<>$2 AND e.id::text=t.subject_id::text) THEN NULL ELSE t.subject_id END"

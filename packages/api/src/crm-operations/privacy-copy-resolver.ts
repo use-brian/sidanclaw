@@ -2,6 +2,7 @@
 import type { PoolClient } from 'pg'
 import { CrmOperationsError, type CrmPrivacyBlocker } from '@use-brian/core'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
+import { inspectWorkflowCopyConflicts } from './workflow-copy-resolver.js'
 import { CRM_WORKFLOW_COPY_ROOT, CRM_WORKSPACE_TASK_ROOT, CRM_OTHER_CONTACT_EMAILS, CRM_SUBJECT_EMAILS, CRM_TASK_COPY_ROOT, CRM_SHARED_TASK_ROOT, crmDraftHasSubjectRecipient } from './privacy-copy-attribution.js'
 
 /** Caller owns a transaction. Only row ids are materialized, never content. */
@@ -39,6 +40,15 @@ export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: s
       ($2::uuid IS NULL AND (t.crm_event_id IS NOT NULL OR (t.trigger_kind='event' AND t.input#>>'{trigger,sourceType}'='crm')))
       OR ($2::uuid IS NOT NULL AND (${CRM_WORKFLOW_COPY_ROOT})))`,[workspaceId,contactId])
 
+  await client.query(`WITH RECURSIVE copies(id) AS(
+    SELECT id FROM pg_temp.crm_privacy_copy_workflows
+    UNION
+    SELECT candidate.id FROM copies c JOIN workflow_runs parent ON parent.id=c.id AND parent.workspace_id=$1
+      JOIN workflow_runs candidate ON candidate.workspace_id=$1 AND (
+        (candidate.workflow_id=parent.workflow_id AND candidate.privacy_lineage_version=0)
+        OR EXISTS(SELECT 1 FROM workflow_run_copy_sources link WHERE link.workspace_id=$1
+          AND link.source_run_id=c.id AND link.run_id=candidate.id))
+  ) INSERT INTO pg_temp.crm_privacy_copy_workflows SELECT id FROM copies ON CONFLICT DO NOTHING`,[workspaceId])
 }
 
 /** Preview and canonical purge both refuse shared or ambiguous copy ownership. */
@@ -68,13 +78,14 @@ export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspa
       AND (${notificationDomain.subjectWhere}) AND t.status<>'retired'
       AND t.recipient_kind='contact' AND t.recipient_ref<>$2::text`,[workspaceId,contactId])
   if(notifications.rows[0]?.count)blockers.push({domain:'association_notification_outbox',reason:'shared_notification_dependency',count:notifications.rows[0].count})
+  blockers.push(...await inspectWorkflowCopyConflicts(client,workspaceId))
   return blockers
 }
 
 /** Preserve attribution until unsupported dependent artifacts are resolved. */
 export async function assertCrmPrivacyCopiesResolvable(client: PoolClient, workspaceId: string, contactId: string): Promise<void> {
   const blockers = await inspectCrmPrivacyCopyConflicts(client,workspaceId,contactId)
-  for(const domain of ['workflow_runs','workflow_step_runs','crm_segments','workspace_files','crm_import_sources','decision_events','decision_applications','decision_derivations']) {
+  for(const domain of ['crm_segments','workspace_files','crm_import_sources','decision_events','decision_applications','decision_derivations']) {
     const entry = CRM_PRIVACY_COVERAGE.find(candidate => candidate.domain===domain)!
     const result=await client.query<{count:number}>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
       SELECT count(*)::int count FROM ${domain} t WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId,contactId])

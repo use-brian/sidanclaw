@@ -5,6 +5,7 @@ import type {CrmOperationsContext,CrmErasurePreview} from '@use-brian/core'
 import {getPool} from '../client.js'
 import {createSoftDeleteStore} from '../soft-delete-store.js'
 import {createDbWorkflowRunStore} from '../workflow-store.js'
+import {_resetCoalescerForTests} from '../../brain-stream/notify.js'
 import {createAssociationStore} from '../association-store.js'
 import {createCrmPrivacyService} from '../../crm-operations/privacy-previews.js'
 import {streamCrmPrivacyExport} from '../../crm-operations/privacy-export.js'
@@ -56,11 +57,11 @@ async function exported(context:CrmOperationsContext,contactId?:string) {
 function latch(){let resolve!:()=>void;const promise=new Promise<void>(r=>{resolve=r});return {promise,resolve}}
 
 describe('[COMP:crm/privacy-copies] Notification retirement and workflow dependencies',()=>{
-  afterEach(async()=>{
+  afterEach(async()=>{_resetCoalescerForTests();
     await pool.query('DELETE FROM workspaces WHERE id=ANY($1::uuid[])',[workspaces.splice(0)])
     await pool.query('DELETE FROM users WHERE id=ANY($1::uuid[])',[users.splice(0)])
   })
-  afterAll(async()=>{await pool.end()})
+  afterAll(async()=>{_resetCoalescerForTests();await pool.end()})
   it('retires more than one page of indirect copies without inventing delivered status',async()=>{
     const f=await fixture(),eventStates=['pending','leased','delivered','failed'],notificationStates=['pending','sending','sent','failed','suppressed']
     for(let i=0;i<108;i++)await f.event(eventStates[i%4])
@@ -125,7 +126,7 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
     await pool.query("UPDATE workflow_runs SET input='{}',vars=$2::jsonb,outcome=$3::jsonb WHERE id=$1",[run,JSON.stringify({private:"other@example.com"}),JSON.stringify({summary:"private copy"})])
     await pool.query(`INSERT INTO workflow_step_runs(id,run_id,step_id,step_type,input,output,error)
       VALUES($1,$2,'fixture','tool_call','{"argument":"private copy"}','{"result":"other@example.com"}','{"error":"private copy"}')`,[step,run])
-    const review=await f.preview();expect(review.blockers).toContainEqual({domain:'workflow_runs',reason:'crm_copy_resolution_required',count:1});expect(review.blockers).toContainEqual({domain:'workflow_step_runs',reason:'crm_copy_resolution_required',count:1})
+    const review=await f.preview();expect(review.blockers).toContainEqual({domain:'workflow_runs',reason:'workflow_artifact_dependency',count:1});expect(review.domains).toContainEqual({domain:'workflow_step_runs',action:'delete',count:1})
     for(const subject of [f.contactId,undefined]){const data=await exported(f.context,subject);expect(data.workflow_runs).toMatchObject([{id:run,crm_event_id:id,input:{},vars:{},outcome:null,error:null}]);expect(data.workflow_step_runs).toMatchObject([{id:step,input:{},output:null,error:null}]);expect(JSON.stringify(data.workflow_runs)).not.toContain('other@example.com')}
     await expect(f.legacy()).rejects.toMatchObject({details:{reason:'crm_copy_resolution_required'}})
     await expect(pool.query('UPDATE workflow_runs SET crm_event_id=NULL WHERE id=$1',[run])).rejects.toMatchObject({code:'55000'})
@@ -137,12 +138,12 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
   it('attributes a legacy orphan through exact typed CRM event fields',async()=>{
     const f=await fixture(),run=randomUUID()
     await pool.query('ALTER TABLE workflow_runs DISABLE TRIGGER crm_privacy_write_admission')
-    try {await pool.query(`INSERT INTO workflow_runs(id,workflow_id,workspace_id,trigger_kind,input)
-      VALUES($1,$2,$3,'event',$4)`,[run,f.workflowId,f.workspaceId,JSON.stringify(f.input(randomUUID()))])}
+    try {await pool.query(`INSERT INTO workflow_runs(id,workflow_id,workspace_id,trigger_kind,input,privacy_lineage_version)
+      VALUES($1,$2,$3,'event',$4,0)`,[run,f.workflowId,f.workspaceId,JSON.stringify(f.input(randomUUID()))])}
     finally{await pool.query('ALTER TABLE workflow_runs ENABLE TRIGGER crm_privacy_write_admission')}
     await expect(pool.query("UPDATE workflow_runs SET input='{}',trigger_kind='manual' WHERE id=$1",[run])).rejects.toMatchObject({code:'55000',message:'crm_workflow_source_immutable'})
     await expect(pool.query("UPDATE workflow_runs SET input=jsonb_set(input,'{event,contactId}',to_jsonb($2::text)) WHERE id=$1",[run,f.otherId])).rejects.toMatchObject({code:'55000',message:'crm_workflow_source_immutable'})
-    expect((await f.preview()).blockers).toContainEqual({domain:'workflow_runs',reason:'crm_copy_resolution_required',count:1})
+    expect((await f.preview()).blockers).toContainEqual({domain:'workflow_runs',reason:'workflow_legacy_lineage_dependency',count:1})
     await expect(f.legacy()).rejects.toMatchObject({details:{reason:'crm_copy_resolution_required'}})
   })
   it('refuses a new workflow from a retired event even in an older repeatable-read snapshot',async()=>{
@@ -172,7 +173,8 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
     try {await expect(f.legacy()).rejects.toMatchObject({details:{reason:'privacy_operation_busy'}})}finally{release.resolve()}
     expect(await dispatch).toBe('delivered')
     expect((await pool.query('SELECT status,delivered_at FROM crm_domain_event_outbox WHERE id=$1',[id])).rows[0]).toMatchObject({status:'delivered',delivered_at:expect.any(Date)})
-    expect((await f.preview()).blockers).toContainEqual({domain:'workflow_runs',reason:'crm_copy_resolution_required',count:1})
+    const ready=await f.preview();expect(ready.blockers).toEqual([]);await f.erase(ready)
+    expect((await pool.query('SELECT privacy_erased FROM workflow_runs WHERE workspace_id=$1',[f.workspaceId])).rows[0].privacy_erased).toBe(true)
   })
   it('skips a privacy-held workspace while leasing another workspace',async()=>{
     const f=await fixture(),other=await fixture(),held=await f.event(),available=await other.event(),client=await pool.connect()
@@ -182,15 +184,16 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
       expect(leased.map(e=>e.id)).toEqual([available]);expect(leased.some(e=>e.id===held)).toBe(false)
     }finally{await client.query('ROLLBACK');client.release()}
   })
-  it('guards CRM run and step writes while leaving ordinary workflow writes available',async()=>{
+  it('serializes run and step writes during privacy and preserves ordinary workflows afterward',async()=>{
     const f=await fixture(),other=await fixture(),id=await f.event(),foreign=await other.event(),run=await f.run(id),step=randomUUID(),client=await pool.connect()
     await pool.query("INSERT INTO workflow_step_runs(id,run_id,step_id,step_type) VALUES($1,$2,'fixture','tool_call')",[step,run])
     try {
       await client.query('BEGIN');await acquireCrmPrivacyAdmission(client,f.workspaceId)
       await expect(pool.query("UPDATE workflow_runs SET vars='{}' WHERE id=$1",[run])).rejects.toMatchObject({code:'55P03'})
       await expect(pool.query("UPDATE workflow_step_runs SET output='{}' WHERE id=$1",[step])).rejects.toMatchObject({code:'55P03'})
-      await pool.query("INSERT INTO workflow_runs(workflow_id,workspace_id,trigger_kind,input) VALUES($1,$2,'manual',$3)",[f.workflowId,f.workspaceId,JSON.stringify(f.input(randomUUID()))])
+      await expect(pool.query("INSERT INTO workflow_runs(workflow_id,workspace_id,trigger_kind,input) VALUES($1,$2,'manual',$3)",[f.workflowId,f.workspaceId,JSON.stringify(f.input(randomUUID()))])).rejects.toMatchObject({code:'55P03'})
     }finally{await client.query('ROLLBACK');client.release()}
+    await pool.query("INSERT INTO workflow_runs(workflow_id,workspace_id,trigger_kind,input) VALUES($1,$2,'manual',$3)",[f.workflowId,f.workspaceId,JSON.stringify(f.input(randomUUID()))])
     await expect(pool.query("INSERT INTO workflow_runs(workflow_id,workspace_id,trigger_kind,input) VALUES($1,$2,'event',$3)",[f.workflowId,f.workspaceId,JSON.stringify(f.input(foreign))])).rejects.toMatchObject({code:'55P03'})
     expect((await pool.query('SELECT id FROM workflow_runs WHERE workspace_id=$1',[f.workspaceId])).rowCount).toBe(2)
   })

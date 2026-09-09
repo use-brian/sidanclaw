@@ -15,6 +15,7 @@ import { getPool, query } from '../db/client.js'
 import { retireCrmIntakeReceipts } from './privacy-policy.js'
 import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
 import { retainCrmAddressSuppression } from './suppression-tombstones.js'
+import { retireWorkflowCopies } from './workflow-copy-resolver.js'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
 import { prepareCrmPrivacyCopies, assertCrmPrivacyCopiesResolvable, deleteCrmPrivacyCopies, retireCrmNotificationCopies } from './privacy-copy-resolver.js'
 
@@ -149,6 +150,7 @@ export async function redactCrmOperationsForContact(
       UPDATE ${domain} t SET ${assignments}
       WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId, contactId])
   }
+  await retireWorkflowCopies(client,workspaceId)
   await retireCrmNotificationCopies(client,workspaceId,contactId)
   await redactCrmDeliveryReceipts(client,workspaceId,contactId)
   // Match retention's enquiry -> receipt ordering. Holding a receipt before
