@@ -26,7 +26,11 @@ describe('[COMP:crm/privacy-admission] Actual transaction admission for CRM priv
   afterAll(async()=>{await pool.end();await appPool.end()})
   it('guards every exported physical domain with an enabled row trigger in the actual schema',async()=>{
     const rows=(await pool.query("SELECT c.relname,t.tgenabled,t.tgtype FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND t.tgname='crm_privacy_write_admission'")).rows
-    expect(rows.map(r=>r.relname).sort()).toEqual(CRM_PRIVACY_COVERAGE.map(e=>e.domain).sort())
+    // Migration 522 adds protected immutable recovery evidence and a schema
+    // registry, not ordinary writable CRM domains. Their dedicated trigger
+    // and application-role denial are asserted by crm-erasure-journal.
+    const protectedRecovery=new Set(['crm_erasure_journal','crm_erasure_journal_targets'])
+    expect(rows.map(r=>r.relname).sort()).toEqual(CRM_PRIVACY_COVERAGE.map(e=>e.domain).filter(name=>!protectedRecovery.has(name)).sort())
     for(const row of rows){expect(row.tgenabled).toBe('O');expect(row.tgtype).toBe(31)}
   })
   it('rejects a privacy operation before it acts while another transaction is writing, then admits retry after rollback',async()=>{

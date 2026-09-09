@@ -1906,7 +1906,7 @@ async function dispatchToolCall(
       const resolvedConfirmation = await tool.resolveConfirmation({
         userId: ctx.run.triggeredBy ?? ctx.workflow.createdBy,
         assistantId: ctx.toolAssistantId,
-        sessionId: `workflow_run_${ctx.run.id}`,
+        sessionId: ctx.run.id,
         appId: 'Use Brian',
         channelType: 'workflow',
         channelId: ctx.run.id,
@@ -1927,7 +1927,7 @@ async function dispatchToolCall(
         const lines = await tool.describeConfirmation(interpolatedArgs, {
           userId: ctx.run.triggeredBy ?? ctx.workflow.createdBy,
           assistantId: ctx.toolAssistantId,
-          sessionId: `workflow_run_${ctx.run.id}`,
+          sessionId: ctx.run.id,
           appId: 'Use Brian',
           channelType: 'workflow',
           channelId: ctx.run.id,
@@ -1969,7 +1969,7 @@ async function dispatchToolCall(
   const toolContext: ToolContext = {
     userId: ctx.run.triggeredBy ?? ctx.workflow.createdBy,
     assistantId: ctx.toolAssistantId,
-    sessionId: `workflow_run_${ctx.run.id}`,
+    sessionId: ctx.run.id,
     appId: 'Use Brian',
     channelType: 'workflow',
     channelId: ctx.run.id,

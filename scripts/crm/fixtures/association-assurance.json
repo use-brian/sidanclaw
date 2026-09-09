@@ -1,0 +1,799 @@
+{
+  "schemaVersion": 1,
+  "caseDescriptions": {
+    "M1": "Workspace backfill and disabled defaults",
+    "M2": "Independent module, Home and tool authority",
+    "M3": "Transactional order versus shutdown admission",
+    "M4": "Drain restart and disabled recovery",
+    "A": "Catalog, manifest and credential conformance",
+    "B": "Durable verified intake and replay",
+    "C": "Consent ordering and suppression",
+    "C2": "Managed send admission and retry",
+    "D": "Effective entitlement lifecycle",
+    "E": "Participation identity and inventory boundary",
+    "E2": "Order capacity and provider reconciliation",
+    "F": "Import reconciliation and resume",
+    "G": "Privacy export and reviewed erasure",
+    "G2": "Sensitive copies and recovery erasure replay",
+    "H": "Complete workflows and committed inventory events",
+    "I": "Restore, integrity and application-role isolation",
+    "J": "Native operator controls",
+    "K": "Paced workload, outage and burst recovery"
+  },
+  "suites": [
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/association-concurrency.integration.test.ts",
+      "cases": [
+        "M3",
+        "M4",
+        "E2",
+        "H",
+        "I"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/association-inventory.integration.test.ts",
+      "cases": [
+        "M2",
+        "E",
+        "E2",
+        "H"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/association-provider.integration.test.ts",
+      "cases": [
+        "M4",
+        "E2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/association-tools.integration.test.ts",
+      "cases": [
+        "M1",
+        "M2",
+        "E2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/association-waitlist.integration.test.ts",
+      "cases": [
+        "E",
+        "E2",
+        "H"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-address-suppression.integration.test.ts",
+      "cases": [
+        "C",
+        "C2",
+        "G"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-aliases.integration.test.ts",
+      "cases": [
+        "B",
+        "G"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-assurance-workflows.integration.test.ts",
+      "cases": [
+        "H",
+        "C2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-config-catalog.integration.test.ts",
+      "cases": [
+        "A"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-config-commands.integration.test.ts",
+      "cases": [
+        "A",
+        "M2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-consent-wording.integration.test.ts",
+      "cases": [
+        "C"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-copy-erasure.integration.test.ts",
+      "cases": [
+        "G",
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-correction-erasure.integration.test.ts",
+      "cases": [
+        "G",
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-delivery-receipts.integration.test.ts",
+      "cases": [
+        "C2",
+        "H"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-effective-entitlements.integration.test.ts",
+      "cases": [
+        "D"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-entitlement-lifecycle.integration.test.ts",
+      "cases": [
+        "D"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-entitlement-periods.integration.test.ts",
+      "cases": [
+        "D"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-erasure-journal.integration.test.ts",
+      "cases": [
+        "G2",
+        "I"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-evidence-replay.integration.test.ts",
+      "cases": [
+        "B",
+        "C",
+        "G"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-file-cleanup.integration.test.ts",
+      "cases": [
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-import-atomic.integration.test.ts",
+      "cases": [
+        "F"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-import-erasure.integration.test.ts",
+      "cases": [
+        "F",
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-import-sources.integration.test.ts",
+      "cases": [
+        "F"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-intake-identity.integration.test.ts",
+      "cases": [
+        "B"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-intake-retirement.integration.test.ts",
+      "cases": [
+        "B",
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-intake-rotation.integration.test.ts",
+      "cases": [
+        "B"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-intake-verification.integration.test.ts",
+      "cases": [
+        "B"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-integration-commands.integration.test.ts",
+      "cases": [
+        "A",
+        "M2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-integration-imports.integration.test.ts",
+      "cases": [
+        "A",
+        "F"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-integration-store.integration.test.ts",
+      "cases": [
+        "A",
+        "I"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-managed-mailbox.integration.test.ts",
+      "cases": [
+        "C2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-manifest.integration.test.ts",
+      "cases": [
+        "A",
+        "F"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-notification-erasure.integration.test.ts",
+      "cases": [
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-pagination.integration.test.ts",
+      "cases": [
+        "A",
+        "F"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-privacy-admission.integration.test.ts",
+      "cases": [
+        "G",
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-privacy-export.integration.test.ts",
+      "cases": [
+        "G"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-privacy-previews.integration.test.ts",
+      "cases": [
+        "G"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-recovery.integration.test.ts",
+      "cases": [
+        "G2",
+        "I"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-retention.integration.test.ts",
+      "cases": [
+        "G",
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-sendability.integration.test.ts",
+      "cases": [
+        "C",
+        "C2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/crm-workflow-erasure.integration.test.ts",
+      "cases": [
+        "G2"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/provider-inbox.integration.test.ts",
+      "cases": [
+        "E2",
+        "D"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/workspace-flush-editions.integration.test.ts",
+      "cases": [
+        "G",
+        "G2",
+        "I"
+      ]
+    },
+    {
+      "group": "database",
+      "file": "packages/api/src/db/__tests__/workspace-modules-store.integration.test.ts",
+      "cases": [
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "I"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/delivery-command.test.ts",
+      "cases": [
+        "C2",
+        "H"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/domain-event-worker.test.ts",
+      "cases": [
+        "H",
+        "K"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/entitlement-worker.test.ts",
+      "cases": [
+        "D"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/identity-verification.test.ts",
+      "cases": [
+        "B"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/import-authority.test.ts",
+      "cases": [
+        "A",
+        "F"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/import-service.test.ts",
+      "cases": [
+        "F"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/local-fixture.test.ts",
+      "cases": [
+        "I"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/manifest-client.test.ts",
+      "cases": [
+        "A"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/manifest-plan.test.ts",
+      "cases": [
+        "A"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/pagination.test.ts",
+      "cases": [
+        "A",
+        "F"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/privacy-export.test.ts",
+      "cases": [
+        "G"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/privacy.test.ts",
+      "cases": [
+        "G"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/recovery-tools.test.ts",
+      "cases": [
+        "G2",
+        "I"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/reference-intake.test.ts",
+      "cases": [
+        "B",
+        "K"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/retention-worker.test.ts",
+      "cases": [
+        "G2"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/service.test.ts",
+      "cases": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/association/__tests__/assurance-workflows.test.ts",
+      "cases": [
+        "H"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/association/__tests__/domain.test.ts",
+      "cases": [
+        "E2"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/association/__tests__/lifecycle-worker.test.ts",
+      "cases": [
+        "M4",
+        "E2"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/association/__tests__/provider-inbox-worker.test.ts",
+      "cases": [
+        "D",
+        "E2"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/association/__tests__/provider-reference.test.ts",
+      "cases": [
+        "D",
+        "E2",
+        "K"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/association/__tests__/service.test.ts",
+      "cases": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/crm-operations/__tests__/assurance-harness.test.ts",
+      "cases": [
+        "A",
+        "I"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/routes/__tests__/association.test.ts",
+      "cases": [
+        "M2",
+        "E2"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/routes/__tests__/crm-integration.test.ts",
+      "cases": [
+        "A",
+        "M2"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/routes/__tests__/crm-intake.test.ts",
+      "cases": [
+        "B"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/routes/__tests__/crm-operations-intake-config.test.ts",
+      "cases": [
+        "A"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/routes/__tests__/home-apps.test.ts",
+      "cases": [
+        "M1",
+        "M2"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/association/__tests__/tools.test.ts",
+      "cases": [
+        "M2",
+        "E2"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/association/__tests__/waitlist.test.ts",
+      "cases": [
+        "E",
+        "H"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/operations-tools.test.ts",
+      "cases": [
+        "M2",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/operations-types.test.ts",
+      "cases": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/integration-authority.test.ts",
+      "cases": [
+        "A",
+        "M2"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/config-commands.test.ts",
+      "cases": [
+        "A"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/manifest.test.ts",
+      "cases": [
+        "A"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/sendability.test.ts",
+      "cases": [
+        "C"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/crm/__tests__/segments.test.ts",
+      "cases": [
+        "A",
+        "C",
+        "D"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/workflow/__tests__/crm-event-trigger.test.ts",
+      "cases": [
+        "H"
+      ]
+    },
+    {
+      "group": "shared",
+      "file": "packages/shared/src/__tests__/workspace-modules.test.ts",
+      "cases": [
+        "M1",
+        "M2"
+      ]
+    },
+    {
+      "group": "shared",
+      "file": "packages/shared/src/__tests__/home-apps.test.ts",
+      "cases": [
+        "M1",
+        "M2"
+      ]
+    },
+    {
+      "group": "shared",
+      "file": "packages/shared/src/__tests__/home-app-tool-config.test.ts",
+      "cases": [
+        "M1",
+        "M2"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/association-api.test.ts",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/association-surface.test.tsx",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/credentials-api.test.ts",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/credentials-panel.test.tsx",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/mailbox-panel.test.tsx",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/operator-workflows.test.tsx",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/privacy-api.test.ts",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/association/__tests__/privacy-panel.test.tsx",
+      "cases": [
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/studio/__tests__/home-app-tool-settings.test.tsx",
+      "cases": [
+        "M2",
+        "J"
+      ]
+    },
+    {
+      "group": "web",
+      "file": "apps/app-web/src/components/workflow/__tests__/crm-event-source.test.tsx",
+      "cases": [
+        "H",
+        "J"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/workflow/__tests__/executor.test.ts",
+      "cases": [
+        "H"
+      ]
+    },
+    {
+      "group": "core",
+      "file": "packages/core/src/tasks/__tests__/tools.test.ts",
+      "cases": [
+        "H"
+      ]
+    },
+    {
+      "group": "api",
+      "file": "packages/api/src/workflow/__tests__/approval.test.ts",
+      "cases": [
+        "H"
+      ]
+    }
+  ],
+  "ownerGates": [
+    "integration",
+    "data",
+    "privacy",
+    "deployment",
+    "staff",
+    "measured_soak"
+  ],
+  "groupTimeoutSeconds": 900
+}

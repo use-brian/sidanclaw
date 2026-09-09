@@ -103,7 +103,9 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
     expect(Object.keys(lease).sort()).toEqual(['attempts','id','workspaceId'])
     await f.erase(await f.preview())
     const dispatch=vi.fn();expect(await outbox.dispatchLeased(lease,'fixture_worker',dispatch)).toBe('skipped');expect(dispatch).not.toHaveBeenCalled()
-    expect(await outbox.leaseBatch('other_worker',50,60_000)).toEqual([])
+    // This worker is global. Other isolated test workspaces can legitimately
+    // have pending events; none from the erased fixture may be leased again.
+    expect((await outbox.leaseBatch('other_worker',50,60_000)).some(row=>row.workspaceId===f.workspaceId)).toBe(false)
     await expect(pool.query("UPDATE crm_domain_event_outbox SET payload='{}' WHERE id=$1",[id])).rejects.toMatchObject({code:'55000',message:'crm_delivery_retired'})
     await expect(pool.query("UPDATE association_notification_outbox SET status='pending' WHERE id=$1",[notification])).rejects.toMatchObject({code:'55000',message:'crm_delivery_retired'})
   })

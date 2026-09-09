@@ -26,9 +26,10 @@ beforeEach(() => {
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
 
 describe('[COMP:app-web/home-app-tool-settings] per-assistant switches', () => {
-  it('renders all six apps and their tool sets, preserving child choices when the app is disabled', async () => {
+  it('renders all seven apps and their tool sets, preserving child choices when the app is disabled', async () => {
     await render();
-    expect(container.querySelectorAll('[role="switch"]').length).toBe(18);
+    expect(container.querySelectorAll('[role="switch"]').length).toBe(21);
+    expect(button('Association: Read').getAttribute('aria-checked')).toBe('true');
     fetchMock.mockResolvedValueOnce(response({ capability: 'page', enabled: false }));
     await act(async () => button('Page').click());
     expect(fetchMock).toHaveBeenLastCalledWith(expect.stringContaining('/assistants/assistant-one/primitive-grants/page'), expect.objectContaining({ method: 'PATCH', body: '{"enabled":false}' }));

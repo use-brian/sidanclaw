@@ -196,9 +196,11 @@ describe('[COMP:crm/delivery-receipts] Durable email acceptance and replay',()=>
     // Receipt reads must return the committed claim while the provider holds
     // its row lock. They neither wait for the send nor steal the attempt.
     expect(await deliveries.get(f.context,f.command.deliveryId)).toMatchObject({status:'dispatching'})
-    const erase=f.erase()
+    // Privacy admission refuses a live writer; it does not queue an erase
+    // behind an external provider call. Retry only after acceptance commits.
+    await expect(f.erase()).rejects.toMatchObject({code:'conflict',details:{reason:'privacy_operation_busy'}})
     release.resolve()
-    await send;await erase
+    await send;await f.erase()
     const audit=(await pool.query("SELECT metadata FROM association_audit_log WHERE workspace_id=$1 AND action='crm.delivery.accepted'",[f.workspaceId])).rows
     expect(audit).toEqual([{metadata:{erased:true}}])
     expect(await deliveries.get(f.context,f.command.deliveryId)).toMatchObject({status:'sent',providerReceipt:null})
