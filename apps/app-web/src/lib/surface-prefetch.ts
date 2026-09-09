@@ -41,7 +41,7 @@ import { getView } from "@/lib/api/views";
 import { listWorkflows } from "@/lib/api/workflow";
 
 /** Surfaces whose landing data is a single workspace-scoped list. */
-export type WarmableSurface = "tasks" | "crm" | "workflow";
+export type WarmableSurface = "tasks" | "crm" | "association" | "workflow";
 
 /**
  * The signed-in viewer's id, appended to every workspace-scoped LIST key.
@@ -102,6 +102,15 @@ export function crmConfigCacheKey(workspaceId: string): string {
 
 export function associationModuleCacheKey(workspaceId: string): string {
   return `association-module:${workspaceId}${viewerSuffix()}`;
+}
+
+export function associationPageCacheKey(workspaceId:string,resource:string,query:Record<string,unknown>={}):string {
+  return `crm:${workspaceId}${viewerSuffix()}:association:${resource}:${JSON.stringify(query)}`;
+}
+
+/** Browser-tab request references contain no form content. */
+export function associationIntentKey(workspaceId:string,operation:string,target:string):string {
+  return `association-intent:${workspaceId}${viewerSuffix()}:${operation}:${target}`;
 }
 
 export function associationOrdersCacheKey(workspaceId: string, cursor: string | null): string {
@@ -177,6 +186,11 @@ export function warmTargetFor(
         key: surfaceDataKey("tasks", workspaceId) as string,
         fetch: () => fetchWorkspaceTasks(workspaceId),
       };
+    case "association":
+      return {
+        key: associationModuleCacheKey(workspaceId),
+        fetch: () => import("@/lib/api/association").then(m => m.getAssociationModuleSnapshot(workspaceId)),
+      };
     case "crm":
       return {
         key: crmConfigCacheKey(workspaceId),
@@ -190,7 +204,7 @@ export function warmTargetFor(
   }
 }
 
-const WARMABLE: ReadonlySet<string> = new Set<WarmableSurface>(["tasks", "crm", "workflow"]);
+const WARMABLE: ReadonlySet<string> = new Set<WarmableSurface>(["tasks", "crm", "association", "workflow"]);
 
 /**
  * Kick off the destination surface's landing fetch. No-op when the surface has

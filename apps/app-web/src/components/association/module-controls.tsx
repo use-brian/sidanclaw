@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { ListSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 
-function useAssociationModule(workspaceId: string) {
+export function useAssociationModule(workspaceId: string) {
   return useCachedResource(workspaceId ? associationModuleCacheKey(workspaceId) : null,
     () => getAssociationModuleSnapshot(workspaceId));
 }

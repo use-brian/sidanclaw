@@ -28,6 +28,7 @@ export function AssociationOrdersPanel({ workspaceId }: { workspaceId: string })
       if (!await confirmDialog({ title: label, description: action === "cancel" ? t.cancelOrderConfirm : t.confirmFreeDescription, confirmLabel: label, cancelLabel: t.cancel })) return;
       setSaveError(false);
       await changeAssociationOrder(workspaceId, orderId, action);
+      markSurfaceCacheStale(`crm:${workspaceId}:`);
       markSurfaceCacheStale(`association-orders:${workspaceId}`);
       markSurfaceCacheStale(`association-module:${workspaceId}`);
       await refresh();
