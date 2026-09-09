@@ -364,10 +364,12 @@ export const GrantCrmEntitlementCommandSchema = z.object({
   renewalMode: z.enum(['none', 'manual', 'auto']).default('none'),
   provider: CrmOperationsStableKeySchema.optional(),
   providerEntitlementId: z.string().trim().min(1).max(500).optional(),
+  providerPeriodId: z.string().trim().min(1).max(500).optional(),
+  predecessorId: CrmOperationsUuidSchema.optional(),
 }).refine(
   (value) => (value.provider === undefined) === (value.providerEntitlementId === undefined),
   'provider and providerEntitlementId must be supplied together',
-).refine(
+).refine(value => !value.providerPeriodId || (!!value.provider && !!value.endsAt), 'A provider period requires provider identity and a finite end').refine(value => !value.predecessorId || !!value.providerPeriodId, 'A predecessor requires a provider period').refine(
   (value) => !value.endsAt || value.startsAt < value.endsAt,
   'endsAt must be after startsAt',
 )

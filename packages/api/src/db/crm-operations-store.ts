@@ -25,6 +25,8 @@ import { readCrmPrivacyPolicy, saveCrmPrivacyPolicy } from '../crm-operations/pr
 import { releaseCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 import { saveCrmManagedMailboxPolicy, saveCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
 import { saveCrmEntitlementPlanRecord, saveCrmEventRecord } from './association-store.js'
+import { prepareProviderEntitlementPeriod, requireProviderEntitlementActor } from '../crm-operations/entitlement-periods.js'
+import { actorAuditIdentity } from '@use-brian/core'
 import { lockAssociationInventory, refreshAssociationInventory } from '../association/inventory.js'
 import type { PlanInput, EventInput } from '../association/domain.js'
 import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
@@ -934,6 +936,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async grantEntitlement(params) {
+      if (params.provider) {
+        requireProviderEntitlementActor({ credentialKind: context.actor.kind, credentialId: actorAuditIdentity(context.actor).actorCredentialId },
+          String(params.provider), context.actor.kind === 'provider' ? context.actor.provider : undefined)
+      }
+      const period = await prepareProviderEntitlementPeriod(client, workspaceId, params as Parameters<typeof prepareProviderEntitlementPeriod>[2])
+      if (period) params = { ...params, requestHash: period.requestHash }
+
       const legacyRequestHash = crmOperationsSha256({
         contactId: params.contactId,
         planId: params.planId,
@@ -946,20 +955,20 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         providerMembershipId: params.providerEntitlementId,
       })
       const sameRequest = (fingerprint: unknown) => fingerprint === params.requestHash
-        || fingerprint === legacyRequestHash
+        || (!params.providerPeriodId && fingerprint === legacyRequestHash)
       const existing = await client.query<DbRecord>(
         `SELECT m.id, m.contact_id AS "contactId", m.plan_id AS "planId",
                 p.plan_key AS "planKey", p.name AS "planName", m.status, m.starts_at AS "startsAt",
                 m.ends_at AS "endsAt", m.renewal_mode AS "renewalMode",
                 m.idempotency_key AS "idempotencyKey",
-                m.provider, m.provider_membership_id AS "providerEntitlementId",
+                m.provider, m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                 m.request_fingerprint AS "requestFingerprint",
                 m.created_at AS "createdAt", m.updated_at AS "updatedAt"
            FROM association_memberships m
            JOIN association_membership_plans p
              ON p.workspace_id=m.workspace_id AND p.id=m.plan_id
-          WHERE m.workspace_id=$1 AND m.idempotency_key=$2`,
-        [workspaceId, params.idempotencyKey],
+          WHERE m.workspace_id=$1 AND (m.idempotency_key=$2 OR m.id=$3) ORDER BY (m.idempotency_key=$2) DESC`,
+        [workspaceId, params.idempotencyKey, period?.existingId ?? null],
       )
       if (existing.rows[0]) {
         if (!sameRequest(existing.rows[0].requestFingerprint)) {
@@ -989,14 +998,14 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       const inserted = await client.query<{ id: string }>(
         `INSERT INTO association_memberships (
            workspace_id,contact_id,plan_id,idempotency_key,request_fingerprint,
-           status,starts_at,ends_at,renewal_mode,provider,provider_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           status,starts_at,ends_at,renewal_mode,provider,provider_membership_id,provider_period_id,predecessor_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (workspace_id,idempotency_key) DO NOTHING
          RETURNING id`,
         [workspaceId, params.contactId, params.planId, params.idempotencyKey,
           params.requestHash, params.status, params.startsAt, params.endsAt ?? null,
           params.renewalMode, params.provider ?? null,
-          params.providerEntitlementId ?? null],
+          params.providerEntitlementId ?? null, params.providerPeriodId ?? null, params.predecessorId ?? null],
       )
       if (!inserted.rows[0]) {
         const raced = await client.query<DbRecord>(
@@ -1005,7 +1014,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                   m.starts_at AS "startsAt", m.ends_at AS "endsAt",
                   m.renewal_mode AS "renewalMode", m.provider,
                   m.idempotency_key AS "idempotencyKey",
-                  m.provider_membership_id AS "providerEntitlementId",
+                  m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                   m.request_fingerprint AS "requestFingerprint",
                   m.created_at AS "createdAt", m.updated_at AS "updatedAt"
              FROM association_memberships m
@@ -1032,7 +1041,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                 m.starts_at AS "startsAt", m.ends_at AS "endsAt",
                 m.renewal_mode AS "renewalMode", m.provider,
                 m.idempotency_key AS "idempotencyKey",
-                m.provider_membership_id AS "providerEntitlementId",
+                m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                 m.created_at AS "createdAt", m.updated_at AS "updatedAt"
            FROM association_memberships m
            JOIN association_membership_plans p
@@ -1056,14 +1065,16 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     async updateEntitlement(entitlementId, changes) {
       if(context.actor.kind==='system_job' && context.actor.job==='entitlement_expiry')
         throw new CrmOperationsError('not_authorized','Expiry jobs must recheck a due manual entitlement.')
-      const current = await client.query<{ status: string; startsAt: Date }>(
-        `SELECT status, starts_at AS "startsAt"
+      const current = await client.query<{ status: string; startsAt: Date; provider: string | null }>(
+        `SELECT status, starts_at AS "startsAt",provider
            FROM association_memberships
           WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
         [workspaceId, entitlementId],
       )
       const entitlement = current.rows[0]
       if (!entitlement) return null
+      if (entitlement.provider) requireProviderEntitlementActor({ credentialKind: context.actor.kind, credentialId: actorAuditIdentity(context.actor).actorCredentialId },
+        entitlement.provider, context.actor.kind === 'provider' ? context.actor.provider : undefined)
       if (typeof changes.status === 'string'
         && !mayTransitionCrmEntitlement(entitlement.status, changes.status)) {
         throw new CrmOperationsError(
@@ -1089,7 +1100,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                    starts_at AS "startsAt",ends_at AS "endsAt",
                    idempotency_key AS "idempotencyKey",
                    renewal_mode AS "renewalMode",provider,
-                   provider_membership_id AS "providerEntitlementId",
+                   provider_membership_id AS "providerEntitlementId",provider_period_id AS "providerPeriodId",predecessor_id AS "predecessorId",
                    created_at AS "createdAt",updated_at AS "updatedAt"`,
         [workspaceId, entitlementId, changes.status ?? null,
           Object.prototype.hasOwnProperty.call(changes, 'endsAt'), changes.endsAt ?? null,

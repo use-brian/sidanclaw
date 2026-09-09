@@ -348,7 +348,7 @@ export function createDbCrmIntakeReadStore(integration?: CrmIntegrationAuthority
                 crm_entitlement_is_effective(m.status,m.starts_at,m.ends_at,${at}) AS "isEffective",
                 to_char(${at} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "effectiveAt",
                 m.renewal_mode AS "renewalMode", m.provider,
-                m.provider_membership_id AS "providerEntitlementId",
+                m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                 m.created_at AS "createdAt", m.updated_at AS "updatedAt"
            FROM association_memberships m
            JOIN association_membership_plans p

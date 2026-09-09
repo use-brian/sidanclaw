@@ -82,10 +82,15 @@ export async function authorizeCrmIntegrationCommand(client: PoolClient, context
     // Suppression affects an address/channel across purposes. A purpose-limited
     // credential cannot perform that wider mutation through a consent route.
     case 'record_suppression': required('crm.consent.write', { purposeKeys: null }); break
-    case 'grant_entitlement': required('crm.entitlements.write', { planIds: command.planId }); break
+    case 'grant_entitlement':
+      required('crm.entitlements.write', { planIds: command.planId })
+      if (command.provider) required('association.provider_events.write', { providerKeys: command.provider })
+      break
     case 'update_entitlement': {
-      const grant = await existing('SELECT plan_id FROM association_memberships WHERE workspace_id=$1 AND id=$2', command.entitlementId)
-      required('crm.entitlements.write', { planIds: grant.plan_id }); break
+      const grant = await existing('SELECT plan_id,provider FROM association_memberships WHERE workspace_id=$1 AND id=$2', command.entitlementId)
+      required('crm.entitlements.write', { planIds: grant.plan_id })
+      if (grant.provider) required('association.provider_events.write', { providerKeys: grant.provider })
+      break
     }
     case 'record_participation': required('crm.participation.write', { eventIds: command.eventId }); break
     case 'update_participation': {

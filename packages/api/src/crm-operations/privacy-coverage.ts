@@ -228,6 +228,8 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "renewal_mode",
       "provider",
       "provider_membership_id",
+      "provider_period_id",
+      "predecessor_id",
       "created_at",
       "updated_at"
     ],
@@ -235,7 +237,7 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     "orderBy": "t.id",
     "subjectWhere": "t.contact_id=$2",
     "workspaceWhere": "true",
-    "subjectRedactions": {},
+    "subjectRedactions": { "provider_period_id": "NULL" },
     "transforms": {},
     "reason": "Rows follow explicit CRM attribution."
   },

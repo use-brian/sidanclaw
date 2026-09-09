@@ -11,6 +11,8 @@
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import { CrmOperationsError, CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
+import { prepareProviderEntitlementPeriod, requireProviderEntitlementActor } from '../crm-operations/entitlement-periods.js'
+import { mayTransitionCrmEntitlement } from '@use-brian/core'
 import {lockAssociationInventory,refreshAssociationInventory} from '../association/inventory.js'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { getPool } from './client.js'
@@ -177,7 +179,7 @@ const MEMBERSHIP_SELECT = `
   m.plan_id AS "planId", p.plan_key AS "planKey", p.name AS "planName",
   m.idempotency_key AS "idempotencyKey", m.status, m.starts_at AS "startsAt",
   m.ends_at AS "endsAt", m.renewal_mode AS "renewalMode", m.provider,
-  m.provider_membership_id AS "providerMembershipId",
+  m.provider_membership_id AS "providerMembershipId", m.provider_period_id AS "providerPeriodId", m.predecessor_id AS "predecessorId",
   m.created_at AS "createdAt", m.updated_at AS "updatedAt"`
 const EVENT_SELECT = `
   id, workspace_id AS "workspaceId", slug, programme_key AS "programmeKey",
@@ -636,14 +638,21 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async createMembership(workspaceId, input, actor) {
       return transaction(pool, async (client) => {
-        const fingerprint = associationFingerprint(input)
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
+        authorizeIntegration(actor, 'crm.entitlements.write', { planIds: input.planId }, integration)
+        if (input.provider) {
+          requireProviderEntitlementActor(actor, input.provider)
+          authorizeIntegration(actor, 'association.provider_events.write', { providerKeys: input.provider }, integration)
+        }
+        const period = await prepareProviderEntitlementPeriod(client, workspaceId, { ...input, providerEntitlementId: input.providerMembershipId })
+        const fingerprint = period?.requestHash ?? associationFingerprint(input)
         const existing = await client.query<DbRow>(
           `SELECT ${MEMBERSHIP_SELECT}, m.request_fingerprint AS "requestFingerprint"
              FROM association_memberships m
              JOIN association_membership_plans p
                ON p.workspace_id = m.workspace_id AND p.id = m.plan_id
-            WHERE m.workspace_id = $1 AND m.idempotency_key = $2 FOR UPDATE`,
-          [workspaceId, input.idempotencyKey],
+            WHERE m.workspace_id = $1 AND (m.idempotency_key = $2 OR m.id=$3) ORDER BY (m.idempotency_key=$2) DESC FOR UPDATE OF m`,
+          [workspaceId, input.idempotencyKey, period?.existingId ?? null],
         )
         if (existing.rows[0]) {
           if (existing.rows[0].requestFingerprint !== fingerprint) {
@@ -662,13 +671,13 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
           `INSERT INTO association_memberships
              (workspace_id, contact_id, plan_id, idempotency_key,
               request_fingerprint, status, starts_at, ends_at, renewal_mode,
-              provider, provider_membership_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+              provider, provider_membership_id, provider_period_id, predecessor_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            ON CONFLICT (workspace_id, idempotency_key) DO NOTHING
            RETURNING id`,
           [workspaceId, input.contactId, input.planId, input.idempotencyKey,
             fingerprint, input.status, input.startsAt, input.endsAt ?? null,
-            input.renewalMode, input.provider ?? null, input.providerMembershipId ?? null],
+            input.renewalMode, input.provider ?? null, input.providerMembershipId ?? null, input.providerPeriodId ?? null, input.predecessorId ?? null],
         )
         if (!inserted.rows[0]) {
           const raced = await client.query<DbRow>(
@@ -721,12 +730,22 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
 
     async updateMembership(workspaceId, id, input, actor) {
       return transaction(pool, async (client) => {
-        const current = await client.query<{ starts_at: Date }>(
-          `SELECT starts_at FROM association_memberships
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
+        const current = await client.query<{ starts_at: Date; status: string; plan_id: string; provider: string | null }>(
+          `SELECT starts_at,status,plan_id,provider FROM association_memberships
             WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
           [workspaceId, id],
         )
         if (!current.rows[0]) throw new AssociationError('not_found', 'membership not found')
+        const membership = current.rows[0]
+        authorizeIntegration(actor, 'crm.entitlements.write', { planIds: membership.plan_id }, integration)
+        if (membership.provider) {
+          requireProviderEntitlementActor(actor, membership.provider)
+          authorizeIntegration(actor, 'association.provider_events.write', { providerKeys: membership.provider }, integration)
+        }
+        if (input.status && !mayTransitionCrmEntitlement(membership.status, input.status)) {
+          throw new AssociationError('invalid_transition', 'Terminal membership cannot be revived; renew with a new period.')
+        }
         if (input.endsAt && new Date(input.endsAt) <= current.rows[0].starts_at) {
           throw new AssociationError('conflict', 'endsAt must be after startsAt')
         }

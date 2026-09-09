@@ -122,13 +122,15 @@ export const AssociationMembershipInputSchema = z.object({
   renewalMode: z.enum(['none', 'manual', 'auto']).default('none'),
   provider: ProviderKey.optional(),
   providerMembershipId: z.string().trim().min(1).max(500).optional(),
+  providerPeriodId: z.string().trim().min(1).max(500).optional(),
+  predecessorId: UUID.optional(),
 }).refine(
   (value) => !value.endsAt || value.startsAt < value.endsAt,
   'endsAt must be after startsAt',
 ).refine(
   (value) => (value.provider === undefined) === (value.providerMembershipId === undefined),
   'provider and providerMembershipId must be supplied together',
-)
+).refine(value => !value.providerPeriodId || (!!value.provider && !!value.endsAt), 'A provider period requires provider identity and a finite end').refine(value => !value.predecessorId || !!value.providerPeriodId, 'A predecessor requires a provider period')
 export type AssociationMembershipInput = z.infer<typeof AssociationMembershipInputSchema>
 
 export const AssociationMembershipUpdateSchema = z.object({

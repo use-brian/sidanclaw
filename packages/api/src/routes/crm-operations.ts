@@ -164,6 +164,8 @@ const GrantEntitlementBody = z.object({
   renewalMode: z.enum(['none', 'manual', 'auto']).default('none'),
   provider: CrmOperationsStableKeySchema.optional(),
   providerEntitlementId: z.string().trim().min(1).max(500).optional(),
+  providerPeriodId: z.string().trim().min(1).max(500).optional(),
+  predecessorId: CrmOperationsUuidSchema.optional(),
 }).strict().refine(
   (value) => (value.provider === undefined) === (value.providerEntitlementId === undefined),
   'provider and providerEntitlementId must be supplied together',

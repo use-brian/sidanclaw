@@ -206,6 +206,8 @@ const GrantEntitlementInputSchema = z.object({
   renewal_mode: z.enum(['none', 'manual', 'auto']).default('none'),
   provider: CrmOperationsStableKeySchema.optional(),
   provider_entitlement_id: z.string().trim().min(1).max(500).optional(),
+  provider_period_id: z.string().trim().min(1).max(500).optional(),
+  predecessor_id: CrmOperationsUuidSchema.optional(),
 }).strict().refine(
   (value) => (value.provider === undefined) === (value.provider_entitlement_id === undefined),
   'provider and provider_entitlement_id must be supplied together',
@@ -600,7 +602,7 @@ export function createCrmOperationsTools(options: {
   })
   const grantCrmEntitlement = buildTool({
     name: 'grantCrmEntitlement', requiresCapability: 'crm',
-    description: 'Idempotently grant a CRM entitlement to a contact using a stable plan_id from listCrmEntitlementPlans. This uses the same canonical membership row seen by Association operations.',
+    description: 'Idempotently grant a CRM entitlement to a contact using a stable plan_id from listCrmEntitlementPlans. This uses the same canonical membership row seen by Association operations. Provider-backed grants require backend evidence authority. A renewal after a terminal grant needs a new provider_period_id and its predecessor_id; active periods extend in place.',
     inputSchema: GrantEntitlementInputSchema,
     execute: write((input) => ({
       kind: 'grant_entitlement', contactId: input.contact_id, planId: input.plan_id,
@@ -608,6 +610,7 @@ export function createCrmOperationsTools(options: {
       startsAt: input.starts_at, endsAt: input.ends_at,
       renewalMode: input.renewal_mode, provider: input.provider,
       providerEntitlementId: input.provider_entitlement_id,
+      providerPeriodId: input.provider_period_id, predecessorId: input.predecessor_id,
     } as CrmOperationsCommand)),
   })
   const updateCrmEntitlement = buildTool({

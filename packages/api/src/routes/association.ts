@@ -371,6 +371,7 @@ export function associationRoutes(opts: Options): Router {
       renewalMode: input.renewalMode,
       provider: input.provider,
       providerEntitlementId: input.providerMembershipId,
+      providerPeriodId: input.providerPeriodId, predecessorId: input.predecessorId,
     })
     res.status(output.created ? 201 : 200).json({
       membership: associationMembership(res.locals.associationAuth.workspaceId, output.record),
