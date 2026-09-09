@@ -9,6 +9,7 @@ import {
   speakerIdentityFromUser,
 } from '../_prompt-builder.js'
 import type { Message } from '@use-brian/core'
+import { systemContextParts } from '@use-brian/core'
 
 const baseArgs = {
   basePrompt: 'LAYER1_BASE',
@@ -529,6 +530,28 @@ describe('[COMP:prompt/builder] maybeAppendFollowupChips — chip addendum gatin
 })
 
 describe('[COMP:prompt/builder] buildSplitSystemPrompt — provenance split', () => {
+  it('keeps private boundaries in the separate runtime system block and quotes on the user turn', () => {
+    const split = buildSplitSystemPrompt({
+      ...baseArgs,
+      sessionStateBlock: '# Open commitments\nPrepare a fictional weekly update.',
+      replyContext: { text: 'Visible quote', fromAssistant: false },
+    })
+    const parts = systemContextParts({
+      systemPrompt: split.stablePrompt,
+      runtimeSystemContext: formatPrivateRuntimeContext(split.privateRuntimeContext),
+    })
+    expect(parts).toHaveLength(2)
+    expect(parts[0]).toBe(split.stablePrompt)
+    expect(parts[0]).not.toContain('# Open commitments')
+    expect(parts[1]).toContain('# Runtime context boundary')
+    expect(parts[1]).toContain('<private_runtime_context>')
+    expect(parts[1]).toContain('# Open commitments')
+    expect(parts.join('')).not.toContain('Visible quote')
+    const messages = attachUserVisibleContext([{ role: 'user', content: 'Translate this.' }], split.userVisibleContext)
+    expect(JSON.stringify(messages)).toContain('Visible quote')
+    expect(JSON.stringify(messages)).not.toContain('Open commitments')
+    expect(JSON.stringify(messages)).not.toContain('Current time')
+  })
   it('keeps stablePrompt byte-identical while private runtime context changes', () => {
     const turnA = buildSplitSystemPrompt({
       ...baseArgs,
