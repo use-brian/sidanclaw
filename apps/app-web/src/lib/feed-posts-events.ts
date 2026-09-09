@@ -24,7 +24,7 @@
 import { markSurfaceCacheStale } from "@/lib/surface-cache";
 import { feedSessionsCacheFamily } from "@/lib/surface-prefetch";
 
-export const FEED_POSTS_CHANGED_EVENT = "feed:posts-changed";
+const FEED_POSTS_CHANGED_EVENT = "feed:posts-changed";
 
 /** Mark every cached post list stale and announce the change. No-op on SSR. */
 export function notifyFeedPostsChanged(): void {

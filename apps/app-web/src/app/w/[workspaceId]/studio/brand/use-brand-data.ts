@@ -26,7 +26,7 @@ import { brandCacheKey } from "@/lib/surface-prefetch";
 
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
-export type BrandSummary = {
+type BrandSummary = {
   id: string;
   slug: string;
   name: string;
@@ -41,7 +41,7 @@ export type BrandDetail = BrandSummary & {
   activeRecord: BrandRecordLike | null;
 };
 
-export type BrandVersion = {
+type BrandVersion = {
   id: string;
   version: number;
   approvedBy: string | null;
@@ -59,7 +59,7 @@ export function brandApiBase(workspaceId: string): string {
   return `${API_URL}/api/workspaces/${workspaceId}/brand`;
 }
 
-export async function fetchBrandSnapshot(workspaceId: string): Promise<BrandSnapshot> {
+async function fetchBrandSnapshot(workspaceId: string): Promise<BrandSnapshot> {
   const base = brandApiBase(workspaceId);
   const res = await authFetch(`${base}/default`);
   if (res.status === 404) {

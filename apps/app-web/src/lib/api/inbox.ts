@@ -90,7 +90,7 @@ export async function fetchInbox(
 
 /** The unread-badge total: pending replies + unread mentions. Returns 0 on
  *  error so the sidebar badge degrades silently. */
-export async function fetchInboxBadgeCount(workspaceId: string): Promise<number> {
+async function fetchInboxBadgeCount(workspaceId: string): Promise<number> {
   try {
     const p = await fetchInbox(workspaceId);
     return p.pendingCount + p.unreadMentionCount;

@@ -61,7 +61,7 @@ export type KbTabSnapshot = {
  * Both landing reads in parallel (instant-navigation N7); either one failing
  * degrades to an empty list, the way the tab always behaved.
  */
-export async function fetchKbTabSnapshot(assistantId: string): Promise<KbTabSnapshot> {
+async function fetchKbTabSnapshot(assistantId: string): Promise<KbTabSnapshot> {
   const [sources, entries] = await Promise.all([
     authFetch(`${API_URL}/api/assistants/${assistantId}/knowledge/sources`)
       .then(async (res) => (res.ok ? ((await res.json()).sources ?? []) : []))

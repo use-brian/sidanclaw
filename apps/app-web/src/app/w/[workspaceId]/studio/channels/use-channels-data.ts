@@ -55,7 +55,7 @@ export type WorkspaceMembership = {
 };
 
 /** The channel list plus every channel's routing rows, in one fetcher. */
-export async function fetchChannelsSnapshot(workspaceId: string): Promise<ChannelsSnapshot> {
+async function fetchChannelsSnapshot(workspaceId: string): Promise<ChannelsSnapshot> {
   const channels = await listChannels(workspaceId);
   const entries = await Promise.all(
     channels.map(
@@ -79,7 +79,7 @@ export async function fetchChannelsSnapshot(workspaceId: string): Promise<Channe
  * and treats the caller as a non-admin, so a failed probe never *grants* an
  * affordance the server would reject.
  */
-export async function fetchWorkspaceMembership(workspaceId: string): Promise<WorkspaceMembership> {
+async function fetchWorkspaceMembership(workspaceId: string): Promise<WorkspaceMembership> {
   try {
     const res = await authFetch(
       `${API_URL}/api/workspaces/${encodeURIComponent(workspaceId)}`,

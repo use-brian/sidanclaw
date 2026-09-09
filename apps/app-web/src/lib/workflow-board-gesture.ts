@@ -37,7 +37,7 @@ export type NodePointerIntent = "drag" | "select";
 export const NODE_DRAG_THRESHOLD_PX = { fine: 3, coarse: 10 } as const;
 
 /** True for a pointer that cannot hover (touch); pens count as fine. */
-export function isTouchPointer(pointerType: string): boolean {
+function isTouchPointer(pointerType: string): boolean {
   return pointerType === "touch";
 }
 

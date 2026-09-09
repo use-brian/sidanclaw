@@ -177,7 +177,7 @@ type WorkspaceDetail = {
  *
  * Exported for its test only.
  */
-export function useWorkspaceDetail(workspaceId: string | null) {
+function useWorkspaceDetail(workspaceId: string | null) {
   const key = workspaceId ? workspaceDetailCacheKey(workspaceId) : null;
   const entry = useCachedResource<WorkspaceDetail>(key, async () => {
     const res = await authFetch(`${API_URL}/api/workspaces/${workspaceId}`);

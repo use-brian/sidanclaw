@@ -43,7 +43,7 @@ export type KbSourcesSnapshot = {
   manualCount: number;
 };
 
-export async function fetchKbSources(workspaceId: string): Promise<KbSourcesSnapshot> {
+async function fetchKbSources(workspaceId: string): Promise<KbSourcesSnapshot> {
   const res = await authFetch(`${API_URL}/api/workspaces/${workspaceId}/knowledge/sources`);
   if (!res.ok) throw new Error(`knowledge sources ${res.status}`);
   const data = (await res.json()) as {
@@ -53,7 +53,7 @@ export async function fetchKbSources(workspaceId: string): Promise<KbSourcesSnap
   return { sources: data.sources ?? [], manualCount: data.manualCount ?? 0 };
 }
 
-export async function fetchKbInstances(workspaceId: string): Promise<ConnectorInstanceOption[]> {
+async function fetchKbInstances(workspaceId: string): Promise<ConnectorInstanceOption[]> {
   try {
     const res = await authFetch(
       `${API_URL}/api/workspaces/${workspaceId}/knowledge/github/instances`,

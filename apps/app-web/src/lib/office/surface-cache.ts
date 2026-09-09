@@ -25,7 +25,7 @@ import { markSurfaceCacheStale, readSurfaceCache } from "@/lib/surface-cache";
 import { officeListCacheKey, type OfficeListView } from "@/lib/surface-prefetch";
 
 /** Every lifecycle view the home lists, in the order a tap most likely came from. */
-export const OFFICE_LIST_VIEWS: readonly OfficeListView[] = ["active", "archived", "trash", "retained"];
+const OFFICE_LIST_VIEWS: readonly OfficeListView[] = ["active", "archived", "trash", "retained"];
 
 /**
  * The artifact's row as the home last painted it, from whichever view's

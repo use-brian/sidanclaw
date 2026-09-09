@@ -135,7 +135,7 @@ export const SCHEDULED_JOB_REFRESH_EVENT = "sidan:scheduled-job-refresh";
  */
 export const LIVE_REFRESH_EVENT = "sidan:live-refresh";
 
-export type SkillRefreshDetail = {
+type SkillRefreshDetail = {
   workspaceId: string | null;
   rowId?: string;
 };

@@ -118,7 +118,7 @@ function isSessionRow(value: unknown): value is DocSession {
   );
 }
 
-export function isChatSessionsSnapshot(
+function isChatSessionsSnapshot(
   value: unknown,
 ): value is ChatSessionsSnapshot {
   if (!value || typeof value !== "object") return false;
@@ -142,7 +142,7 @@ function isEnvelope(value: unknown): value is StoredSnapshot {
 }
 
 /** Read + validate the persisted lists; anything corrupt or missing is `null`. */
-export async function readChatSessionsSnapshot(
+async function readChatSessionsSnapshot(
   viewerId: string,
   workspaceId: string,
 ): Promise<ChatSessionsSnapshot | null> {
@@ -168,7 +168,7 @@ export async function writeChatSessionsSnapshot(
 }
 
 /** Evict after an authoritative denial (the viewer lost the workspace). */
-export async function deleteChatSessionsSnapshot(
+async function deleteChatSessionsSnapshot(
   viewerId: string,
   workspaceId: string,
 ): Promise<void> {
@@ -222,7 +222,7 @@ export async function fetchPersonalChatSessions(
 }
 
 /** The fetcher behind `chat-shared:<wid>:<viewer>`. */
-export function fetchSharedChatSessions(
+function fetchSharedChatSessions(
   workspaceId: string,
 ): Promise<WorkspaceSession[]> {
   return listWorkspaceSessions({ workspaceId });
@@ -271,7 +271,7 @@ export function patchPersonalChatSessions(
 }
 
 /** Mark both session lists stale - the same-tab refresh signal's effect. */
-export function markChatSessionsStale(workspaceId: string): void {
+function markChatSessionsStale(workspaceId: string): void {
   markSurfaceCacheStale(chatSessionsCacheKey(workspaceId));
   markSurfaceCacheStale(chatSharedSessionsCacheKey(workspaceId));
 }

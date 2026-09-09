@@ -42,7 +42,7 @@ export type BrainKeysSnapshot = {
   captureProfiles: CaptureProfile[];
 };
 
-export async function fetchBrainKeysSnapshot(workspaceId: string): Promise<BrainKeysSnapshot> {
+async function fetchBrainKeysSnapshot(workspaceId: string): Promise<BrainKeysSnapshot> {
   const [keys, authorizations, teams, projects, assistants, captureProfiles] =
     await Promise.all([
       listBrainKeys(workspaceId),

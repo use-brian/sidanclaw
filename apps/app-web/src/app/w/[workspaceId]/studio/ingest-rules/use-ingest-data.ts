@@ -26,7 +26,7 @@ import { ingestSourcesCacheKey, whatsappIngestCacheKey } from "@/lib/surface-pre
 
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
-export type IngestRule = EditableRule;
+type IngestRule = EditableRule;
 
 /** Signal-density profile - noisy -> event-rich -> high-signal. */
 export type IngestNature = "noisy" | "events" | "signal";
@@ -75,7 +75,7 @@ export type IngestSourcesSnapshot = {
   ownedPersonal: boolean | undefined;
 };
 
-export async function fetchIngestSources(workspaceId: string): Promise<IngestSourcesSnapshot> {
+async function fetchIngestSources(workspaceId: string): Promise<IngestSourcesSnapshot> {
   const res = await authFetch(
     `${API_URL}/api/ingest/sources?workspaceId=${encodeURIComponent(workspaceId)}`,
   );
@@ -93,7 +93,7 @@ export async function fetchIngestSources(workspaceId: string): Promise<IngestSou
 }
 
 /** `null` = never paired (no row) or the probe failed; both mean no rail row. */
-export async function fetchWhatsappIngest(workspaceId: string): Promise<WhatsappIngestStatus | null> {
+async function fetchWhatsappIngest(workspaceId: string): Promise<WhatsappIngestStatus | null> {
   try {
     return await getWhatsappIngest(workspaceId);
   } catch {

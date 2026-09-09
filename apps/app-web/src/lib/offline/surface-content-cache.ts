@@ -162,7 +162,7 @@ export async function writeSurfaceContentCache<T>(
 }
 
 /** Evict a resource after an authoritative denial / deletion response. */
-export async function deleteSurfaceContentCache(
+async function deleteSurfaceContentCache(
   scope: SurfaceContentCacheScope,
   resource: string,
 ): Promise<void> {
