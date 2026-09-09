@@ -56,6 +56,7 @@ function fakeStore(): AssociationStore {
     cancelOrder: vi.fn(),
     confirmFreeOrder: vi.fn(),
     reconcileProviderEvent: vi.fn(),
+    bindOrderProvider: vi.fn(),
     listEventRegistrations: vi.fn(),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'commerce' }),
     updateRegistration: vi.fn(),
@@ -80,6 +81,16 @@ function makeApp(
 }
 
 describe('[COMP:api/association-route] credential and workspace authority', () => {
+  it('accepts backend binding and rejects incomplete payment evidence before the store', async () => {
+    const store = fakeStore(), binding = { provider: 'fixture', providerReference: 'fictional-object', amountMinor: 1000, currency: 'USD' }
+    vi.mocked(store.bindOrderProvider).mockResolvedValue({ record: { id: RECORD_ID, ...binding }, created: true })
+    const response = await request(makeApp(store)).post(`/api/association/orders/${RECORD_ID}/provider-binding`).send(binding)
+    expect(response.status).toBe(201)
+    expect(store.bindOrderProvider).toHaveBeenCalledWith(WID, RECORD_ID, binding, expect.objectContaining({ credentialKind: 'brain_key' }))
+    const rejected = await request(makeApp(store)).post(`/api/association/orders/${RECORD_ID}/provider-events`).send({ provider: 'fixture', eventId: 'fictional-event', targetStatus: 'paid', occurredAt: '2026-09-01T00:00:00Z' })
+    expect(rejected.status).toBe(400)
+    expect(store.reconcileProviderEvent).not.toHaveBeenCalled()
+  })
   it('adapts paginated waitlist reads and explicit offers through the shared command service', async () => {
     const store = fakeStore()
     vi.mocked(store.listWaitlist).mockResolvedValue({ items: [{ id: RECORD_ID, waitlistState: 'waiting' }], nextCursor: null })

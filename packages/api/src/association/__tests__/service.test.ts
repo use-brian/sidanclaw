@@ -15,6 +15,7 @@ function fixture() {
     listTickets: vi.fn().mockResolvedValue([]), getOrder: vi.fn().mockResolvedValue({ id: orderId }),
     listWaitlist: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
     offerWaitlistPlace: vi.fn().mockResolvedValue({ record: { orderId }, created: true }),
+    bindOrderProvider: vi.fn().mockResolvedValue({ record: { orderId }, created: true }),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'manual', eventId }),
     updateRegistration: vi.fn(), reconcileProviderEvent: vi.fn().mockResolvedValue({ record: { id: orderId }, created: true }),
     expireDueOrder: vi.fn(),
@@ -83,7 +84,7 @@ describe('[COMP:crm/association-service] Canonical authority and adapters', () =
   })
   it('denies fabricated paid evidence from humans and assistants even with a forged backend boolean', async () => {
     const f = fixture(), input = command({ kind: 'reconcile_provider_event', orderId,
-      event: { provider: 'fixture', eventId: 'event-1', targetStatus: 'paid', occurredAt: '2026-09-08T00:00:00Z', amountMinor: 100, currency: 'USD' } })
+      event: { provider: 'fixture', providerReference: 'fixture-object', eventId: 'event-1', targetStatus: 'paid', occurredAt: '2026-09-08T00:00:00Z', amountMinor: 100, currency: 'USD' } })
     for (const actor of [member.actor, { kind: 'assistant' as const, assistantId: userId, sessionId: randomUUID() },
       { kind: 'home_app' as const, credentialId }, { kind: 'provider' as const, provider: 'other', eventId: 'event-1' }]) {
       await expect(f.service.execute({ ...member, actor, authority: { ...member.authority, canReconcileProvider: true } }, input)).rejects.toMatchObject({ code: 'not_authorized' })
@@ -91,6 +92,12 @@ describe('[COMP:crm/association-service] Canonical authority and adapters', () =
     expect(f.store.reconcileProviderEvent).not.toHaveBeenCalled()
     await f.service.execute({ ...member, actor: { kind: 'brain_key', credentialId }, authority: { ...member.authority, canReconcileProvider: true } }, input)
     expect(f.store.reconcileProviderEvent).toHaveBeenCalledTimes(1)
+  })
+  it('restricts provider bindings to backend payment authority', async () => {
+    const f = fixture(), input = command({ kind: 'bind_order_provider', orderId, binding: { provider: 'fixture', providerReference: 'fictional-object', amountMinor: 1000, currency: 'USD' } })
+    await expect(f.service.execute({ ...member, authority: { ...member.authority, canReconcileProvider: true } }, input)).rejects.toMatchObject({ code: 'not_authorized' })
+    await f.service.execute({ ...member, actor: { kind: 'brain_key', credentialId }, authority: { ...member.authority, canReconcileProvider: true } }, input)
+    expect(f.store.bindOrderProvider).toHaveBeenCalledTimes(1)
   })
   it('routes generic participation through CRM and preserves the legacy registration envelope', async () => {
     const f = fixture()

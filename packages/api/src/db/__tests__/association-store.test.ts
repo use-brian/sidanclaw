@@ -24,6 +24,7 @@ function fakePool(
     }
     // These provider-transition fixtures have no inventory scopes; races are
     // exercised against PostgreSQL in association-inventory.integration.test.ts.
+    if (normalized.startsWith('SELECT pg_advisory_xact_lock')) return { rows: [] }
     if (normalized.startsWith('SELECT DISTINCT event_id FROM association_ticket_types')) return { rows: [] }
     if (normalized.startsWith('SELECT reservation_expires_at>clock_timestamp() unexpired')) return { rows: [{ unexpired: false }] }
     return resolve(normalized, params)
@@ -168,7 +169,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
     const fake = fakePool(async (sql) => {
       if (sql.includes('FROM association_provider_events')) return { rows: [], rowCount: 0 }
       if (sql.includes('FROM association_orders') && sql.includes('FOR UPDATE')) {
-        return { rows: [{ status: 'paid' }], rowCount: 1 }
+        return { rows: [{ status: 'paid', provider: 'stripe', provider_reference: 'fixture-object', total_minor: '100', currency: 'USD' }], rowCount: 1 }
       }
       throw new Error(`unexpected SQL: ${sql}`)
     })
@@ -176,7 +177,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
       WID,
       ORDER_ID,
       {
-        provider: 'stripe',
+        provider: 'stripe', providerReference: 'fixture-object', amountMinor: 100, currency: 'USD',
         eventId: 'evt_1',
         targetStatus: 'failed',
         occurredAt: '2027-02-02T10:00:00.000Z',
@@ -193,7 +194,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
       if (sql.includes('FROM association_provider_events')) return { rows: [], rowCount: 0 }
       if (sql.includes('FROM association_orders') && sql.includes('FOR UPDATE')) {
         return {
-          rows: [{ status: 'pending', reservation_expires_at: new Date(Date.now() - 60_000) }],
+          rows: [{ status: 'pending', provider: 'stripe', provider_reference: 'fixture-object', total_minor: '100', currency: 'USD', reservation_expires_at: new Date(Date.now() - 60_000) }],
           rowCount: 1,
         }
       }
@@ -203,7 +204,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
       WID,
       ORDER_ID,
       {
-        provider: 'stripe',
+        provider: 'stripe', providerReference: 'fixture-object', amountMinor: 100, currency: 'USD',
         eventId: 'evt_late',
         targetStatus: 'paid',
         occurredAt: '2027-02-02T10:00:00.000Z',

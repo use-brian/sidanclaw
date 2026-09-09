@@ -356,7 +356,8 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "provider_reference",
       "occurred_at",
       "metadata",
-      "created_at"
+      "created_at",
+      "request_fingerprint"
     ],
     "excludedColumns": [],
     "orderBy": "t.id",
@@ -365,7 +366,8 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
     "subjectRedactions": {
       "metadata": "'{}'::jsonb",
       "provider_reference": "NULL",
-      "provider_event_id": "NULL"
+      "provider_event_id": "NULL",
+      "request_fingerprint": "NULL"
     },
     "transforms": {},
     "reason": "Normalized provider status evidence remains; shared provider references and payload are redacted."

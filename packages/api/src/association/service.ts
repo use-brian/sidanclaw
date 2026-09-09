@@ -37,7 +37,7 @@ export function createAssociationService(options: {
       if (context.actor.kind === 'integration_key' && integration?.credentialId !== context.actor.credentialId) throw new CrmIntegrationScopeError('association.read')
       const operation: CrmIntegrationOperation = read ? 'association.read'
         : command.kind === 'save_ticket' ? 'crm.catalog.configure'
-        : command.kind === 'reconcile_provider_event' ? 'association.provider_events.write' : 'association.orders.write'
+        : ['reconcile_provider_event', 'bind_order_provider'].includes(command.kind) ? 'association.provider_events.write' : 'association.orders.write'
       if (integration) {
         if (command.kind === 'module_action') throw new CrmOperationsError('not_authorized', 'A member owner or admin is required for module actions.')
         requireCrmIntegrationOperation(integration, operation)
@@ -95,14 +95,17 @@ export function createAssociationService(options: {
         case 'expire_due_order': return { ...output, ...(await store.expireDueOrder(workspaceId,command.orderId,dbActor)) }
         case 'cancel_order': return { ...output, ...(await store.cancelOrder(workspaceId, command.orderId, dbActor)) }
         case 'confirm_free_order': return { ...output, ...(await store.confirmFreeOrder(workspaceId, command.orderId, dbActor)) }
+        case 'bind_order_provider':
         case 'reconcile_provider_event': {
           if (!authority.canReconcileProvider || !['brain_key', 'oauth_token', 'integration_key', 'provider', 'system_job'].includes(context.actor.kind)) {
             throw new CrmOperationsError('not_authorized', 'Verified backend payment evidence is required; member and assistant commands cannot mark a checkout paid.')
           }
-          if (context.actor.kind === 'provider' && (context.actor.provider !== command.event.provider || context.actor.eventId !== command.event.eventId)) {
+          if (context.actor.kind === 'provider' && (command.kind !== 'reconcile_provider_event' || context.actor.provider !== command.event.provider || context.actor.eventId !== command.event.eventId)) {
             throw new CrmOperationsError('not_authorized', 'Provider evidence does not match the authenticated provider event.')
           }
-          return { ...output, ...(await store.reconcileProviderEvent(workspaceId, command.orderId, command.event, dbActor)) }
+          return { ...output, ...(command.kind === 'bind_order_provider'
+            ? await store.bindOrderProvider(workspaceId, command.orderId, command.binding, dbActor)
+            : await store.reconcileProviderEvent(workspaceId, command.orderId, command.event, dbActor)) }
         }
         case 'list_registrations': return { ...output, ...(await store.listEventRegistrations(workspaceId, command.eventId, { ...pagination(), status: command.status })) }
         case 'update_registration': {

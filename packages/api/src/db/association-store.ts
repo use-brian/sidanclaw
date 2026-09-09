@@ -10,6 +10,8 @@
  */
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
+import { AssociationProviderBindingInputSchema, AssociationProviderEventInputSchema, crmOperationsSha256, type AssociationProviderBindingInput } from '@use-brian/core'
+import { requireAssociationProviderActor, requireBoundProviderOrder, requireProviderOrderMoney, type ProviderOrderIdentity } from '../association/provider.js'
 import { CrmOperationsError, CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
 import { listAssociationWaitlist, offerAssociationWaitlist, type WaitlistListInput } from '../association/waitlist.js'
 import type { AssociationWaitlistOfferInput } from '@use-brian/core'
@@ -81,6 +83,7 @@ export type AssociationStore = {
   expireDueOrder(workspaceId:string,id:string,actor:AssociationActor):Promise<MutationResult>
   cancelOrder(workspaceId: string, id: string, actor: AssociationActor): Promise<MutationResult>
   confirmFreeOrder(workspaceId: string, id: string, actor: AssociationActor): Promise<MutationResult>
+  bindOrderProvider(workspaceId: string, orderId: string, input: AssociationProviderBindingInput, actor: AssociationActor): Promise<MutationResult>
   reconcileProviderEvent(workspaceId: string, orderId: string, input: ProviderEventInput, actor: AssociationActor): Promise<MutationResult>
   listEventRegistrations(workspaceId: string, eventId: string, input: AssociationListInput & { status?: RegistrationStatus }): Promise<AssociationPage>
   getRegistrationManagement(workspaceId: string, id: string): Promise<{ sourceKind: string; eventId?: string } | null>
@@ -1140,51 +1143,63 @@ export function createAssociationStore(pool: Pool = getPool(), transactionClient
     cancelOrder: (workspaceId, id, actor) => settleWithoutProvider(pool, workspaceId, id, actor, 'cancel'),
     confirmFreeOrder: (workspaceId, id, actor) => settleWithoutProvider(pool, workspaceId, id, actor, 'confirm_free'),
 
-    async reconcileProviderEvent(workspaceId, orderId, input, actor) {
+    async bindOrderProvider(workspaceId, orderId, raw, actor) {
+      const input = AssociationProviderBindingInputSchema.parse(raw)
+      requireAssociationProviderActor(actor)
+      return transact(async client => {
+        const integration = await lockIntegrationActor(client, workspaceId, actor)
+        const module = await lockAssociationModule(client, workspaceId)
+        await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('association-provider-object:'||$1::text||':'||$2||':'||$3,0))", [workspaceId, input.provider, input.providerReference])
+        const order = (await client.query<ProviderOrderIdentity>('SELECT status,provider,provider_reference,currency,total_minor::text FROM association_orders WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [workspaceId, orderId])).rows[0]
+        if (!order) throw new AssociationError('not_found', 'order not found')
+        requireProviderOrderMoney(order, input)
+        if (order.provider_reference) {
+          requireBoundProviderOrder(order, input)
+          return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: false }
+        }
+        requireAssociationAdmission(module)
+        if (order.status !== 'pending' || !(await client.query<{ available: boolean }>('SELECT reservation_expires_at>clock_timestamp() available FROM association_orders WHERE workspace_id=$1 AND id=$2', [workspaceId, orderId])).rows[0]?.available)
+          throw new AssociationError('not_available', 'A new provider binding requires an unexpired pending order.')
+        if ((await client.query('SELECT id FROM association_orders WHERE workspace_id=$1 AND provider=$2 AND provider_reference=$3', [workspaceId, input.provider, input.providerReference])).rowCount)
+          throw new AssociationError('conflict', 'The provider object is already bound to another order.')
+        await client.query('UPDATE association_orders SET provider=$3,provider_reference=$4 WHERE workspace_id=$1 AND id=$2', [workspaceId, orderId, input.provider, input.providerReference])
+        await audit(client, workspaceId, 'order.provider_bound', 'order', orderId, actor, { provider: input.provider })
+        return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: true }
+      })
+    },
+
+    async reconcileProviderEvent(workspaceId, orderId, raw, actor) {
+      const input = AssociationProviderEventInputSchema.parse(raw)
+      requireAssociationProviderActor(actor)
+      const fingerprint = crmOperationsSha256({ orderId, ...input, occurredAt: crmPageInstant(input.occurredAt) })
       return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         await lockAssociationModule(client, workspaceId)
         await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('association-provider-event:'||$1::text||':'||$2||':'||$3,0))", [workspaceId, input.provider, input.eventId])
         const inventoryEvents=await lockAssociationInventory(client,workspaceId,{orderId})
-        const replay = await client.query<{
-          order_id: string
-          target_status: OrderStatus
-        }>(
-          `SELECT order_id, target_status FROM association_provider_events
-            WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-          [workspaceId, input.provider, input.eventId],
-        )
-        if (replay.rows[0]) {
-          if (replay.rows[0].order_id !== orderId || replay.rows[0].target_status !== input.targetStatus) {
-            throw new AssociationError('conflict', 'provider event id was already used for a different transition')
-          }
-          return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: false }
-        }
-        const orderResult = await client.query<{
-          status: OrderStatus
-          reservation_expires_at: Date | null
-        }>(
-          `SELECT status, reservation_expires_at FROM association_orders
-            WHERE workspace_id = $1 AND id = $2 FOR UPDATE`,
+        const order = (await client.query<ProviderOrderIdentity>(
+          'SELECT status,provider,provider_reference,currency,total_minor::text FROM association_orders WHERE workspace_id=$1 AND id=$2 FOR UPDATE',
           [workspaceId, orderId],
-        )
-        const order = orderResult.rows[0]
+        )).rows[0]
         if (!order) throw new AssociationError('not_found', 'order not found')
-        const racedEvent = await client.query<{
-          order_id: string
-          target_status: OrderStatus
-        }>(
-          `SELECT order_id, target_status FROM association_provider_events
-            WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-          [workspaceId, input.provider, input.eventId],
-        )
-        if (racedEvent.rows[0]) {
-          if (racedEvent.rows[0].order_id !== orderId || racedEvent.rows[0].target_status !== input.targetStatus) {
-            throw new AssociationError('conflict', 'provider event id was already used for a different transition')
+        requireBoundProviderOrder(order, input)
+        const replay = (await client.query<{ order_id: string; target_status: string; request_fingerprint: string | null; provider_reference: string | null; same_time: boolean; same_metadata: boolean }>(
+          `SELECT order_id,target_status,request_fingerprint,provider_reference,occurred_at=$4::timestamptz same_time,metadata=$5::jsonb same_metadata
+           FROM association_provider_events WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+          [workspaceId, input.provider, input.eventId, input.occurredAt, input.metadata],
+        )).rows[0]
+        if (replay) {
+          if (replay.order_id !== orderId || replay.target_status !== input.targetStatus || (replay.request_fingerprint
+            ? replay.request_fingerprint !== fingerprint
+            : replay.provider_reference !== input.providerReference || !replay.same_time || !replay.same_metadata)) {
+            throw new AssociationError('conflict', 'Provider event identity was already used for different normalized evidence.')
           }
           return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: false }
         }
-        if (!mayTransitionOrder(order.status, input.targetStatus)) {
+        const unchanged = order.status === input.targetStatus
+        if (!unchanged && !mayTransitionOrder(order.status as OrderStatus, input.targetStatus)) {
           throw new AssociationError('invalid_transition', `order cannot transition from ${order.status} to ${input.targetStatus}`)
         }
         if (order.status === 'pending' && input.targetStatus === 'paid'
@@ -1197,11 +1212,12 @@ export function createAssociationStore(pool: Pool = getPool(), transactionClient
         await client.query(
           `INSERT INTO association_provider_events
              (workspace_id, order_id, provider, provider_event_id, target_status,
-              provider_reference, occurred_at, metadata)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+              provider_reference, occurred_at, metadata, request_fingerprint)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
           [workspaceId, orderId, input.provider, input.eventId, input.targetStatus,
-            input.providerReference ?? null, input.occurredAt, input.metadata],
+            input.providerReference, input.occurredAt, input.metadata, fingerprint],
         )
+        if (unchanged) return { record: (await getOrderRecord(client, workspaceId, orderId))!, created: true }
         await client.query(
           `UPDATE association_orders SET status = $3, provider = $4,
                   provider_reference = COALESCE($5, provider_reference),
@@ -1217,7 +1233,7 @@ export function createAssociationStore(pool: Pool = getPool(), transactionClient
               SET status = $3,
                   reservation_expires_at = NULL
             WHERE workspace_id = $1 AND order_id = $2
-              AND status IN ('reserved','confirmed')`,
+              AND status IN ('reserved','confirmed','checked_in')`,
           [workspaceId, orderId, registrationStatus],
         )
         if (input.targetStatus === 'paid') {

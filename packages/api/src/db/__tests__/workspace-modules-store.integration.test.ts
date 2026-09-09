@@ -123,7 +123,7 @@ describe('[COMP:api/workspace-modules] Actual lifecycle and admission transactio
     void order.catch(() => undefined)
     let shutdown: ReturnType<typeof modules.act> | undefined
     try {
-      await blocked('FOR UPDATE OF t, e', 'assurance-owner')
+      await blocked('FROM association_events WHERE workspace_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE', 'assurance-owner')
       shutdown = modules.act(f.workspaceId, f.userId, { action: 'request_disable', expectedVersion: 2 })
       void shutdown.catch(() => undefined)
       await blocked("module_key='association' FOR UPDATE", 'assurance-member')
@@ -177,8 +177,9 @@ describe('[COMP:api/workspace-modules] Actual lifecycle and admission transactio
     const f = await enabledCommerce()
     const created = await commerce.createOrder(f.workspaceId, f.input, actor)
     const id = String(created.record.id)
+    const paid = { provider: 'fixture', providerReference: randomUUID(), amountMinor: Number(created.record.totalMinor), currency: String(created.record.currency), eventId: randomUUID(), targetStatus: 'paid' as const, occurredAt: new Date().toISOString(), metadata: {} }
+    await commerce.bindOrderProvider(f.workspaceId, id, { provider: paid.provider, providerReference: paid.providerReference, amountMinor: paid.amountMinor, currency: paid.currency }, actor)
     await modules.act(f.workspaceId, f.userId, { action: 'request_disable', expectedVersion: 2 })
-    const paid = { provider: 'fixture', eventId: randomUUID(), targetStatus: 'paid' as const, occurredAt: new Date().toISOString(), metadata: {} }
     await commerce.reconcileProviderEvent(f.workspaceId, id, paid, actor)
     expect(await modules.act(f.workspaceId, f.userId, { action: 'finish_disable', expectedVersion: 3 }))
       .toMatchObject({ module: { state: 'disabled', version: 4 }, pendingOrders: 0 })

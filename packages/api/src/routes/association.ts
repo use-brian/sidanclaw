@@ -15,6 +15,7 @@ import {
   CrmOperationsError,
   CrmIntegrationScopeError,
   AssociationWaitlistOfferInputSchema,
+  AssociationProviderBindingInputSchema,
   type AssociationContext,
   type AssociationServicePort,
   type CrmOperationsActor,
@@ -488,6 +489,14 @@ export function associationRoutes(opts: Options): Router {
     if (!query) return
     const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'list_orders', ...query })
     res.json({ orders: result.items, nextCursor: result.nextCursor })
+  }))
+
+  router.post('/orders/:id/provider-binding', endpoint(async (req, res) => {
+    const orderId = parsed(UUID, req.params.id, res)
+    const binding = parsed(AssociationProviderBindingInputSchema, req.body, res)
+    if (!orderId || !binding) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'bind_order_provider', orderId, binding })
+    res.status(result.created ? 201 : 200).json({ order: result.record, created: result.created })
   }))
 
   router.get('/orders/:id', endpoint(async (req, res) => {

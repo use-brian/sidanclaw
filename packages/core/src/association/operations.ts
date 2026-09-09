@@ -6,7 +6,7 @@ import { AssociationWaitlistOfferInputSchema } from './waitlist.js'
 import { WORKSPACE_MODULE_ACTIONS } from '@use-brian/shared'
 import { CrmOperationsActorSchema, CrmOperationsAuthoritySchema } from '../crm/operations-types.js'
 import {
-  AssociationTicketInputSchema, AssociationOrderCreateSchema, AssociationProviderEventInputSchema,
+  AssociationTicketInputSchema, AssociationOrderCreateSchema, AssociationProviderEventInputSchema, AssociationProviderBindingInputSchema,
   AssociationRegistrationUpdateSchema, AssociationOrderStatusSchema, AssociationRegistrationStatusSchema,
   AssociationListPageSchema,
 } from './domain.js'
@@ -36,6 +36,7 @@ export const AssociationCommandSchema = z.union([
   z.object({ kind: z.literal('expire_due_order'), orderId: Id }).strict(),
   z.object({ kind: z.literal('cancel_order'), orderId: Id }).strict(),
   z.object({ kind: z.literal('confirm_free_order'), orderId: Id }).strict(),
+  z.object({ kind: z.literal('bind_order_provider'), orderId: Id, binding: AssociationProviderBindingInputSchema }).strict(),
   z.object({ kind: z.literal('reconcile_provider_event'), orderId: Id, event: AssociationProviderEventInputSchema }).strict(),
   AssociationListPageSchema.extend({ kind: z.literal('list_registrations'), eventId: Id, status: AssociationRegistrationStatusSchema.optional() }).strict(),
   z.object({ kind: z.literal('update_registration'), registrationId: Id, update: AssociationRegistrationUpdateSchema }).strict(),

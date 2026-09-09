@@ -33,7 +33,7 @@ export function crmAssociationRoutes(options: { service: AssociationServicePort;
         if (!context) return
         const input = AssociationCommandSchema.parse(command(req))
         const result = await options.service.execute(context, input)
-        const createsResource = ['save_ticket', 'create_order', 'reconcile_provider_event', 'offer_waitlist_place'].includes(input.kind)
+        const createsResource = ['save_ticket', 'create_order', 'reconcile_provider_event', 'bind_order_provider', 'offer_waitlist_place'].includes(input.kind)
         res.status(result.created && createsResource ? 201 : 200).json({
           [key]: result.items ?? result.record, ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor } : {}),
           ...(result.created !== undefined ? { created: result.created } : {}),
@@ -61,6 +61,7 @@ export function crmAssociationRoutes(options: { service: AssociationServicePort;
     }, 'order')
   }
   route('post', '/orders/:id/provider-events', (req) => ({ kind: 'reconcile_provider_event', orderId: req.params.id, event: req.body }), 'order')
+  route('post', '/orders/:id/provider-binding', req => ({ kind: 'bind_order_provider', orderId: req.params.id, binding: req.body }), 'order')
   return router
 }
 

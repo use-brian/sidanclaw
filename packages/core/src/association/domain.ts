@@ -224,12 +224,18 @@ export type AssociationOrderCreateInput = z.infer<typeof AssociationOrderCreateS
 export const AssociationOrderStatusSchema = z.enum(['pending', 'paid', 'failed', 'cancelled', 'refunded'])
 export type AssociationOrderStatus = z.infer<typeof AssociationOrderStatusSchema>
 
-export const AssociationProviderEventInputSchema = z.object({
+export const AssociationProviderBindingInputSchema = z.object({
   provider: ProviderKey,
+  providerReference: z.string().trim().min(1).max(500),
+  amountMinor: z.number().int().nonnegative().safe(),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+}).strict()
+export type AssociationProviderBindingInput = z.infer<typeof AssociationProviderBindingInputSchema>
+
+export const AssociationProviderEventInputSchema = AssociationProviderBindingInputSchema.extend({
   eventId: z.string().trim().min(1).max(500),
   targetStatus: z.enum(['paid', 'failed', 'cancelled', 'refunded']),
   occurredAt: Instant,
-  providerReference: z.string().trim().min(1).max(500).optional(),
   metadata: boundedObject(8_000).default({}),
 })
 export type AssociationProviderEventInput = z.infer<typeof AssociationProviderEventInputSchema>

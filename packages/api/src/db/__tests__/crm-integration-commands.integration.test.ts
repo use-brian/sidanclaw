@@ -183,13 +183,14 @@ describe('[COMP:api/crm-integration-auth] Actual command and joined resource iso
     const f=await fixture()
     await modules.act(f.workspaceId,f.userId,{ action: 'enable',expectedVersion: 1 })
     const e=await commerce.upsertEvent(f.workspaceId,event('commerce-admission'),legacy), eventId=String(e.record.id)
-    const t=await commerce.upsertTicket(f.workspaceId,eventId,ticket,legacy)
+    const t=await commerce.upsertTicket(f.workspaceId,eventId,{ ...ticket, priceMinor: 100 },legacy)
     const input=OrderCreateSchema.parse({ contactId: f.contactId,idempotencyKey: randomUUID(),lines: [
       { ticketId: t.record.id,quantity: 1,attendees: [{ name: 'Fixture attendee' }] },
     ] })
     const order=await commerce.createOrder(f.workspaceId,input,legacy), orderId=String(order.record.id)
     const registrationId=String((order.record.registrations as Array<{ id: string }>)[0].id)
-    const provider={ provider: 'fixture',eventId: 'fixture_payment',targetStatus: 'paid',occurredAt: '2026-09-08T00:00:00Z' }
+    const provider={ provider: 'fixture',providerReference: 'fictional-object', amountMinor: 100, currency: 'USD',eventId: 'fixture_payment',targetStatus: 'paid',occurredAt: '2026-09-08T00:00:00Z' }
+    await association.execute(f.vertical(f.allGrants), AssociationCommandSchema.parse({ kind: 'bind_order_provider', orderId, binding: { provider: provider.provider, providerReference: provider.providerReference, amountMinor: provider.amountMinor, currency: provider.currency } }))
     const paid=await association.execute(f.vertical(f.allGrants),AssociationCommandSchema.parse({ kind: 'reconcile_provider_event',orderId,event: provider }))
     expect(paid.record?.status).toBe('paid')
     const otherEvent=await commerce.upsertEvent(f.workspaceId,event('unrelated-grant'),legacy)
@@ -337,7 +338,7 @@ describe('[COMP:api/crm-integration-auth] Actual command and joined resource iso
     const single = await commerce.createOrder(f.workspaceId, OrderCreateSchema.parse({ ...input, idempotencyKey: randomUUID(), lines: [lines[0]] }), legacy)
     const singleId = String(single.record.id)
     await expect(association.execute(ctx, AssociationCommandSchema.parse({ kind: 'reconcile_provider_event', orderId: singleId,
-      event: { provider: 'ungranted', eventId: 'evt-1', targetStatus: 'paid', occurredAt: '2026-09-08T00:00:00Z' } }))).rejects.toMatchObject({ code: 'integration_scope_denied' })
+      event: { provider: 'ungranted', providerReference: 'fixture-object', amountMinor: 100, currency: 'USD', eventId: 'evt-1', targetStatus: 'paid', occurredAt: '2026-09-08T00:00:00Z' } }))).rejects.toMatchObject({ code: 'integration_scope_denied' })
     const page = await association.execute(ctx, AssociationCommandSchema.parse({ kind: 'module_blockers', limit: 1 }))
     expect(page.pendingOrders).toBe(1)
     expect(page.items?.[0].id).toBe(singleId)
