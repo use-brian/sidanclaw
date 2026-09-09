@@ -52,7 +52,7 @@ import {
   MessageSquare,
   MonitorPlay,
   Puzzle,
-  type LucideIcon, ShoppingBag,
+  type LucideIcon, ShoppingBag, Ticket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
@@ -82,6 +82,7 @@ export const APP_ICON: Record<OperatorAppKey, LucideIcon> = {
   browsers: MonitorPlay,
   chat: MessageSquare,
   shopify: ShoppingBag,
+  association: Ticket,
 };
 
 export function OperatorAppBar({
@@ -125,6 +126,7 @@ export function OperatorAppBar({
     browsers: t.browsers,
     chat: t.chat,
     shopify: t.shopify,
+    association: t.association,
   };
   // Off the family the bar renders nothing (below). A `custom:<id>` entry
   // survives only if its row exists AND is renderable — which is how the T3

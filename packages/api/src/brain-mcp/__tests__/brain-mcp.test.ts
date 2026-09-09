@@ -12,7 +12,7 @@ import express from 'express'
 import request from 'supertest'
 import type { Request } from 'express'
 import { z } from 'zod'
-import { buildTool, type PipelineBResult, type Tool, type ToolContext } from '@use-brian/core'
+import { buildTool, createAssociationTools, type PipelineBResult, type Tool, type ToolContext } from '@use-brian/core'
 import { hashSecret } from '../../db/api-key-store.js'
 import { mintBrainPlaintext, type BrainKeyStore } from '../../db/brain-keys-store.js'
 import { authenticateBrainRequest } from '../auth.js'
@@ -150,6 +150,8 @@ const CRM_TOOLS_STUB: BrainCrmTools = {
   recordCrmParticipation: stubCoreTool('recordCrmParticipation'),
   updateCrmParticipation: stubCoreTool('updateCrmParticipation'),
   setDealPipelineStage: stubCoreTool('setDealPipelineStage'),
+  saveCrmEntitlementPlan: { ...stubCoreTool('saveCrmEntitlementPlan'), requiresCapability: 'configure', homeAppToolSet: { app: 'crm', set: 'write' } },
+  saveCrmEvent: { ...stubCoreTool('saveCrmEvent'), requiresCapability: 'configure', homeAppToolSet: { app: 'crm', set: 'write' } },
 }
 
 const RETRIEVAL_TOOLS_STUB: BrainRetrievalTools = {
@@ -327,6 +329,46 @@ describe('[COMP:api/brain-mcp] recording discovery before transcription', () => 
 })
 
 describe('[COMP:api/brain-mcp] buildBrainTools — scope gating', () => {
+  it('advertises native Association tools only for current app/set grants and credential scope', () => {
+    const associationTools = createAssociationTools({ execute: vi.fn() })
+    const base = { workspaceId: 'ws', keyId: 'k', maxClearance: null, ...ALL_STUBS, associationTools }
+    expect(buildBrainTools({ ...base, scope: 'read_write' }).some(tool => tool.name.includes('Association'))).toBe(false)
+    const appRead = new Set(['association', 'home_app:association:read'])
+    expect(buildBrainTools({ ...base, scope: 'read', agentActiveCapabilities: appRead }).filter(tool => tool.name.includes('Association')).map(tool => tool.name))
+      .toEqual(['getAssociationModuleStatus', 'listAssociationTickets'])
+    const all = new Set([...appRead, 'home_app:association:write', 'crm', 'home_app:crm:read', 'home_app:crm:write'])
+    const names = buildBrainTools({ ...base, scope: 'read', agentActiveCapabilities: all }).map(tool => tool.name)
+    for (const tool of Object.values(associationTools)) expect(names.includes(tool.name)).toBe(tool.isReadOnly)
+    expect(buildBrainTools({ ...base, scope: 'read_write', agentActiveCapabilities: all }).filter(tool => tool.name.includes('Association'))).toHaveLength(14)
+  })
+
+  it('rechecks Association permission in a direct MCP call after discovery', async () => {
+    const execute = vi.fn()
+    const tools = buildBrainTools({
+      workspaceId: '11111111-1111-4111-8111-111111111111', scope: 'read_write', keyId: '33333333-3333-4333-8333-333333333333', maxClearance: null,
+      ...ALL_STUBS, associationTools: createAssociationTools({ execute }),
+      agentActiveCapabilities: new Set(['association', 'home_app:association:read']),
+    })
+    // The per-call resolver's database grants omit Association, simulating revocation.
+    const result = await tools.find(tool => tool.name === 'getAssociationModuleStatus')!.handler({})
+    expect(result).toMatchObject({ isError: true })
+    expect(JSON.stringify(result)).toContain('not_authorized')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('keeps generic plan/event configuration behind configure plus CRM write and write scope', () => {
+    for (const scope of ['read', 'read_write'] as const) {
+      for (const configure of [false, true]) {
+        const tools = buildBrainTools({ workspaceId: 'ws', keyId: 'k', maxClearance: null, scope, ...ALL_STUBS,
+          agentActiveCapabilities: new Set(['crm', 'home_app:crm:write', ...(configure ? ['configure'] : [])]),
+        })
+        for (const name of ['saveCrmEntitlementPlan', 'saveCrmEvent']) {
+          expect(tools.some(tool => tool.name === name)).toBe(configure && scope === 'read_write')
+        }
+      }
+    }
+  })
+
   it('a read_write key exposes every read tool plus every write tool', () => {
     const tools = buildBrainTools({
       workspaceId: 'ws', scope: 'read_write', keyId: 'k', maxClearance: null,

@@ -1,6 +1,59 @@
 import type { Dictionary } from "./en";
 
 export const zh: Dictionary = {
+  associationPage: {
+    "overview": "總覽",
+    "orders": "訂單",
+    "openCrm": "開啟 CRM",
+    "order": "訂單",
+    "orderStates": {
+      "pending": "待處理",
+      "paid": "已付款",
+      "failed": "失敗",
+      "cancelled": "已取消",
+      "refunded": "已退款"
+    },
+    "reservedUntil": "預訂期限",
+    "providerReference": "供應商參照",
+    "openContact": "開啟聯絡人",
+    "cancelOrder": "取消訂單",
+    "confirmFree": "確認免費訂單",
+    "cancelOrderConfirm": "取消此未付款訂單並釋出預訂名額？",
+    "confirmFreeDescription": "確認此總額為零的訂單？伺服器會檢查預訂及目前總額。",
+    "orderSaveFailed": "無法確認訂單變更。請先查看目前狀態，再重試相同操作。",
+    "ordersLoadFailed": "無法更新訂單。顯示的歷史紀錄可能已過時。",
+    "noOrders": "此頁沒有訂單。",
+    "previous": "上一頁",
+    "next": "下一頁",
+    "name": "協會",
+    "moduleTitle": "協會工作區模組",
+    "moduleDescription": "管理此工作區的票券預訂。「顯示於首頁」和助理權限是獨立設定。",
+    "savedPermissions": "已儲存的助理權限與工作區模組狀態互相獨立。停用模組會保留權限設定。",
+    "states": {
+      "enabled": "已啟用",
+      "draining": "正在處理現有預訂",
+      "disabled": "已停用"
+    },
+    "stateDescriptions": {
+      "enabled": "獲授權的使用者和助理可以建立新預訂。",
+      "draining": "新預訂已暫停。請先處理待完成訂單，再完成停用。",
+      "disabled": "仍可查看歷史紀錄及執行獲准的復原操作。一般 CRM 會籍和活動紀錄仍可使用。"
+    },
+    "enable": "啟用模組",
+    "disable": "停止新預訂",
+    "finish": "完成停用",
+    "enableConfirm": "啟用此工作區的新票券預訂？首頁顯示和助理權限將保留目前設定。",
+    "disableConfirm": "停止接受新預訂？仍可查看及處理現有訂單。",
+    "finishConfirm": "在處理所有待完成訂單後完成停用？伺服器會檢查是否仍有未完成預訂。",
+    "cancel": "取消",
+    "pendingOrders": "停用前仍有待完成訂單需要處理。",
+    "stale": "模組設定已變更。請查看更新後的狀態並重試。",
+    "saveFailed": "無法儲存模組變更。請確認目前狀態後再重試。",
+    "loadFailed": "無法更新模組狀態。顯示的狀態可能已過時。",
+    "ownerOnly": "工作區擁有者或管理員可以變更模組狀態。",
+    "history": "開啟訂單歷史紀錄",
+    "refresh": "重新整理"
+  },
   common: {
     cancel: "取消",
     back: "返回",
@@ -4715,6 +4768,7 @@ export const zh: Dictionary = {
     },
   },
   operatorBar: {
+    association: "協會",
     aria: "操作應用",
     page: "頁面",
     office: "Office",
@@ -8431,6 +8485,7 @@ export const zh: Dictionary = {
     },
     toolsTab: {
       homeApps: {
+        association: "協會",
         title: "迷你應用",
         desc: "選擇此助理可使用的內建應用與工具組。變更將於下一輪對話生效。",
         read: "讀取",

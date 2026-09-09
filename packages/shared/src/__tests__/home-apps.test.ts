@@ -22,6 +22,7 @@ describe('[COMP:shared/home-apps] home-apps config vocabulary', () => {
       'browsers',
       'chat',
       'shopify',
+      'association',
     ])
   })
 

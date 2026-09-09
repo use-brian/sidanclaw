@@ -92,6 +92,7 @@ import type {
   Tool,
   ToolContext,
   CrmOperationsTools,
+  AssociationTools,
   Embedder,
 } from '@use-brian/core'
 import { query, runWithAgentAccess } from '../db/client.js'
@@ -348,6 +349,7 @@ type BuildOpts = {
   memoryTools: BrainMemoryTools
   taskTools: BrainTaskTools
   crmTools: BrainCrmTools
+  associationTools?: AssociationTools
   retrievalTools: BrainRetrievalTools
   /**
    * Query embedder for the dedicated `searchRecording` tool's vector arm
@@ -1591,6 +1593,11 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
 
   // ── CRM bridges
   const crmBridges = [
+    ...[...filterToolsByCapabilities(new Map([
+      [opts.crmTools.saveCrmEntitlementPlan.name, opts.crmTools.saveCrmEntitlementPlan],
+      [opts.crmTools.saveCrmEvent.name, opts.crmTools.saveCrmEvent],
+    ]), opts.agentActiveCapabilities ?? new Set()).values()]
+      .map(tool => bridgeCoreTool(tool, resolveCtx, workspaceId)),
     bridgeCoreTool(opts.crmTools.saveContact, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.getContact, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.listContacts, resolveCtx, workspaceId),
@@ -1631,6 +1638,15 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     bridgeCoreTool(opts.crmTools.updateCrmParticipation, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.setDealPipelineStage, resolveCtx, workspaceId),
   ]
+
+  const visibleAssociation = filterToolsByCapabilities(
+    new Map(Object.values(opts.associationTools ?? {}).map(tool => [tool.name, tool])),
+    opts.agentActiveCapabilities ?? new Set(),
+  )
+  const associationReads = new Set([...visibleAssociation.values()].filter(tool => tool.isReadOnly).map(tool => tool.name))
+  const associationBridges = [...visibleAssociation.values()]
+    .filter(tool => opts.scope === 'read_write' || tool.isReadOnly)
+    .map(tool => bridgeCoreTool(tool, resolveCtx, workspaceId))
 
   // ── File bridges (workspace filesystem). Present only when a blob client is
   // configured (opts.fileTools set). Both byte-preserving saves are bridged:
@@ -1812,6 +1828,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     : null
 
   const all: BrainTool[] = [
+    ...associationBridges,
     ...storeBridges,
     ...(askStoreAssistant ? [askStoreAssistant] : []),
     // Reads
@@ -1861,7 +1878,8 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       t.name === 'saveCrmSegment' || t.name === 'archiveCrmSegment' ||
       t.name === 'grantCrmEntitlement' || t.name === 'updateCrmEntitlement' ||
       t.name === 'recordCrmParticipation' || t.name === 'updateCrmParticipation' ||
-      t.name === 'setDealPipelineStage'
+      t.name === 'setDealPipelineStage' ||
+      t.name === 'saveCrmEntitlementPlan' || t.name === 'saveCrmEvent'
     ),
     ...fileBridges.filter((t) =>
       t.name === 'fileWrite' || t.name === 'fileAppend' ||
@@ -1897,6 +1915,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     ? all.filter(
         (t) =>
           READ_TOOL_NAMES.has(t.name) ||
+          associationReads.has(t.name) ||
           agentReadNames.has(t.name) ||
           storeNames.has(t.name) ||
           t.name === 'askStoreAssistant',

@@ -5,13 +5,14 @@ import type { HomeAppKey } from './home-apps.js'
  * [COMP:shared/home-app-tool-config]
  */
 export const HOME_APP_TOOL_CONFIG = [
-  { id: 'page', capability: 'page', toolSets: ['read', 'write'] },
-  { id: 'office', capability: 'office', toolSets: ['read', 'write'] },
-  { id: 'browsers', capability: 'computer', toolSets: ['read', 'write'] },
-  { id: 'tasks', capability: 'tasks', toolSets: ['read', 'write'] },
-  { id: 'crm', capability: 'crm', toolSets: ['read', 'write'] },
-  { id: 'feed', capability: 'feed', toolSets: ['read', 'write'] },
-] as const satisfies readonly { id: HomeAppKey; capability: string; toolSets: readonly string[] }[]
+  { id: 'page', capability: 'page', toolSets: ['read', 'write'], seedToolSets: true },
+  { id: 'office', capability: 'office', toolSets: ['read', 'write'], seedToolSets: true },
+  { id: 'browsers', capability: 'computer', toolSets: ['read', 'write'], seedToolSets: true },
+  { id: 'tasks', capability: 'tasks', toolSets: ['read', 'write'], seedToolSets: true },
+  { id: 'crm', capability: 'crm', toolSets: ['read', 'write'], seedToolSets: true },
+  { id: 'feed', capability: 'feed', toolSets: ['read', 'write'], seedToolSets: true },
+  { id: 'association', capability: 'association', toolSets: ['read', 'write'], seedToolSets: false },
+] as const satisfies readonly { id: HomeAppKey; capability: string; toolSets: readonly string[]; seedToolSets: boolean }[]
 
 export type HomeAppToolId = (typeof HOME_APP_TOOL_CONFIG)[number]['id']
 export type HomeAppToolSet = { app: HomeAppToolId; set: string }
@@ -27,7 +28,8 @@ export const HOME_APP_TOOL_CAPABILITIES: readonly string[] = HOME_APP_TOOL_CONFI
 /** Positive grants: new sets require a migration, never an implicit allow. */
 export const DEFAULT_HOME_APP_TOOL_CAPABILITIES: readonly string[] = [
   'page', 'feed',
-  ...HOME_APP_TOOL_CONFIG.flatMap((app) => app.toolSets.map((set) => homeAppToolSetCapability(app.id, set))),
+  ...HOME_APP_TOOL_CONFIG.filter((app) => app.seedToolSets)
+    .flatMap((app) => app.toolSets.map((set) => homeAppToolSetCapability(app.id, set))),
 ]
 
 /** Structural input keeps the catalog usable by both the core and the UI. */

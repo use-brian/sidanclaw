@@ -74,7 +74,7 @@ export function staleMarksFor(event: string, workspaceId: string): string[] {
     case INBOX_REFRESH_EVENT:
       return [`inbox:${workspaceId}`];
     case HOME_APPS_REFRESH_EVENT:
-      return [`home-apps:${workspaceId}`];
+      return [`home-apps:${workspaceId}`, `association-module:${workspaceId}`];
     default:
       return [];
   }

@@ -156,6 +156,7 @@ export const WORKSPACE_SURFACES = [
   "recordings",
   "inbox",
   "shopify",
+  "association",
   "live",
 ] as const;
 

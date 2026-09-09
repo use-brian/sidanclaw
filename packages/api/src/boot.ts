@@ -92,6 +92,7 @@ import {
   createTranscriptionPrefTools,
   createCrmTools,
   createCrmOperationsTools,
+  createAssociationTools,
   createCrmEmailDraftTools,
   createMemoryTools,
   createRetrievalTools,
@@ -3835,6 +3836,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     service: crmOperationsService,
   })
   for (const tool of Object.values(crmOperationsTools)) allTools.set(tool.name, tool)
+  const associationTools = createAssociationTools(associationService)
+  for (const tool of Object.values(associationTools)) allTools.set(tool.name, tool)
   const crmEmailDraftTools = createCrmEmailDraftTools(crmEmailDraftStore)
   allTools.set('saveEmailDraft', crmEmailDraftTools.saveEmailDraft)
   allTools.set('getEmailDraft', crmEmailDraftTools.getEmailDraft)
@@ -4835,6 +4838,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     memoryTools: brainMemoryTools,
     taskTools,
     crmTools: { ...crmTools, ...crmOperationsTools },
+    associationTools,
     retrievalTools: brainRetrievalTools,
     fileTools: brainFileTools ?? undefined,
     // Brand primitive (D8): `getBrand` on both key scopes, `saveBrandDraft`

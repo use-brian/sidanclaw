@@ -96,3 +96,11 @@ describe("[COMP:app-web/surface-cache-invalidation] marks stale without dropping
     expect(isSurfaceCacheStale("tasks:w1:u1")).toBe(true);
   });
 });
+
+import { HOME_APPS_REFRESH_EVENT } from "@/lib/home-apps-events";
+
+describe("[COMP:app-web/surface-cache-invalidation] Association module signals", () => {
+  it("marks the viewer-scoped module state on workspace configuration changes", () => {
+    expect(staleMarksFor(HOME_APPS_REFRESH_EVENT, "w1")).toContain("association-module:w1");
+  });
+});

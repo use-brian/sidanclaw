@@ -183,7 +183,7 @@ describe('[COMP:crm/privacy-copies] Notification retirement and workflow depende
     try {
       await client.query('BEGIN');await acquireCrmPrivacyAdmission(client,f.workspaceId)
       const leased=await outbox.leaseBatch('scan_worker',50,60_000)
-      expect(leased.filter(e=>[f.workspaceId,other.workspaceId].includes(e.workspaceId)).map(e=>e.id)).toEqual([available]);expect(leased.some(e=>e.id===held)).toBe(false)
+      expect(leased.filter(e=>e.workspaceId===f.workspaceId || e.workspaceId===other.workspaceId).map(e=>e.id)).toEqual([available]);expect(leased.some(e=>e.id===held)).toBe(false)
     }finally{await client.query('ROLLBACK');client.release()}
   })
   it('serializes run and step writes during privacy and preserves ordinary workflows afterward',async()=>{

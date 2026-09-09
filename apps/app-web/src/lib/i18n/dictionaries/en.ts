@@ -14,6 +14,59 @@
 import type { BuiltinToolGroupId } from "@use-brian/shared/builtin-connectors";
 
 export const en = {
+  associationPage: {
+    "overview": "Overview",
+    "orders": "Orders",
+    "openCrm": "Open CRM",
+    "order": "Order",
+    "orderStates": {
+      "pending": "Pending",
+      "paid": "Paid",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "refunded": "Refunded"
+    },
+    "reservedUntil": "Reserved until",
+    "providerReference": "Provider reference",
+    "openContact": "Open contact",
+    "cancelOrder": "Cancel order",
+    "confirmFree": "Confirm free order",
+    "cancelOrderConfirm": "Cancel this unpaid order and release its reservation?",
+    "confirmFreeDescription": "Confirm this zero-total order? The server will check the reservation and current total.",
+    "orderSaveFailed": "The order change could not be confirmed. Review its current state before retrying the same action.",
+    "ordersLoadFailed": "Could not refresh orders. The displayed history may be out of date.",
+    "noOrders": "No orders on this page.",
+    "previous": "Previous page",
+    "next": "Next page",
+    "name": "Association",
+    "moduleTitle": "Association workspace module",
+    "moduleDescription": "Control ticket reservations for this workspace. Show in Home and assistant permissions are separate settings.",
+    "savedPermissions": "Saved assistant permissions are separate from workspace module state. Disabling the module preserves those permissions.",
+    "states": {
+      "enabled": "Enabled",
+      "draining": "Finishing existing reservations",
+      "disabled": "Disabled"
+    },
+    "stateDescriptions": {
+      "enabled": "New reservations are available to authorized users and assistants.",
+      "draining": "New reservations are paused. Resolve pending orders before finishing shutdown.",
+      "disabled": "History and allowed recovery remain available. Generic CRM membership and event records remain usable."
+    },
+    "enable": "Enable module",
+    "disable": "Stop new reservations",
+    "finish": "Finish disabling",
+    "enableConfirm": "Enable new ticket reservations in this workspace? Home visibility and assistant permissions will keep their current settings.",
+    "disableConfirm": "Stop accepting new reservations? Existing orders will remain available for review and recovery.",
+    "finishConfirm": "Finish disabling after all pending orders are resolved? The server will check for remaining reservations.",
+    "cancel": "Cancel",
+    "pendingOrders": "Pending orders still need review before the module can be disabled.",
+    "stale": "Module settings changed. Review the refreshed state and try again.",
+    "saveFailed": "The module change could not be saved. Review the current state before trying again.",
+    "loadFailed": "Could not refresh module state. The displayed state may be out of date.",
+    "ownerOnly": "A workspace owner or admin can change module state.",
+    "history": "Open order history",
+    "refresh": "Refresh"
+  },
   common: {
     cancel: "Cancel",
     back: "Back",
@@ -4995,6 +5048,7 @@ export const en = {
   },
   // ── Home operator app-bar (tasks-operator-surface §2) ──
   operatorBar: {
+    association: "Association",
     aria: "Operator apps",
     page: "Page",
     office: "Office",
@@ -8749,6 +8803,7 @@ export const en = {
     },
     toolsTab: {
       homeApps: {
+        association: "Association",
         title: "Mini apps",
         desc: "Choose which built-in apps and tool sets this assistant can use. Changes apply to its next turn.",
         read: "Read",

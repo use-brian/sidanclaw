@@ -100,6 +100,15 @@ export function crmConfigCacheKey(workspaceId: string): string {
   return `${surfaceDataKey("crm", workspaceId)}:config`;
 }
 
+export function associationModuleCacheKey(workspaceId: string): string {
+  return `association-module:${workspaceId}${viewerSuffix()}`;
+}
+
+export function associationOrdersCacheKey(workspaceId: string, cursor: string | null): string {
+  return `association-orders:${workspaceId}${viewerSuffix()}:${cursor ?? "first"}`;
+}
+
+
 /**
  * Cache key for a single doc page's metadata (`getView`).
  *

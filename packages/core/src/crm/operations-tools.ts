@@ -8,6 +8,8 @@
 
 import { z } from 'zod'
 import { buildTool, type Tool, type ToolContext } from '../tools/types.js'
+import { missingToolCapability } from '../tools/capability-gate.js'
+import { AssociationPlanInputSchema, AssociationEventInputSchema } from '../association/domain.js'
 import {
   CrmDeliveryChannelSchema,
   type SendabilityVerdict,
@@ -117,6 +119,8 @@ export type CrmOperationsTools = {
   recordCrmParticipation: Tool
   updateCrmParticipation: Tool
   setDealPipelineStage: Tool
+  saveCrmEntitlementPlan: Tool
+  saveCrmEvent: Tool
 }
 
 const PageInput = {
@@ -272,7 +276,8 @@ function actorFor(context: ToolContext): CrmOperationsActor {
   }
 }
 
-function operationsContext(context: ToolContext): CrmOperationsContext | null {
+/** Preserve the calling principal when adapting native tools to CRM/Association. */
+export function crmOperationsToolContext(context: ToolContext): CrmOperationsContext | null {
   const workspace = workspaceId(context)
   if (!workspace) return null
   return {
@@ -305,10 +310,38 @@ export function createCrmOperationsTools(options: {
   reads: CrmOperationsReadPort
   service: CrmOperationsServicePort
 }): CrmOperationsTools {
+  function configure<Input extends z.ZodType>(name: string, description: string, inputSchema: Input,
+    toCommand: (input: z.infer<Input>) => CrmOperationsCommand): Tool<Input> {
+    const tool: Tool<Input> = buildTool({
+      name, description, inputSchema, requiresCapability: 'configure',
+      homeAppToolSet: { app: 'crm', set: 'write' },
+      async execute(input, context) {
+        const missing = missingToolCapability(tool, context.activeCapabilities)
+        if (missing) return { isError: true, data: { error: 'not_authorized', requiredCapability: missing } }
+        const serviceContext = crmOperationsToolContext(context)
+        if (!serviceContext) return workspaceError()
+        try {
+          return { data: await options.service.execute({ ...serviceContext,
+            authority: { ...serviceContext.authority, canConfigure: true },
+          }, toCommand(inputSchema.parse(input))) }
+        } catch (error) {
+          if (error instanceof CrmOperationsError) return failure(error)
+          return { isError: true, data: { error: error instanceof z.ZodError ? 'invalid_input' : 'internal', message: 'CRM configuration could not complete.' } }
+        }
+      },
+    })
+    return tool
+  }
+  const saveCrmEntitlementPlan = configure('saveCrmEntitlementPlan',
+    'Save a generic CRM entitlement plan by stable key. Read the plan catalog first. Requires explicit configuration and CRM write grants; no Association module is required. This does not grant membership or assert payment.',
+    z.object({ plan: AssociationPlanInputSchema }).strict(), input => ({ kind: 'save_entitlement_plan', ...input.plan }))
+  const saveCrmEvent = configure('saveCrmEvent',
+    'Save a generic CRM event by stable slug using the declared timezone and registration windows. Read the event catalog first. Requires explicit configuration and CRM write grants; no Association module is required. This does not create a ticket or registration.',
+    z.object({ event: AssociationEventInputSchema }).strict(), input => ({ kind: 'save_event', ...input.event }))
   const write = <T extends CrmOperationsCommand>(
     command: (input: Record<string, unknown>) => T,
   ) => async (input: Record<string, unknown>, context: ToolContext) => {
-    const serviceContext = operationsContext(context)
+    const serviceContext = crmOperationsToolContext(context)
     if (!serviceContext) return workspaceError()
     try {
       return { data: await options.service.execute(serviceContext, command(input)) }
@@ -664,6 +697,7 @@ export function createCrmOperationsTools(options: {
     saveCrmSegment, archiveCrmSegment,
     grantCrmEntitlement, updateCrmEntitlement,
     recordCrmParticipation, updateCrmParticipation, setDealPipelineStage,
+    saveCrmEntitlementPlan, saveCrmEvent,
   }
 }
 

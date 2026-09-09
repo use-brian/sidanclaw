@@ -16,6 +16,15 @@ export type WorkspaceModuleOperationClass = typeof WORKSPACE_MODULE_OPERATION_CL
 export const WORKSPACE_MODULE_CONFLICTS = ['module_disabled', 'module_draining', 'module_drain_pending', 'stale_module_version'] as const
 export type WorkspaceModuleConflict = typeof WORKSPACE_MODULE_CONFLICTS[number]
 
+/** Portable lifecycle failures retain the same code through REST and native tools. */
+export class WorkspaceModuleError extends Error {
+  constructor(
+    readonly code: WorkspaceModuleConflict | 'not_authorized' | 'invalid_input' | 'not_found',
+    message: string,
+    readonly details?: Record<string, unknown>,
+  ) { super(message); this.name = 'WorkspaceModuleError' }
+}
+
 export interface WorkspaceModule {
   workspaceId: string
   moduleKey: WorkspaceModuleKey

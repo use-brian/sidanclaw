@@ -73,10 +73,27 @@ describe('[COMP:crm/operations-tools] canonical CRM operation tools', () => {
       'grantCrmEntitlement', 'updateCrmEntitlement',
       'recordCrmParticipation', 'updateCrmParticipation',
       'setDealPipelineStage',
+      'saveCrmEntitlementPlan', 'saveCrmEvent',
     ])
-    expect(Object.values(tools).every((tool) => tool.requiresCapability === 'crm')).toBe(true)
+    expect(Object.values(tools).filter(tool => !['saveCrmEntitlementPlan', 'saveCrmEvent'].includes(tool.name)).every((tool) => tool.requiresCapability === 'crm')).toBe(true)
     expect(tools.listCrmSubmissions.isReadOnly).toBe(true)
     expect(tools.updateCrmSubmission.isReadOnly).toBe(false)
+  })
+
+  it('requires configure plus CRM write grants for generic catalog saves without Association', async () => {
+    const plan = { key: 'fictional-member', name: 'Example Membership', currency: 'USD', feeMinor: 0, billingPeriod: 'manual' }
+    const required = ['configure', 'crm', 'home_app:crm:write']
+    for (const missing of required) {
+      expect(await tools.saveCrmEntitlementPlan.execute({ plan }, context({ activeCapabilities: new Set(required.filter(cap => cap !== missing)) })))
+        .toMatchObject({ isError: true, data: { error: 'not_authorized', requiredCapability: missing } })
+    }
+    expect(execute).not.toHaveBeenCalled()
+    await tools.saveCrmEntitlementPlan.execute({ plan }, context({ activeCapabilities: new Set(required) }))
+    expect(execute.mock.calls[0]?.[0]).toMatchObject({ actor: { kind: 'assistant', assistantId: ASSISTANT_ID }, authority: { role: 'member', canConfigure: true } })
+    expect(execute.mock.calls[0]?.[1]).toMatchObject({ kind: 'save_entitlement_plan', key: 'fictional-member' })
+    await tools.saveCrmEvent.execute({ event: { slug: 'example-meeting', title: 'Example Meeting', startsAt: '2026-10-01T10:00:00Z',
+      endsAt: '2026-10-01T11:00:00Z', timezone: 'UTC', mode: 'venue' } }, context({ activeCapabilities: new Set(required) }))
+    expect(execute.mock.calls[1]?.[1]).toMatchObject({ kind: 'save_event', slug: 'example-meeting' })
   })
 
   it('passes bounded read filters to the workspace-scoped read port', async () => {

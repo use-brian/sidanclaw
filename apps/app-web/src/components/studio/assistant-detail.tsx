@@ -1563,7 +1563,7 @@ function ConnectorsTab({
       </div>
 
       {subTab === "home-apps" ? (
-        <HomeAppToolSettings key={assistantId} assistantId={assistantId} />
+        <HomeAppToolSettings key={assistantId} assistantId={assistantId} workspaceId={workspaceId} />
       ) : subTab === "browser-identities" ? (
         <BrowserIdentitiesPanel
           assistantId={assistantId}

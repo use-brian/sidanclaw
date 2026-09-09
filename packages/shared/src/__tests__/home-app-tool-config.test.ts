@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { HOME_APP_TOOL_CONFIG, HOME_APP_TOOL_CAPABILITIES, homeAppToolRequirements, homeAppToolSetCapability } from '../home-app-tool-config.js'
+import { HOME_APP_TOOL_CONFIG, HOME_APP_TOOL_CAPABILITIES, DEFAULT_HOME_APP_TOOL_CAPABILITIES, homeAppToolRequirements, homeAppToolSetCapability } from '../home-app-tool-config.js'
 
 describe('[COMP:shared/home-app-tool-config] mini-app tool declarations', () => {
-  it('declares the requested six apps with unique app and set grants', () => {
-    expect(HOME_APP_TOOL_CONFIG.map((app) => app.id)).toEqual(['page', 'office', 'browsers', 'tasks', 'crm', 'feed'])
+  it('declares native apps with unique app and set grants', () => {
+    expect(HOME_APP_TOOL_CONFIG.map((app) => app.id)).toEqual(['page', 'office', 'browsers', 'tasks', 'crm', 'feed', 'association'])
     expect(new Set(HOME_APP_TOOL_CAPABILITIES).size).toBe(HOME_APP_TOOL_CAPABILITIES.length)
+  })
+  it('keeps Association opt-in and composes contact authority without granting configuration', () => {
+    expect(DEFAULT_HOME_APP_TOOL_CAPABILITIES.some(cap => cap.includes('association'))).toBe(false)
+    for (const isReadOnly of [true, false]) {
+      const set = isReadOnly ? 'read' : 'write'
+      expect(homeAppToolRequirements({ requiresCapability: 'crm', isReadOnly, homeAppToolSet: { app: 'association', set } }))
+        .toEqual(['association', `home_app:association:${set}`, 'crm', `home_app:crm:${set}`])
+    }
   })
   it.each(HOME_APP_TOOL_CONFIG)('requires the $id app AND its selected set', (app) => {
     expect(homeAppToolRequirements({ requiresCapability: app.capability, isReadOnly: true }))

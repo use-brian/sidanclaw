@@ -1,19 +1,13 @@
 /** Workspace lifecycle and transaction admission. [COMP:api/workspace-modules] */
 import type { Pool, PoolClient } from 'pg'
 import {
-  WORKSPACE_MODULE_ACTIONS, workspaceModuleAdmits,
+  WORKSPACE_MODULE_ACTIONS, workspaceModuleAdmits, WorkspaceModuleError,
   type WorkspaceModule, type WorkspaceModuleActionInput, type WorkspaceModuleActionResult,
-  type WorkspaceModuleConflict,
 } from '@use-brian/shared'
 import { applyRLSGucs, getAppPool, getPool } from './client.js'
+import { notifyWorkspaceChange } from '../brain-stream/notify.js'
 
-export class WorkspaceModuleError extends Error {
-  constructor(
-    readonly code: WorkspaceModuleConflict | 'not_authorized' | 'invalid_input' | 'not_found',
-    message: string,
-    readonly details?: Record<string, unknown>,
-  ) { super(message); this.name = 'WorkspaceModuleError' }
-}
+export { WorkspaceModuleError } from '@use-brian/shared'
 
 const SELECT = `workspace_id AS "workspaceId", module_key AS "moduleKey", state, version,
   enabled_at AS "enabledAt", disable_requested_at AS "disableRequestedAt",
@@ -94,7 +88,7 @@ export function createWorkspaceModulesStore(pool: Pool = getPool(), memberPool: 
       if (!WORKSPACE_MODULE_ACTIONS.includes(input.action) || !Number.isSafeInteger(input.expectedVersion) || input.expectedVersion < 0) {
         throw new WorkspaceModuleError('invalid_input', 'A known action and a nonnegative expectedVersion are required')
       }
-      return memberTransaction(memberPool, workspaceId, userId, true, async (client) => {
+      const result = await memberTransaction(memberPool, workspaceId, userId, true, async (client) => {
         let result = await client.query<WorkspaceModule>(
           `SELECT ${SELECT} FROM workspace_modules WHERE workspace_id=$1 AND module_key='association' FOR UPDATE`, [workspaceId])
         let wasMissing = false
@@ -136,6 +130,8 @@ export function createWorkspaceModulesStore(pool: Pool = getPool(), memberPool: 
           { moduleKey: 'association', action: input.action, from: current.state, to: state, version: module.version }])
         return { module, changed: true, pendingOrders: pending }
       })
+      if (result.changed) notifyWorkspaceChange(workspaceId, 'workspace_config', 'update')
+      return result
     },
   }
 }

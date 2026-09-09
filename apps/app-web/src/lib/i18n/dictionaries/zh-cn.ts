@@ -12,6 +12,59 @@
 import type { Dictionary } from "./en";
 
 export const zhCN: Dictionary = {
+  associationPage: {
+    "overview": "概览",
+    "orders": "订单",
+    "openCrm": "打开 CRM",
+    "order": "订单",
+    "orderStates": {
+      "pending": "待处理",
+      "paid": "已付款",
+      "failed": "失败",
+      "cancelled": "已取消",
+      "refunded": "已退款"
+    },
+    "reservedUntil": "预订期限",
+    "providerReference": "供应商参考编号",
+    "openContact": "打开联系人",
+    "cancelOrder": "取消订单",
+    "confirmFree": "确认免费订单",
+    "cancelOrderConfirm": "取消此未付款订单并释放预订名额？",
+    "confirmFreeDescription": "确认此总额为零的订单？服务器会检查预订及当前总额。",
+    "orderSaveFailed": "无法确认订单变更。请先查看当前状态，再重试相同操作。",
+    "ordersLoadFailed": "无法更新订单。显示的历史记录可能已过时。",
+    "noOrders": "此页没有订单。",
+    "previous": "上一页",
+    "next": "下一页",
+    "name": "协会",
+    "moduleTitle": "协会工作区模块",
+    "moduleDescription": "管理此工作区的票券预订。“在首页显示”和助手权限是独立设置。",
+    "savedPermissions": "已保存的助手权限与工作区模块状态相互独立。停用模块会保留权限设置。",
+    "states": {
+      "enabled": "已启用",
+      "draining": "正在处理现有预订",
+      "disabled": "已停用"
+    },
+    "stateDescriptions": {
+      "enabled": "获得授权的用户和助手可以创建新预订。",
+      "draining": "新预订已暂停。请先处理待完成订单，再完成停用。",
+      "disabled": "仍可查看历史记录及执行获准的恢复操作。普通 CRM 会籍和活动记录仍可使用。"
+    },
+    "enable": "启用模块",
+    "disable": "停止新预订",
+    "finish": "完成停用",
+    "enableConfirm": "启用此工作区的新票券预订？首页显示和助手权限将保留当前设置。",
+    "disableConfirm": "停止接受新预订？仍可查看及处理现有订单。",
+    "finishConfirm": "在处理所有待完成订单后完成停用？服务器会检查是否仍有未完成预订。",
+    "cancel": "取消",
+    "pendingOrders": "停用前仍有待完成订单需要处理。",
+    "stale": "模块设置已变更。请查看更新后的状态并重试。",
+    "saveFailed": "无法保存模块变更。请确认当前状态后再重试。",
+    "loadFailed": "无法更新模块状态。显示的状态可能已过时。",
+    "ownerOnly": "工作区所有者或管理员可以更改模块状态。",
+    "history": "打开订单历史记录",
+    "refresh": "刷新"
+  },
   common: {
     cancel: "取消",
     back: "返回",
@@ -4559,6 +4612,7 @@ export const zhCN: Dictionary = {
     },
   },
   operatorBar: {
+    association: "协会",
     aria: "操作应用",
     page: "页面",
     office: "Office",
@@ -8577,6 +8631,7 @@ export const zhCN: Dictionary = {
     },
     toolsTab: {
       homeApps: {
+        association: "协会",
         title: "迷你应用",
         desc: "选择此助手可使用的内置应用与工具组。更改将在下一轮对话生效。",
         read: "读取",

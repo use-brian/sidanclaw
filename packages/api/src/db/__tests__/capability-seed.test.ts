@@ -14,6 +14,9 @@ describe('[COMP:connectors/builtin-primitive-switch] mini-app defaults', () => {
     expect(params).not.toContain('tasks')
     expect(params).not.toContain('crm')
     expect(params).not.toContain('files')
+    expect(params).not.toContain('association')
+    expect(params).not.toContain('home_app:association:read')
+    expect(params).not.toContain('home_app:association:write')
   })
   it('backfills exactly the new catalog grants and preserves historical revocations', () => {
     const sql = readFileSync(new URL('../../../migrations/496_home_app_tool_sets.sql', import.meta.url), 'utf8')

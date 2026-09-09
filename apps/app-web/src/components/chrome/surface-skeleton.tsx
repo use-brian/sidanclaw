@@ -67,6 +67,7 @@ export function surfaceSkeletonKind(
     case "recordings":
       return "grid";
     case "tasks":
+    case "association":
     case "crm":
     case "goals":
     case "approvals":

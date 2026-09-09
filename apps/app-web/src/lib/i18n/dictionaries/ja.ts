@@ -1,6 +1,59 @@
 import type { Dictionary } from "./en";
 
 export const ja: Dictionary = {
+  associationPage: {
+    "overview": "概要",
+    "orders": "注文",
+    "openCrm": "CRMを開く",
+    "order": "注文",
+    "orderStates": {
+      "pending": "保留中",
+      "paid": "支払い済み",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み",
+      "refunded": "返金済み"
+    },
+    "reservedUntil": "予約期限",
+    "providerReference": "プロバイダー参照",
+    "openContact": "連絡先を開く",
+    "cancelOrder": "注文をキャンセル",
+    "confirmFree": "無料注文を確定",
+    "cancelOrderConfirm": "この未払い注文をキャンセルして予約枠を解放しますか？",
+    "confirmFreeDescription": "この合計金額ゼロの注文を確定しますか？サーバーが予約と現在の合計を確認します。",
+    "orderSaveFailed": "注文の変更を確認できませんでした。同じ操作を再試行する前に現在の状態を確認してください。",
+    "ordersLoadFailed": "注文を更新できませんでした。表示中の履歴が古い可能性があります。",
+    "noOrders": "このページに注文はありません。",
+    "previous": "前のページ",
+    "next": "次のページ",
+    "name": "協会",
+    "moduleTitle": "協会ワークスペースモジュール",
+    "moduleDescription": "このワークスペースのチケット予約を管理します。ホームへの表示とアシスタントの権限は別の設定です。",
+    "savedPermissions": "保存済みのアシスタント権限とモジュールの状態は別々です。モジュールを無効にしても権限の設定は保持されます。",
+    "states": {
+      "enabled": "有効",
+      "draining": "既存の予約を処理中",
+      "disabled": "無効"
+    },
+    "stateDescriptions": {
+      "enabled": "権限のあるユーザーとアシスタントが新規予約を作成できます。",
+      "draining": "新規予約は停止中です。保留中の注文を解決してから無効化を完了してください。",
+      "disabled": "履歴と許可された復旧操作は利用できます。通常のCRM会員情報とイベント記録も利用できます。"
+    },
+    "enable": "モジュールを有効にする",
+    "disable": "新規予約を停止",
+    "finish": "無効化を完了",
+    "enableConfirm": "このワークスペースで新規チケット予約を有効にしますか？ホームの表示とアシスタントの権限設定は維持されます。",
+    "disableConfirm": "新規予約の受付を停止しますか？既存の注文は引き続き確認と復旧に利用できます。",
+    "finishConfirm": "保留中の注文の解決後に無効化を完了しますか？サーバーが未解決の予約を確認します。",
+    "cancel": "キャンセル",
+    "pendingOrders": "無効化する前に、保留中の注文を確認してください。",
+    "stale": "モジュール設定が変更されました。更新された状態を確認して再試行してください。",
+    "saveFailed": "変更を保存できませんでした。現在の状態を確認してから再試行してください。",
+    "loadFailed": "モジュールの状態を更新できませんでした。表示が古い可能性があります。",
+    "ownerOnly": "ワークスペースのオーナーまたは管理者が状態を変更できます。",
+    "history": "注文履歴を開く",
+    "refresh": "更新"
+  },
   common: {
     cancel: "キャンセル",
     back: "戻る",
@@ -4769,6 +4822,7 @@ export const ja: Dictionary = {
     },
   },
   operatorBar: {
+    association: "協会",
     aria: "オペレーターアプリ",
     page: "ページ",
     office: "Office",
@@ -8502,6 +8556,7 @@ export const ja: Dictionary = {
     },
     toolsTab: {
       homeApps: {
+        association: "協会",
         title: "ミニアプリ",
         desc: "このアシスタントが使える組み込みアプリとツールセットを選択します。変更は次のターンから適用されます。",
         read: "読み取り",

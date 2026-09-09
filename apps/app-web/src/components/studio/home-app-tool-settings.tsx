@@ -5,13 +5,14 @@ import { HOME_APP_TOOL_CONFIG, homeAppToolSetCapability } from "@use-brian/share
 import { authFetch } from "@/lib/auth-fetch";
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 import { useT } from "@/lib/i18n/client";
+import { AssociationModuleControls } from "@/components/association/module-controls";
 
 type Grant = { capability: string; enabled: boolean };
 
 /** Per-assistant app and set grants. Writes settle before changing saved state.
  * [COMP:app-web/home-app-tool-settings]
  */
-export function HomeAppToolSettings({ assistantId }: { assistantId: string }) {
+export function HomeAppToolSettings({ assistantId, workspaceId }: { assistantId: string; workspaceId?: string | null }) {
   const t = useT().assistant.toolsTab.homeApps;
   const [grants, setGrants] = useState<Grant[] | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -72,6 +73,7 @@ export function HomeAppToolSettings({ assistantId }: { assistantId: string }) {
 
   return <section className="space-y-3">
     <p className="text-sm text-muted-foreground">{t.desc}</p>
+    {workspaceId && <AssociationModuleControls workspaceId={workspaceId} readOnly />}
     {HOME_APP_TOOL_CONFIG.map((app) => <div key={app.id} className="rounded-xl border border-border overflow-hidden">
       <div className="flex items-center justify-between gap-4 px-4 py-3">
         <h3 className="text-sm font-medium">{t[app.id]}</h3>
