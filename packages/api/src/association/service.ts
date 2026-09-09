@@ -43,8 +43,11 @@ export function createAssociationService(options: {
         requireCrmIntegrationOperation(integration, operation)
         if ('eventId' in command && command.eventId) requireCrmIntegrationResources(integration, operation, { eventIds: command.eventId })
       }
+      if(command.kind==='expire_due_order' && !(context.actor.kind==='system_job' && context.actor.job==='association_expiry'))
+        throw new CrmOperationsError('not_authorized','Due reservation expiry requires its dedicated system job.')
       if (context.actor.kind === 'system_job' && !(
-        context.actor.job === 'association_reconciliation' && command.kind === 'reconcile_provider_event'
+        (context.actor.job === 'association_reconciliation' && command.kind === 'reconcile_provider_event')
+        || (context.actor.job === 'association_expiry' && command.kind === 'expire_due_order')
       )) throw new CrmOperationsError('not_authorized', 'This system job cannot perform the requested Association command.')
       const dbActor = actor(context)
       const output = { command: command.kind }
@@ -81,6 +84,7 @@ export function createAssociationService(options: {
           return { ...output, items: page.items, nextCursor: page.nextCursor,
             ...(command.kind === 'module_blockers' ? { pendingOrders: page.total } : {}) }
         }
+        case 'expire_due_order': return { ...output, ...(await store.expireDueOrder(workspaceId,command.orderId,dbActor)) }
         case 'cancel_order': return { ...output, ...(await store.cancelOrder(workspaceId, command.orderId, dbActor)) }
         case 'confirm_free_order': return { ...output, ...(await store.confirmFreeOrder(workspaceId, command.orderId, dbActor)) }
         case 'reconcile_provider_event': {

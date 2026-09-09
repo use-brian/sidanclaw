@@ -50,6 +50,7 @@ function fakeStore(): AssociationStore {
     createOrder: vi.fn(),
     getOrder: vi.fn(),
     listOrders: vi.fn(),
+    expireDueOrder: vi.fn(),
     cancelOrder: vi.fn(),
     confirmFreeOrder: vi.fn(),
     reconcileProviderEvent: vi.fn(),

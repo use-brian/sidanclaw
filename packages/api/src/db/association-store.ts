@@ -10,7 +10,7 @@
  */
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
-import { CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
+import { CrmOperationsError, CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
 import { crmPageInstant, queryCrmPage } from '../crm-operations/pagination.js'
 import { getPool } from './client.js'
 import { lockCrmIntegrationCredential, type CrmIntegrationPrincipal } from './crm-integration-store.js'
@@ -71,6 +71,7 @@ export type AssociationStore = {
   createOrder(workspaceId: string, input: OrderCreateInput, actor: AssociationActor): Promise<MutationResult>
   getOrder(workspaceId: string, id: string, actor?: AssociationActor): Promise<AssociationRecord | null>
   listOrders(workspaceId: string, input: AssociationListInput & { status?: OrderStatus; eventId?: string; contactId?: string; allowedEventIds?: readonly string[] }): Promise<AssociationPage & { total: number }>
+  expireDueOrder(workspaceId:string,id:string,actor:AssociationActor):Promise<MutationResult>
   cancelOrder(workspaceId: string, id: string, actor: AssociationActor): Promise<MutationResult>
   confirmFreeOrder(workspaceId: string, id: string, actor: AssociationActor): Promise<MutationResult>
   reconcileProviderEvent(workspaceId: string, orderId: string, input: ProviderEventInput, actor: AssociationActor): Promise<MutationResult>
@@ -106,7 +107,9 @@ async function authorizeOrderIntegration(client: PoolClient, workspaceId: string
   authorizeIntegration(actor, operation, { eventIds: events.rows.map((row) => row.event_id), ...(provider ? { providerKeys: provider } : {}) }, current)
 }
 
-async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string, actor: AssociationActor, action: 'cancel' | 'confirm_free'): Promise<MutationResult> {
+async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string, actor: AssociationActor, action: 'cancel' | 'confirm_free' | 'expire'): Promise<MutationResult> {
+  if(action==='expire' && !(actor.credentialKind==='system_job' && /^association_expiry:[a-f0-9-]{36}$/i.test(actor.credentialId)))
+    throw new CrmOperationsError('not_authorized','Due reservation expiry requires its dedicated system job')
   return transaction(pool, async (client) => {
     const integration = await lockIntegrationActor(client, workspaceId, actor)
     await lockAssociationModule(client, workspaceId)
@@ -115,8 +118,15 @@ async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string
       `SELECT status,total_minor::text,reservation_expires_at>clock_timestamp() AS unexpired FROM association_orders
        WHERE workspace_id=$1 AND id=$2 FOR UPDATE`, [workspaceId, id])
     const order = current.rows[0]
-    if (!order) throw new AssociationError('not_found', 'order not found')
-    const target = action === 'cancel' ? 'cancelled' : 'paid'
+    if (!order) {
+      if(action==='expire')return {record:{id,changed:false},created:false}
+      throw new AssociationError('not_found', 'order not found')
+    }
+    if(action==='expire') {
+      const due=(await client.query<{due:boolean}>(`SELECT reservation_expires_at<=clock_timestamp() due FROM association_orders WHERE workspace_id=$1 AND id=$2`,[workspaceId,id])).rows[0]?.due
+      if(order.status!=='pending' || !due)return {record:(await getOrderRecord(client,workspaceId,id))!,created:false}
+    }
+    const target = action === 'confirm_free' ? 'paid' : 'cancelled'
     if (action === 'confirm_free' && order.total_minor !== '0') throw new AssociationError('invalid_transition', 'Only a zero-total order can be confirmed without payment evidence')
     if (order.status === target) return { record: (await getOrderRecord(client, workspaceId, id))!, created: false }
     if (order.status !== 'pending') throw new AssociationError('invalid_transition', 'Only a pending order can be settled by this command')
@@ -128,7 +138,7 @@ async function settleWithoutProvider(pool: Pool, workspaceId: string, id: string
       (workspace_id,source_kind,source_id,template_key,recipient_kind,recipient_ref,payload)
       SELECT workspace_id,'order',id,'order_receipt','contact',contact_id::text,jsonb_build_object('orderId',id)
       FROM association_orders WHERE workspace_id=$1 AND id=$2 ON CONFLICT DO NOTHING`, [workspaceId, id])
-    await audit(client, workspaceId, action === 'cancel' ? 'order.cancelled' : 'order.free_confirmed', 'order', id, actor)
+    await audit(client, workspaceId, action === 'expire' ? 'order.expired' : action === 'cancel' ? 'order.cancelled' : 'order.free_confirmed', 'order', id, actor)
     return { record: (await getOrderRecord(client, workspaceId, id))!, created: true }
   })
 }
@@ -1078,6 +1088,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
       return { ...result, total: count.rows[0].total }
     },
 
+    expireDueOrder: (workspaceId,id,actor)=>settleWithoutProvider(pool,workspaceId,id,actor,'expire'),
     cancelOrder: (workspaceId, id, actor) => settleWithoutProvider(pool, workspaceId, id, actor, 'cancel'),
     confirmFreeOrder: (workspaceId, id, actor) => settleWithoutProvider(pool, workspaceId, id, actor, 'confirm_free'),
 

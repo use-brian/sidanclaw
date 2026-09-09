@@ -30,6 +30,7 @@ export const AssociationCommandSchema = z.union([
   AssociationListPageSchema.extend({ kind: z.literal('list_orders'), eventId: Id.optional(),
     contactId: Id.optional(), status: AssociationOrderStatusSchema.optional() }).strict(),
   AssociationListPageSchema.extend({ kind: z.literal('module_blockers') }).strict(),
+  z.object({ kind: z.literal('expire_due_order'), orderId: Id }).strict(),
   z.object({ kind: z.literal('cancel_order'), orderId: Id }).strict(),
   z.object({ kind: z.literal('confirm_free_order'), orderId: Id }).strict(),
   z.object({ kind: z.literal('reconcile_provider_event'), orderId: Id, event: AssociationProviderEventInputSchema }).strict(),

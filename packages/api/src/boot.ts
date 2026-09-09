@@ -229,6 +229,7 @@ import { createCrmProductionImportService } from './crm-operations/import-servic
 import { createCrmImportSources } from './db/crm-import-sources.js'
 import { createCrmImportFileCleanupWorker } from './crm-operations/import-file-cleanup-worker.js'
 import { createCrmEntitlementWorker } from './crm-operations/entitlement-worker.js'
+import { createAssociationLifecycleWorker } from './association/lifecycle-worker.js'
 import { createCrmRetentionWorker } from './crm-operations/retention-worker.js'
 import {
   crmWorkflowAdmission,
@@ -6780,6 +6781,8 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
   if (runWorkers) crmRetentionWorker.start()
   const crmEntitlementWorker=createCrmEntitlementWorker({onError:()=>console.warn('[crm-entitlement-expiry] A due grant could not be processed; a later scan will retry.')})
   if(runWorkers) crmEntitlementWorker.start()
+  const associationLifecycleWorker=createAssociationLifecycleWorker({onError:()=>console.warn('[association-lifecycle] A lifecycle operation failed; a later scan will retry.')})
+  if(runWorkers) associationLifecycleWorker.start()
   const crmFileCleanupWorker = filesResolver ? createCrmImportFileCleanupWorker({resolver:filesResolver,onError:()=>console.warn('[crm-file-cleanup] Cleanup failed; inspect the workspace receipt.')}) : null
   if (runWorkers) crmFileCleanupWorker?.start()
 
@@ -8390,6 +8393,7 @@ export async function bootOpenApi(opts: BootOpenApiOptions): Promise<BootResult>
     crmDomainEventWorker.stop()
     crmRetentionWorker.stop()
     crmEntitlementWorker.stop()
+    associationLifecycleWorker.stop()
     crmFileCleanupWorker?.stop()
     knowledgeSyncWorker.stop()
     mailboxSyncWorker.stop()

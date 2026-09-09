@@ -140,3 +140,19 @@ export function createWorkspaceModulesStore(pool: Pool = getPool(), memberPool: 
   }
 }
 export type WorkspaceModulesStore = ReturnType<typeof createWorkspaceModulesStore>
+
+/** Finish only a previously owner-requested drain. [COMP:crm/association-lifecycle] */
+export async function finishAssociationDrain(workspaceId:string,pool:Pool=getPool()):Promise<boolean> {
+  const client=await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const current=(await client.query<{version:number}>(`SELECT version FROM workspace_modules
+      WHERE workspace_id=$1 AND module_key='association' AND state='draining' FOR UPDATE`,[workspaceId])).rows[0]
+    if(!current || await pendingOrders(client,workspaceId)>0){await client.query('COMMIT');return false}
+    await client.query(`UPDATE workspace_modules SET state='disabled',version=version+1,disabled_at=clock_timestamp(),updated_at=clock_timestamp(),updated_by_user_id=NULL
+      WHERE workspace_id=$1 AND module_key='association'`,[workspaceId])
+    await client.query(`INSERT INTO workspace_audit_log(workspace_id,event_type,subject_id,details)
+      VALUES($1,'workspace.module_changed',$1,$2::jsonb)`,[workspaceId,JSON.stringify({moduleKey:'association',action:'finish_disable',from:'draining',to:'disabled',version:current.version+1,actorKind:'system_job'})])
+    await client.query('COMMIT');return true
+  }catch(error){await client.query('ROLLBACK').catch(()=>{});throw error}finally{client.release()}
+}

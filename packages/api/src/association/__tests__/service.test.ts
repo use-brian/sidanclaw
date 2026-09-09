@@ -15,6 +15,7 @@ function fixture() {
     listTickets: vi.fn().mockResolvedValue([]), getOrder: vi.fn().mockResolvedValue({ id: orderId }),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'manual', eventId }),
     updateRegistration: vi.fn(), reconcileProviderEvent: vi.fn().mockResolvedValue({ record: { id: orderId }, created: true }),
+    expireDueOrder: vi.fn(),
     cancelOrder: vi.fn().mockResolvedValue({ record: { id: orderId }, created: true }), confirmFreeOrder: vi.fn(),
   }
   const crm = { execute: vi.fn().mockResolvedValue({ record: { id: orderId, contactId: userId, metadata: {} } }) }
