@@ -35,8 +35,9 @@ const actions:Record<string,CrmPrivacyDomainReview['action']>={
   association_registrations:'redact',correction_audit:'redact',crm_delivery_receipts:'redact',
   crm_delivery_receipt_contacts:'delete',crm_intake_idempotency:'retire',crm_import_errors:'redact',crm_import_rows:'redact',
   association_audit_log:'redact',workspace_audit_log:'redact',
+  brain_row_versions:'redact',
   // These are explicit implementation gaps, not successful partial erasure.
-  brain_row_versions:'blocked',tasks:'blocked',entity_links:'blocked',workspace_files:'blocked',crm_import_sources:'blocked',
+  tasks:'blocked',entity_links:'blocked',workspace_files:'blocked',crm_import_sources:'blocked',
   crm_email_drafts:'blocked',crm_email_draft_versions:'blocked',crm_email_draft_session_anchors:'blocked',
   decision_events:'blocked',decision_applications:'blocked',decision_derivations:'blocked',
   association_notification_outbox:'blocked',crm_domain_event_outbox:'blocked',

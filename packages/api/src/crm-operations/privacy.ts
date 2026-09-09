@@ -15,6 +15,7 @@ import { getPool, query } from '../db/client.js'
 import { retireCrmIntakeReceipts } from './privacy-policy.js'
 import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
 import { retainCrmAddressSuppression } from './suppression-tombstones.js'
+import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_definitions',
@@ -132,6 +133,18 @@ export async function redactCrmOperationsForContact(
   if (!person.rows[0]?.isPerson) return
   await client.query('DELETE FROM crm_privacy_previews WHERE workspace_id=$1 AND subject_id=$2',[workspaceId,contactId])
   await retainCrmAddressSuppression(client,workspaceId,contactId)
+  // Resolve audit references before clearing the attendee/enquiry/membership
+  // links on which attribution depends. Reuse the preview/export predicates.
+  for (const [domain, assignments] of [
+    ['association_audit_log', "metadata=jsonb_build_object('erased',true)"],
+    ['workspace_audit_log', "subject_id=NULL,details=jsonb_build_object('erased',true)"],
+    ['brain_row_versions', "before_image=NULL,erased_at=COALESCE(erased_at,clock_timestamp()),mutation_reason='Personal data erased',workspace_id=$1"],
+  ] as const) {
+    const entry = CRM_PRIVACY_COVERAGE.find((candidate) => candidate.domain === domain)!
+    await client.query(`WITH privacy_args AS (SELECT $1::uuid workspace_id,$2::uuid contact_id)
+      UPDATE ${domain} t SET ${assignments}
+      WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId, contactId])
+  }
   await redactCrmDeliveryReceipts(client,workspaceId,contactId)
   // All four native aliases share the entity identity. Keep an existence
   // receipt, not another copy of personal free text or historical snapshots.
@@ -179,22 +192,6 @@ export async function redactCrmOperationsForContact(
       WHERE workspace_id=$1 AND (
         subject_id=$2 OR payload->>'contactId'=$2::text
         OR payload->>'dealId'=$2::text OR payload->>'submissionId'=$2::text
-      )`,
-    [workspaceId, contactId],
-  )
-  await client.query(
-    `UPDATE association_audit_log
-        SET metadata=jsonb_build_object('erased',true)
-      WHERE workspace_id=$1 AND (
-        subject_id=$2 OR metadata->>'contactId'=$2::text
-      )`,
-    [workspaceId, contactId],
-  )
-  await client.query(
-    `UPDATE workspace_audit_log
-        SET subject_id=NULL,details=jsonb_build_object('erased',true)
-      WHERE workspace_id=$1 AND (
-        subject_id=$2 OR details->>'contactId'=$2::text
       )`,
     [workspaceId, contactId],
   )
