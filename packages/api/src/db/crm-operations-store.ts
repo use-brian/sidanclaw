@@ -225,6 +225,7 @@ export type CrmOperationsTransaction = {
   getSegmentCatalog(entityKind: 'person' | 'company' | 'deal'): Promise<CrmSegmentCatalog>
   archiveSegment(segmentId: string, expectedVersion?: number): Promise<CrmOperationsRecord | null>
   grantEntitlement(params: CrmOperationsRecord): Promise<{ record: CrmOperationsRecord; created: boolean }>
+  expireDueEntitlement(entitlementId:string):Promise<CrmOperationsRecord|null>
   updateEntitlement(entitlementId: string, changes: CrmOperationsRecord): Promise<CrmOperationsRecord | null>
   recordParticipation(params: CrmOperationsRecord): Promise<{ record: CrmOperationsRecord; created: boolean }>
   updateParticipation(participationId: string, status: string): Promise<CrmOperationsRecord | null>
@@ -1041,7 +1042,19 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       return { record: first(result), created: true }
     },
 
+    async expireDueEntitlement(entitlementId) {
+      if(context.actor.kind!=='system_job' || context.actor.job!=='entitlement_expiry')
+        throw new CrmOperationsError('not_authorized','Due entitlement expiry requires its dedicated system job.')
+      await client.query('SELECT id FROM association_memberships WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[workspaceId,entitlementId])
+      const changed=await client.query<DbRecord>(`UPDATE association_memberships SET status='expired',updated_at=clock_timestamp()
+        WHERE workspace_id=$1 AND id=$2 AND status='active' AND provider IS NULL AND ends_at<=clock_timestamp()
+        RETURNING id,contact_id AS "contactId",plan_id AS "planId",status,starts_at AS "startsAt",ends_at AS "endsAt",updated_at AS "updatedAt"`,[workspaceId,entitlementId])
+      return changed.rows[0] ?? null
+    },
+
     async updateEntitlement(entitlementId, changes) {
+      if(context.actor.kind==='system_job' && context.actor.job==='entitlement_expiry')
+        throw new CrmOperationsError('not_authorized','Expiry jobs must recheck a due manual entitlement.')
       const current = await client.query<{ status: string; startsAt: Date }>(
         `SELECT status, starts_at AS "startsAt"
            FROM association_memberships

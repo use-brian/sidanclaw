@@ -90,6 +90,7 @@ function makeTransaction(overrides: Partial<CrmOperationsTransaction> = {}) {
     saveSegment: vi.fn(),
     archiveSegment: vi.fn(),
     grantEntitlement: vi.fn(),
+    expireDueEntitlement: vi.fn(),
     updateEntitlement: vi.fn(),
     recordParticipation: vi.fn(),
     updateParticipation: vi.fn(),

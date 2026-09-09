@@ -372,6 +372,8 @@ export const GrantCrmEntitlementCommandSchema = z.object({
   'endsAt must be after startsAt',
 )
 
+export const ExpireDueCrmEntitlementCommandSchema=z.object({kind:z.literal('expire_due_entitlement'),entitlementId:CrmOperationsUuidSchema}).strict()
+
 export const UpdateCrmEntitlementCommandSchema = z.object({
   kind: z.literal('update_entitlement'),
   entitlementId: CrmOperationsUuidSchema,
@@ -570,6 +572,7 @@ export const CrmOperationsCommandSchema = z.union([
   RecordCrmSuppressionCommandSchema,
   SaveCrmSegmentCommandSchema,
   ArchiveCrmSegmentCommandSchema,
+  ExpireDueCrmEntitlementCommandSchema,
   GrantCrmEntitlementCommandSchema,
   UpdateCrmEntitlementCommandSchema,
   RecordCrmParticipationCommandSchema,
@@ -700,6 +703,9 @@ export function assertCrmOperationsAuthority(
   context: CrmOperationsContext,
   command: CrmOperationsCommand,
 ): void {
+  if(command.kind==='expire_due_entitlement' && !(context.actor.kind==='system_job' && context.actor.job==='entitlement_expiry')) {
+    throw new CrmOperationsError('not_authorized','Due entitlement expiry requires its dedicated system job.')
+  }
   if (['preview_import_file_cleanup', 'execute_import_file_cleanup', 'preview_retention', 'execute_retention', 'preview_contact_erasure', 'erase_contact_with_preview', 'save_privacy_policy', 'release_address_suppression', 'save_managed_mailbox_policy', 'save_mailbox_integration_grant'].includes(command.kind) && (context.actor.kind !== 'user'
     || !['owner', 'admin'].includes(context.authority.role))) {
     throw new CrmOperationsError('not_authorized', 'Policy approval and suppression release require a workspace owner or admin member.')
@@ -731,7 +737,7 @@ export function assertCrmOperationsAuthority(
     }
   }
   if (context.actor.kind === 'system_job') {
-    const expiry = context.actor.job === 'entitlement_expiry' && command.kind === 'update_entitlement' && command.status === 'expired'
+    const expiry = context.actor.job === 'entitlement_expiry' && command.kind === 'expire_due_entitlement'
     const reconcile = context.actor.job === 'entitlement_reconciliation' && ['grant_entitlement', 'update_entitlement'].includes(command.kind)
     if (!expiry && !reconcile) throw new CrmOperationsError('not_authorized', 'This job cannot perform that CRM command.')
   }

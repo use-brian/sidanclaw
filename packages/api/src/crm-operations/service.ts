@@ -692,6 +692,15 @@ export function createCrmOperationsService(
           })
           return result(command.kind, saved.record, { created: true, emittedEventIds: [eventId] })
         }
+        if(command.kind==='expire_due_entitlement') {
+          const record=await tx.expireDueEntitlement(command.entitlementId)
+          if(!record)return result(command.kind,{id:command.entitlementId,changed:false},{duplicate:true})
+          await audit(tx,context.actor,{action:'crm.entitlement.changed',subjectKind:'entitlement',subjectId:command.entitlementId,details:{status:'expired'}})
+          const eventId=await emit(tx,context,{eventType:'crm.entitlement.changed',eventKey:`crm.entitlement.changed:${command.entitlementId}:expired`,
+            subjectKind:'entitlement',subjectId:command.entitlementId,payload:{entitlementId:command.entitlementId,contactId:record.contactId,
+              planId:record.planId,status:'expired',actorKind:context.actor.kind,occurredAt},occurredAt})
+          return result(command.kind,{...record,changed:true},{emittedEventIds:[eventId]})
+        }
         if (command.kind === 'update_entitlement') {
           const record = await tx.updateEntitlement(command.entitlementId, command)
           if (!record) throw new CrmOperationsError('not_found', 'Entitlement was not found.')
