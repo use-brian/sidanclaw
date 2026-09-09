@@ -7,6 +7,7 @@ import {CrmOperationsContextSchema,CrmOperationsUuidSchema,CrmOperationsError,re
 import {getPool} from '../db/client.js'
 import {lockCrmIntegrationCredential} from '../db/crm-integration-store.js'
 import {prepareCrmSuppressionPrivacy} from './suppression-tombstones.js'
+import {prepareCrmPrivacyCopies} from './privacy-copy-resolver.js'
 import {CRM_PRIVACY_COVERAGE,crmPrivacyClassification,crmPrivacyDomainSql,type CrmPrivacyScope} from './privacy-coverage.js'
 
 export type CrmPrivacyExportOptions = {contactId?:string;signal?:AbortSignal}
@@ -48,6 +49,7 @@ export async function* streamCrmPrivacyExport(rawContext:CrmOperationsContext,op
       if(!person.rowCount)throw new CrmOperationsError('not_found','The CRM contact is unavailable.')
       await prepareCrmSuppressionPrivacy(client,context.workspaceId,contactId)
     }
+    await prepareCrmPrivacyCopies(client,context.workspaceId,contactId)
     const stamp=(await client.query<{snapshotAt:Date}>('SELECT transaction_timestamp() AS "snapshotAt"')).rows[0]!
     const exportId=randomUUID(),aggregate=createHash('sha256'),coverage=[]
     let total=0

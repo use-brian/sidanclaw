@@ -58,11 +58,11 @@ describe('[COMP:crm/privacy-previews] Review-bound canonical erasure',()=>{
     expect((await pool.query('SELECT status FROM crm_privacy_previews WHERE id=$1',[preview.id])).rows[0].status).toBe('ready')
     expect((await pool.query('SELECT id FROM entities WHERE id=$1',[f.contactId])).rowCount).toBe(1)
   })
-  it('reports unresolved drafts as blockers, refuses execution, and requires a fresh review after resolution',async()=>{
+  it('reports shared drafts as blockers, refuses execution, and requires a fresh review after resolution',async()=>{
     const f=await fixture()
-    const draft=(await pool.query("INSERT INTO crm_email_drafts(workspace_id,to_addresses,body) VALUES($1,ARRAY['private@example.com'],'Copied private content') RETURNING id",[f.workspaceId])).rows[0].id
+    const draft=(await pool.query("INSERT INTO crm_email_drafts(workspace_id,to_addresses,body) VALUES($1,ARRAY['private@example.com','other@example.com'],'Copied private content') RETURNING id",[f.workspaceId])).rows[0].id
     const preview=await f.preview()
-    expect(preview).toMatchObject({status:'blocked',blockers:expect.arrayContaining([{domain:'crm_email_drafts',reason:'crm_copy_resolution_required',count:1}])})
+    expect(preview).toMatchObject({status:'blocked',blockers:expect.arrayContaining([{domain:'crm_email_drafts',reason:'shared_or_ambiguous_draft',count:1}])})
     await expect(f.erase(preview)).rejects.toMatchObject({details:{reason:'privacy_preview_blocked'}})
     await pool.query('DELETE FROM crm_email_drafts WHERE id=$1',[draft])
     await expect(f.erase(preview)).rejects.toMatchObject({details:{reason:'privacy_preview_blocked'}})

@@ -52,7 +52,7 @@ describe('[COMP:crm/operations-privacy] CRM operations privacy lifecycle', () =>
     expect(sql).toContain("payload=jsonb_build_object('erased',true")
     expect(sql).toContain("metadata=jsonb_build_object('erased',true)")
     expect(sql).toContain('UPDATE workspace_audit_log')
-    expect(sql).toContain('DELETE FROM crm_segments')
+    expect(sql).not.toContain('DELETE FROM crm_segments')
     expect(sql).toContain('DELETE FROM association_consent_events')
     expect(sql).toContain('SELECT id,replay_policy_version FROM crm_intake_idempotency')
     expect(sql).not.toContain('DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND contact_id=$2')

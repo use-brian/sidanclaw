@@ -16,6 +16,7 @@ import { retireCrmIntakeReceipts } from './privacy-policy.js'
 import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
 import { retainCrmAddressSuppression } from './suppression-tombstones.js'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
+import { prepareCrmPrivacyCopies, assertCrmPrivacyCopiesResolvable, deleteCrmPrivacyCopies } from './privacy-copy-resolver.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_definitions',
@@ -131,6 +132,8 @@ export async function redactCrmOperationsForContact(
     [workspaceId, contactId],
   )
   if (!person.rows[0]?.isPerson) return
+  await prepareCrmPrivacyCopies(client,workspaceId,contactId)
+  await assertCrmPrivacyCopiesResolvable(client,workspaceId,contactId)
   await client.query('DELETE FROM crm_privacy_previews WHERE workspace_id=$1 AND subject_id=$2',[workspaceId,contactId])
   await retainCrmAddressSuppression(client,workspaceId,contactId)
   // Resolve audit references before clearing the attendee/enquiry/membership
@@ -139,6 +142,7 @@ export async function redactCrmOperationsForContact(
     ['association_audit_log', "metadata=jsonb_build_object('erased',true)"],
     ['workspace_audit_log', "subject_id=NULL,details=jsonb_build_object('erased',true)"],
     ['brain_row_versions', "before_image=NULL,erased_at=COALESCE(erased_at,clock_timestamp()),mutation_reason='Personal data erased',workspace_id=$1"],
+    ['correction_audit', "reason='Personal data erased',ticket_reference=NULL,row_snapshot=jsonb_build_object('erased',true),detail=jsonb_build_object('erased',true)"],
   ] as const) {
     const entry = CRM_PRIVACY_COVERAGE.find((candidate) => candidate.domain === domain)!
     await client.query(`WITH privacy_args AS (SELECT $1::uuid workspace_id,$2::uuid contact_id)
@@ -146,14 +150,6 @@ export async function redactCrmOperationsForContact(
       WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId, contactId])
   }
   await redactCrmDeliveryReceipts(client,workspaceId,contactId)
-  // All four native aliases share the entity identity. Keep an existence
-  // receipt, not another copy of personal free text or historical snapshots.
-  await client.query(
-    `UPDATE correction_audit SET reason='Personal data erased',ticket_reference=NULL,
-            row_snapshot=jsonb_build_object('erased',true),detail=jsonb_build_object('erased',true)
-      WHERE workspace_id=$1 AND row_id=$2 AND primitive IN ('entity','contact','company','deal')`,
-    [workspaceId, contactId],
-  )
   // Match retention's enquiry -> receipt ordering. Holding a receipt before
   // its enquiry would deadlock against a concurrent retention transaction.
   await client.query(`SELECT id FROM association_enquiries WHERE workspace_id=$1 AND contact_id=$2 ORDER BY id FOR UPDATE`,
@@ -195,14 +191,10 @@ export async function redactCrmOperationsForContact(
       )`,
     [workspaceId, contactId],
   )
-  await client.query(
-    `DELETE FROM crm_segments
-      WHERE workspace_id=$1 AND predicate::text LIKE '%' || $2::text || '%'`,
-    [workspaceId, contactId],
-  )
   // The remaining direct contact FKs are CASCADE-bound to entities. The
   // explicit deletes document the legal behavior and keep it stable if a
   // future migration changes an FK action.
+  await deleteCrmPrivacyCopies(client,workspaceId,contactId)
   for (const table of [
     'crm_suppression_events',
     'association_consent_events',

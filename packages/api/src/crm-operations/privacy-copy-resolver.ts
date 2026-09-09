@@ -1,0 +1,76 @@
+/** Captured copy sets shared by export, review and purge. [COMP:crm/privacy-copies] */
+import type { PoolClient } from 'pg'
+import { CrmOperationsError, type CrmPrivacyBlocker } from '@use-brian/core'
+import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
+import { CRM_WORKSPACE_TASK_ROOT, CRM_OTHER_CONTACT_EMAILS, CRM_SUBJECT_EMAILS, CRM_TASK_COPY_ROOT, CRM_SHARED_TASK_ROOT, crmDraftHasSubjectRecipient } from './privacy-copy-attribution.js'
+
+/** Caller owns a transaction. Only row ids are materialized, never content. */
+export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: string, contactId: string | null): Promise<void> {
+  await client.query(`CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_tasks(id uuid PRIMARY KEY,shared boolean NOT NULL DEFAULT false) ON COMMIT DROP;
+    CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_drafts(id uuid PRIMARY KEY) ON COMMIT DROP;
+    TRUNCATE pg_temp.crm_privacy_copy_tasks,pg_temp.crm_privacy_copy_drafts`)
+  await client.query(`WITH RECURSIVE args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id), selected(id) AS(
+      SELECT t.id FROM tasks t WHERE t.workspace_id=$1 AND (($2::uuid IS NULL AND (${CRM_WORKSPACE_TASK_ROOT})) OR ($2::uuid IS NOT NULL AND (${CRM_TASK_COPY_ROOT})))
+      UNION
+      SELECT t.id FROM selected s JOIN tasks linked_task ON linked_task.workspace_id=$1 AND linked_task.id=s.id
+        JOIN tasks t ON t.workspace_id=$1 AND (t.parent_id=s.id OR t.superseded_by=s.id OR t.id=linked_task.superseded_by)
+    ) INSERT INTO pg_temp.crm_privacy_copy_tasks(id) SELECT id FROM selected`, [workspaceId,contactId])
+  await client.query(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+    INSERT INTO pg_temp.crm_privacy_copy_drafts
+    SELECT d.id FROM crm_email_drafts d WHERE d.workspace_id=$1 AND ($2::uuid IS NULL OR ${crmDraftHasSubjectRecipient('d')}
+      OR EXISTS(SELECT 1 FROM crm_email_draft_versions v WHERE v.workspace_id=$1 AND v.draft_id=d.id AND ${crmDraftHasSubjectRecipient('v')}))`, [workspaceId,contactId])
+  if(contactId!==null)await client.query(`WITH RECURSIVE args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id), shared(id) AS(
+      SELECT t.id FROM tasks t JOIN pg_temp.crm_privacy_copy_tasks s ON s.id=t.id
+        WHERE t.workspace_id=$1 AND (${CRM_SHARED_TASK_ROOT})
+      UNION
+      SELECT t.id FROM shared s JOIN tasks linked_task ON linked_task.workspace_id=$1 AND linked_task.id=s.id
+        JOIN tasks t ON t.workspace_id=$1 AND (t.parent_id=s.id OR t.id=linked_task.parent_id
+          OR t.superseded_by=s.id OR t.id=linked_task.superseded_by)
+        JOIN pg_temp.crm_privacy_copy_tasks included ON included.id=t.id
+    ) UPDATE pg_temp.crm_privacy_copy_tasks SET shared=true WHERE id IN(SELECT id FROM shared)`, [workspaceId,contactId])
+}
+
+/** Preview and canonical purge both refuse shared or ambiguous copy ownership. */
+export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspaceId: string, contactId: string): Promise<CrmPrivacyBlocker[]> {
+  const blockers: CrmPrivacyBlocker[] = []
+  const drafts = await client.query<{ count: number }>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id), recipients AS(
+      SELECT d.id,unnest(d.to_addresses||d.cc_addresses||d.bcc_addresses) address
+        FROM crm_email_drafts d JOIN pg_temp.crm_privacy_copy_drafts s ON s.id=d.id WHERE d.workspace_id=$1
+      UNION ALL
+      SELECT v.draft_id,unnest(v.to_addresses||v.cc_addresses||v.bcc_addresses)
+        FROM crm_email_draft_versions v JOIN pg_temp.crm_privacy_copy_drafts s ON s.id=v.draft_id WHERE v.workspace_id=$1
+    ) SELECT count(DISTINCT id)::int count FROM recipients
+      WHERE address IS NULL OR lower(btrim(address)) NOT IN(${CRM_SUBJECT_EMAILS})
+        OR lower(btrim(address)) IN(${CRM_OTHER_CONTACT_EMAILS})`, [workspaceId,contactId])
+  if(drafts.rows[0]?.count)blockers.push({domain:'crm_email_drafts',reason:'shared_or_ambiguous_draft',count:drafts.rows[0].count})
+  const tasks = await client.query<{ count: number }>(`SELECT count(*)::int count
+    FROM tasks t JOIN pg_temp.crm_privacy_copy_tasks s ON s.id=t.id WHERE t.workspace_id=$1 AND s.shared`, [workspaceId])
+  if(tasks.rows[0]?.count)blockers.push({domain:'tasks',reason:'shared_or_unresolved_task',count:tasks.rows[0].count})
+  const foreign = await client.query<{ count: number }>(`SELECT count(DISTINCT t.id)::int count
+    FROM tasks t JOIN pg_temp.crm_privacy_copy_tasks s ON s.id=t.id
+    WHERE EXISTS(SELECT 1 FROM tasks other WHERE other.workspace_id<>$1 AND
+      (other.parent_id=t.id OR other.superseded_by=t.id OR other.id=t.superseded_by))`, [workspaceId])
+  if(foreign.rows[0]?.count)blockers.push({domain:'tasks',reason:'cross_workspace_task_dependency',count:foreign.rows[0].count})
+  return blockers
+}
+
+/** Preserve attribution until unsupported dependent artifacts are resolved. */
+export async function assertCrmPrivacyCopiesResolvable(client: PoolClient, workspaceId: string, contactId: string): Promise<void> {
+  const blockers = await inspectCrmPrivacyCopyConflicts(client,workspaceId,contactId)
+  for(const domain of ['crm_segments','workspace_files','crm_import_sources','decision_events','decision_applications','decision_derivations']) {
+    const entry = CRM_PRIVACY_COVERAGE.find(candidate => candidate.domain===domain)!
+    const result=await client.query<{count:number}>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+      SELECT count(*)::int count FROM ${domain} t WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId,contactId])
+    if(result.rows[0]?.count)blockers.push({domain,reason:'crm_copy_resolution_required',count:result.rows[0].count})
+  }
+  if(blockers.length)throw new CrmOperationsError('conflict','Resolve CRM copy dependencies before erasure.',{reason:'crm_copy_resolution_required',blockers})
+}
+
+/** Runs after audit/history/receipt redaction, before the canonical parent delete. */
+export async function deleteCrmPrivacyCopies(client: PoolClient, workspaceId: string, contactId: string): Promise<void> {
+  for(const domain of ['entity_links','crm_email_drafts','tasks']) {
+    const entry = CRM_PRIVACY_COVERAGE.find(candidate => candidate.domain===domain)!
+    await client.query(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
+      DELETE FROM ${domain} t WHERE t.workspace_id=$1 AND (${entry.subjectWhere})`, [workspaceId,contactId])
+  }
+}

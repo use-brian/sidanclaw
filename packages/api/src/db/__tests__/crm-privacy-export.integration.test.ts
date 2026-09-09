@@ -2,6 +2,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {afterAll,describe,expect,it} from 'vitest'
 import {getPool,getAppPool} from '../client.js'
 import {CRM_PRIVACY_COVERAGE,crmPrivacyDomainSql} from '../../crm-operations/privacy-coverage.js'
+import {prepareCrmPrivacyCopies} from '../../crm-operations/privacy-copy-resolver.js'
 
 import express from 'express'
 import request from 'supertest'
@@ -60,6 +61,7 @@ describe('[COMP:crm/privacy-export] Actual privacy projection coverage',()=>{
     try {
       await client.query('BEGIN')
       await client.query('CREATE TEMP TABLE crm_privacy_suppression_matches(channel text,key_version text,address_hmac text) ON COMMIT DROP')
+      await prepareCrmPrivacyCopies(client,randomUUID(),null)
       const errors:string[]=[]
       for(const scope of ['workspace','contact'] as const)for(const entry of CRM_PRIVACY_COVERAGE) {
         await client.query('SAVEPOINT projection')

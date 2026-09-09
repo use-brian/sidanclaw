@@ -10,6 +10,7 @@ import {getPool} from '../db/client.js'
 import {createSoftDeleteStore} from '../db/soft-delete-store.js'
 import {CRM_PRIVACY_COVERAGE} from './privacy-coverage.js'
 import {readCrmPrivacyPolicy} from './privacy-policy.js'
+import {prepareCrmPrivacyCopies,inspectCrmPrivacyCopyConflicts} from './privacy-copy-resolver.js'
 import {prepareCrmSuppressionPrivacy,assertCrmSuppressionKeyringAvailable} from './suppression-tombstones.js'
 
 const scopeLimits=['unattributed_free_text','other_brain_and_chat','external_storage_and_backups']
@@ -37,8 +38,8 @@ const actions:Record<string,CrmPrivacyDomainReview['action']>={
   association_audit_log:'redact',workspace_audit_log:'redact',
   brain_row_versions:'redact',
   // These are explicit implementation gaps, not successful partial erasure.
-  tasks:'blocked',entity_links:'blocked',workspace_files:'blocked',crm_import_sources:'blocked',
-  crm_email_drafts:'blocked',crm_email_draft_versions:'blocked',crm_email_draft_session_anchors:'blocked',
+  tasks:'delete',entity_links:'delete',crm_segments:'blocked',workspace_files:'blocked',crm_import_sources:'blocked',
+  crm_email_drafts:'delete',crm_email_draft_versions:'delete',crm_email_draft_session_anchors:'delete',
   decision_events:'blocked',decision_applications:'blocked',decision_derivations:'blocked',
   association_notification_outbox:'blocked',crm_domain_event_outbox:'blocked',
 }
@@ -46,6 +47,8 @@ async function inspect(client:PoolClient,workspaceId:string,contactId:string) {
   const person=await client.query("SELECT id FROM entities WHERE workspace_id=$1 AND id=$2 AND kind='person'",[workspaceId,contactId])
   if(!person.rowCount)throw new CrmOperationsError('not_found','The CRM contact is unavailable.')
   const policy=await readCrmPrivacyPolicy(workspaceId,client),domains:CrmPrivacyDomainReview[]=[],blockers:CrmPrivacyBlocker[]=[]
+  await prepareCrmPrivacyCopies(client,workspaceId,contactId)
+  blockers.push(...await inspectCrmPrivacyCopyConflicts(client,workspaceId,contactId))
   const digest=createHash('sha256')
   await client.query('SAVEPOINT suppression_preview')
   try {

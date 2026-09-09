@@ -247,7 +247,7 @@ describe('[COMP:crm/operations-privacy] Actual retired intake replay and policy'
       await client.query('DELETE FROM association_enquiries WHERE id=$1',[accepted.body.submissionId])
       await client.query('COMMIT'); await f.erase(accepted.body.contactId)
       expect((await f.submit()).body).toEqual(retired)
-      expect(await counts(f.workspaceId)).toMatchObject({ people: 0,submissions: 0,receipts: 1 })
+      expect(await counts(f.workspaceId)).toMatchObject({ people: 0,submissions: 0,tasks: 0,receipts: 1 })
     } finally { await client.query('ROLLBACK'); client.release() }
   })
 })
