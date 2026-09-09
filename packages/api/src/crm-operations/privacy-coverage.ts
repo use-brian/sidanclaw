@@ -930,7 +930,9 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "completed_at",
       "source_id",
       "integration_credential_id",
-      "integration_grants"
+      "integration_grants",
+      "privacy_erased",
+      "privacy_erased_at"
     ],
     "excludedColumns": [],
     "orderBy": "t.id",
@@ -973,11 +975,16 @@ export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
       "source_hash",
       "credential_id",
       "integration_grants",
-      "created_at"
+      "created_at",
+      "privacy_lineage_version",
+      "privacy_erased",
+      "retired_at",
+      "replay_expires_at",
+      "replay_policy_version"
     ],
     "excludedColumns": [],
     "orderBy": "t.id",
-    "subjectWhere": "EXISTS(SELECT 1 FROM crm_import_jobs j WHERE j.workspace_id=$1 AND (j.source_id=t.id AND EXISTS(SELECT 1 FROM crm_import_rows r WHERE r.workspace_id=$1 AND (r.job_id=j.id AND r.entity_id=$2))))",
+    "subjectWhere": "t.id IN(SELECT id FROM pg_temp.crm_privacy_copy_import_sources)",
     "workspaceWhere": "true",
     "subjectRedactions": {
       "content_bytes": "NULL",

@@ -38,7 +38,7 @@ const actions:Record<string,CrmPrivacyDomainReview['action']>={
   association_audit_log:'redact',workspace_audit_log:'redact',
   brain_row_versions:'redact',
   // These are explicit implementation gaps, not successful partial erasure.
-  tasks:'delete',entity_links:'delete',crm_segments:'blocked',workspace_files:'blocked',crm_import_sources:'blocked',
+  tasks:'delete',entity_links:'delete',crm_segments:'blocked',workspace_files:'blocked',crm_import_sources:'retire',crm_import_jobs:'retire',crm_import_chunks:'delete',
   crm_email_drafts:'delete',crm_email_draft_versions:'delete',crm_email_draft_session_anchors:'delete',
   decision_events:'blocked',decision_applications:'blocked',decision_derivations:'blocked',
   association_notification_outbox:'retire',crm_domain_event_outbox:'retire',
@@ -67,7 +67,10 @@ async function inspect(client:PoolClient,workspaceId:string,contactId:string) {
     let count=0
     // A redacted export deliberately omits data that must still invalidate an
     // approval. Hash physical row identity/version, without copying its payload.
-    const sql="WITH preview_args AS (SELECT $1::uuid workspace_id,$2::uuid contact_id) SELECT jsonb_build_array("+entry.orderBy+",t.xmin::text)::text AS version FROM "+entry.domain+" t WHERE "+(entry.workspacePredicate ?? 't.workspace_id=$1')+" AND ("+entry.subjectWhere+") ORDER BY "+entry.orderBy
+    const importCopyPredicate = entry.domain==='crm_import_jobs' ? 't.id IN(SELECT id FROM pg_temp.crm_privacy_copy_import_jobs)'
+      : ['crm_import_chunks','crm_import_rows','crm_import_errors'].includes(entry.domain) ? 't.job_id IN(SELECT id FROM pg_temp.crm_privacy_copy_import_jobs)' : null
+    const reviewPredicate = importCopyPredicate ? `(${entry.subjectWhere}) OR (${importCopyPredicate})` : entry.subjectWhere
+    const sql="WITH preview_args AS (SELECT $1::uuid workspace_id,$2::uuid contact_id) SELECT jsonb_build_array("+entry.orderBy+",t.xmin::text)::text AS version FROM "+entry.domain+" t WHERE "+(entry.workspacePredicate ?? 't.workspace_id=$1')+" AND ("+reviewPredicate+") ORDER BY "+entry.orderBy
     await client.query('DECLARE privacy_preview_rows NO SCROLL CURSOR FOR '+sql,[workspaceId,contactId])
     for(;;) {
       const rows=(await client.query<{version:string}>('FETCH FORWARD 256 FROM privacy_preview_rows')).rows

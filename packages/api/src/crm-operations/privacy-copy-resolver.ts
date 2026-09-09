@@ -2,11 +2,13 @@
 import type { PoolClient } from 'pg'
 import { CrmOperationsError, type CrmPrivacyBlocker } from '@use-brian/core'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
+import { prepareCrmImportCopies, inspectCrmImportCopyConflicts } from './import-copy-resolver.js'
 import { inspectWorkflowCopyConflicts } from './workflow-copy-resolver.js'
 import { CRM_WORKFLOW_COPY_ROOT, CRM_WORKSPACE_TASK_ROOT, CRM_OTHER_CONTACT_EMAILS, CRM_SUBJECT_EMAILS, CRM_TASK_COPY_ROOT, CRM_SHARED_TASK_ROOT, crmDraftHasSubjectRecipient } from './privacy-copy-attribution.js'
 
 /** Caller owns a transaction. Only row ids are materialized, never content. */
 export async function prepareCrmPrivacyCopies(client: PoolClient, workspaceId: string, contactId: string | null): Promise<void> {
+  await prepareCrmImportCopies(client,workspaceId,contactId)
   await client.query(`CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_tasks(id uuid PRIMARY KEY,shared boolean NOT NULL DEFAULT false) ON COMMIT DROP;
     CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_drafts(id uuid PRIMARY KEY) ON COMMIT DROP;
     CREATE TEMP TABLE IF NOT EXISTS crm_privacy_copy_events(id uuid PRIMARY KEY) ON COMMIT DROP;
@@ -78,6 +80,7 @@ export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspa
       AND (${notificationDomain.subjectWhere}) AND t.status<>'retired'
       AND t.recipient_kind='contact' AND t.recipient_ref<>$2::text`,[workspaceId,contactId])
   if(notifications.rows[0]?.count)blockers.push({domain:'association_notification_outbox',reason:'shared_notification_dependency',count:notifications.rows[0].count})
+  blockers.push(...await inspectCrmImportCopyConflicts(client,workspaceId,contactId))
   blockers.push(...await inspectWorkflowCopyConflicts(client,workspaceId))
   return blockers
 }
@@ -85,7 +88,7 @@ export async function inspectCrmPrivacyCopyConflicts(client: PoolClient, workspa
 /** Preserve attribution until unsupported dependent artifacts are resolved. */
 export async function assertCrmPrivacyCopiesResolvable(client: PoolClient, workspaceId: string, contactId: string): Promise<void> {
   const blockers = await inspectCrmPrivacyCopyConflicts(client,workspaceId,contactId)
-  for(const domain of ['crm_segments','workspace_files','crm_import_sources','decision_events','decision_applications','decision_derivations']) {
+  for(const domain of ['crm_segments','workspace_files','decision_events','decision_applications','decision_derivations']) {
     const entry = CRM_PRIVACY_COVERAGE.find(candidate => candidate.domain===domain)!
     const result=await client.query<{count:number}>(`WITH args AS(SELECT $1::uuid workspace_id,$2::uuid contact_id)
       SELECT count(*)::int count FROM ${domain} t WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId,contactId])

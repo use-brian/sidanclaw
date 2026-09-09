@@ -12,9 +12,10 @@ import type pg from 'pg'
 import type { CrmPageQuery } from '@use-brian/core'
 import { queryCrmPage } from './pagination.js'
 import { getPool, query } from '../db/client.js'
-import { retireCrmIntakeReceipts } from './privacy-policy.js'
+import { retireCrmIntakeReceipts, readCrmPrivacyPolicy } from './privacy-policy.js'
 import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
 import { retainCrmAddressSuppression } from './suppression-tombstones.js'
+import { retireCrmImportCopies } from './import-copy-resolver.js'
 import { retireWorkflowCopies } from './workflow-copy-resolver.js'
 import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
 import { prepareCrmPrivacyCopies, assertCrmPrivacyCopiesResolvable, deleteCrmPrivacyCopies, retireCrmNotificationCopies } from './privacy-copy-resolver.js'
@@ -159,6 +160,8 @@ export async function redactCrmOperationsForContact(
     [workspaceId, contactId])
   await retireCrmIntakeReceipts(client, workspaceId, { contactId })
 
+  await retireCrmImportCopies(client,workspaceId)
+
   // Commerce participation can be retention-bound and therefore uses a
   // pseudonymous shell. Non-commerce rows use the same shell because their
   // attendee columns are equally identifying and the event chronology may be
@@ -228,10 +231,19 @@ export async function pruneCrmOperationsRetention(
       const result = await client.query(sql, values)
       deleted[name] = result.rowCount ?? 0
     }
+    const heldSources = (await readCrmPrivacyPolicy(workspaceId, client)).policy.importSourceErasure?.heldSourceIds ?? []
     await remove('crm_import_jobs',
       `DELETE FROM crm_import_jobs WHERE workspace_id=$1
-        AND status IN ('completed','cancelled','failed') AND updated_at < $2`,
-      [workspaceId, before])
+        AND status IN ('completed','cancelled','failed') AND updated_at < $2
+        AND (source_id IS NULL OR (NOT(source_id=ANY($3::uuid[]))
+          AND EXISTS(SELECT 1 FROM crm_import_sources s WHERE s.workspace_id=crm_import_jobs.workspace_id
+            AND s.id=crm_import_jobs.source_id AND s.privacy_erased)))`,
+      [workspaceId, before, heldSources])
+    await remove('crm_import_sources',
+      `DELETE FROM crm_import_sources s WHERE workspace_id=$1 AND privacy_erased
+        AND replay_expires_at<=clock_timestamp() AND NOT(id=ANY($2::uuid[]))
+        AND NOT EXISTS(SELECT 1 FROM crm_import_jobs j WHERE j.workspace_id=s.workspace_id AND j.source_id=s.id)`,
+      [workspaceId, heldSources])
     await remove('crm_domain_event_outbox',
       `DELETE FROM crm_domain_event_outbox e WHERE workspace_id=$1
         AND status='delivered' AND created_at < $2

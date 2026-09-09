@@ -118,6 +118,8 @@ export type CrmImportJob = {
   sourceId: string | null
   entityKind: CrmImportEntityKind
   status: 'ready' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
+  privacyErased: boolean
+  privacyErasedAt: Date | null
   mapping: CrmImportMapping
   totalRows: number
   processedRows: number
@@ -431,6 +433,12 @@ export function createCrmProductionImportService(deps: {
   }
   function jobContext(context: ImportServiceContext, job: ImportJobRow, mode: 'read' | 'write'): ImportServiceContext {
     requireImportOperation(context, mode === 'read' ? 'crm.imports.read' : 'crm.imports.write')
+    if (job.privacyErased) {
+      if (context.authority.integration && context.authority.integration.credentialId !== job.integrationCredentialId) {
+        throw new CrmOperationsError('not_authorized', 'This erased import receipt belongs to another credential.')
+      }
+      return context
+    }
     if (!job.sourceId) {
       if (context.authority.integration) throw new CrmOperationsError('not_authorized', 'CRM keys cannot access member file imports.')
       return context
@@ -543,7 +551,7 @@ export function createCrmProductionImportService(deps: {
     const result = await (client ? client.query.bind(client) : query)<ImportJobRow>(
       `SELECT id, workspace_id AS "workspaceId", staged_file_id AS "stagedFileId",
               source_id AS "sourceId", integration_credential_id AS "integrationCredentialId", integration_grants AS "integrationGrants",
-              entity_kind AS "entityKind", status, mapping, mapping_hash AS "mappingHash",
+              entity_kind AS "entityKind", status, privacy_erased AS "privacyErased", privacy_erased_at AS "privacyErasedAt", mapping, mapping_hash AS "mappingHash",
               source_hash AS "sourceHash", total_rows AS "totalRows",
               processed_rows AS "processedRows", succeeded_rows AS "succeededRows",
               failed_rows AS "failedRows", next_chunk_index AS "nextChunkIndex",
@@ -575,7 +583,7 @@ export function createCrmProductionImportService(deps: {
        ) VALUES ($1,$2,$3,$4,'ready',$5::jsonb,$6,$7,$8,$9,$10,$10,$11,$12,$13::jsonb)
        RETURNING id, workspace_id AS "workspaceId", staged_file_id AS "stagedFileId",
          source_id AS "sourceId", integration_credential_id AS "integrationCredentialId", integration_grants AS "integrationGrants",
-         entity_kind AS "entityKind", status, mapping, mapping_hash AS "mappingHash",
+         entity_kind AS "entityKind", status, privacy_erased AS "privacyErased", privacy_erased_at AS "privacyErasedAt", mapping, mapping_hash AS "mappingHash",
          source_hash AS "sourceHash", total_rows AS "totalRows",
          processed_rows AS "processedRows", succeeded_rows AS "succeededRows",
          failed_rows AS "failedRows", next_chunk_index AS "nextChunkIndex",
@@ -585,7 +593,12 @@ export function createCrmProductionImportService(deps: {
         mappingHash(input.mapping), parsed.sourceHash, !!input.mapping.trustedIdentitySource,
         parsed.rows.length, context.actor.kind === 'user' ? context.actor.userId : null, input.sourceId ?? null,
         parsed.sourceAuthority?.credentialId ?? null, parsed.sourceAuthority ? JSON.stringify(parsed.sourceAuthority.grants) : null],
-    )
+    ).catch((error: unknown) => {
+      if (error instanceof Error && 'code' in error && error.code === '55000' && error.message === 'import_source_retired') {
+        throw new CrmOperationsError('conflict', 'The CRM import source was erased before confirmation. Its receipt cannot restore the CSV.', { reason: 'import_source_retired' })
+      }
+      throw error
+    })
     console.info('[crm-import] job confirmed', { workspaceId: context.workspaceId, jobId: id, totalRows: parsed.rows.length })
     return jobProjection(result.rows[0])
   }
@@ -934,13 +947,13 @@ export function createCrmProductionImportService(deps: {
       workspaceId: context.workspaceId, resource: 'crm.imports', key: 'jobs', query: filters,
       sql: `SELECT id,workspace_id AS "workspaceId",staged_file_id AS "stagedFileId",
          source_id AS "sourceId",integration_credential_id AS "integrationCredentialId",integration_grants AS "integrationGrants",
-         entity_kind AS "entityKind",status,mapping,mapping_hash AS "mappingHash",
+         entity_kind AS "entityKind",status,privacy_erased AS "privacyErased",privacy_erased_at AS "privacyErasedAt",mapping,mapping_hash AS "mappingHash",
          source_hash AS "sourceHash",total_rows AS "totalRows",processed_rows AS "processedRows",
          succeeded_rows AS "succeededRows",failed_rows AS "failedRows",
          next_chunk_index AS "nextChunkIndex",created_by_user_id AS "createdByUserId",
          created_at AS "createdAt",updated_at AS "updatedAt",completed_at AS "completedAt"
        FROM crm_import_jobs j WHERE workspace_id=$1
-         AND ($2::jsonb IS NULL OR (source_id IS NOT NULL AND integration_grants IS NOT NULL
+         AND ($2::jsonb IS NULL OR (j.privacy_erased AND j.integration_credential_id=$3::uuid) OR (source_id IS NOT NULL AND integration_grants IS NOT NULL
            AND EXISTS (SELECT 1 FROM jsonb_array_elements(j.integration_grants) required WHERE required->>'operation'='crm.imports.write')
            AND NOT EXISTS (
              SELECT 1 FROM jsonb_array_elements(j.integration_grants) required
@@ -954,7 +967,7 @@ export function createCrmProductionImportService(deps: {
                    )
               )
            )))`,
-      params: [context.workspaceId, grants ? JSON.stringify(grants) : null],
+      params: [context.workspaceId, grants ? JSON.stringify(grants) : null, context.authority.integration?.credentialId ?? null],
     })
     return { ...result, jobs: result.jobs.map((row) => { jobContext(context, row, 'read'); return jobProjection(row) }) }
   }

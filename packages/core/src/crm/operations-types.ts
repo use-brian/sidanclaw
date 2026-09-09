@@ -444,6 +444,11 @@ export const SaveCrmPrivacyPolicyCommandSchema = z.object({
   confirmed: z.literal(true),
   intakeReplay: CrmIntakeReplayPolicySchema,
   addressSuppression: CrmIntakeReplayPolicySchema.optional(),
+  importSourceErasure: z.object({
+    receiptRetentionSeconds: z.number().int().min(1).max(2147483647),
+    heldSourceIds: z.array(CrmOperationsUuidSchema).max(250)
+      .refine(ids => new Set(ids.map(id => id.toLowerCase())).size === ids.length, 'Source holds must be distinct.'),
+  }).strict().nullable().optional(),
 }).strict()
 
 export const ReleaseCrmAddressSuppressionCommandSchema = z.object({

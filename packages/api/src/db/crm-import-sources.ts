@@ -11,11 +11,13 @@ import { getPool } from './client.js'
 export const MAX_CRM_IMPORT_SOURCE_BYTES = 30 * 1024 * 1024
 type CrmImportSourceMetadata = {
   id: string; workspaceId: string; sourceHash: string; credentialId: string
-  integrationGrants: CrmIntegrationGrant[]; createdAt: Date; byteCount: number
+  integrationGrants: CrmIntegrationGrant[]; createdAt: Date; byteCount: number; privacyErased: boolean
 }
 export type CrmImportSource = CrmImportSourceMetadata & { bytes: Buffer }
 const COLUMNS = `id,workspace_id AS "workspaceId",source_hash AS "sourceHash",credential_id AS "credentialId",
-  integration_grants AS "integrationGrants",created_at AS "createdAt",octet_length(content_bytes) AS "byteCount"`
+  integration_grants AS "integrationGrants",created_at AS "createdAt",octet_length(content_bytes) AS "byteCount",privacy_erased AS "privacyErased"`
+
+const retiredSource = () => new CrmOperationsError('conflict', 'The CRM import source was erased. Its receipt cannot restore the CSV.', { reason: 'import_source_retired' })
 
 export function createCrmImportSources(pool: Pool = getPool()) {
   return {
@@ -38,6 +40,7 @@ export function createCrmImportSources(pool: Pool = getPool()) {
       const source = inserted.rows[0] ?? (await pool.query<CrmImportSourceMetadata>(`SELECT ${COLUMNS} FROM crm_import_sources
         WHERE workspace_id=$1 AND source_key=$2`, [context.workspaceId, sourceKey])).rows[0]
       if (!source) throw new CrmOperationsError('conflict', 'The source changed during upload. Retry with the same source key.')
+      if (source.privacyErased) throw retiredSource()
       requireImportCeiling(context.authority.integration, source.integrationGrants)
       if (source.sourceHash !== sourceHash) throw new CrmOperationsError('idempotency_conflict', 'This source key was already used for different CSV bytes.')
       return { sourceId: source.id, sourceHash: source.sourceHash, bytes: source.byteCount, created: inserted.rowCount === 1 }
@@ -45,13 +48,12 @@ export function createCrmImportSources(pool: Pool = getPool()) {
     async read(context: CrmOperationsContext, rawId: unknown, mode: 'read' | 'write' = 'write'): Promise<CrmImportSource> {
       requireImportOperation(context, mode === 'read' ? 'crm.imports.read' : 'crm.imports.write')
       const id = z.string().uuid().parse(rawId)
-      const result = await pool.query<CrmImportSourceMetadata>(`SELECT ${COLUMNS} FROM crm_import_sources WHERE workspace_id=$1 AND id=$2`, [context.workspaceId, id])
+      const result = await pool.query<CrmImportSource>(`SELECT ${COLUMNS},content_bytes AS bytes FROM crm_import_sources WHERE workspace_id=$1 AND id=$2`, [context.workspaceId, id])
       const source = result.rows[0]
       if (!source) throw new CrmOperationsError('not_found', 'CRM import source is unavailable.')
+      if (source.privacyErased) throw retiredSource()
       if (context.authority.integration) requireImportCeiling(context.authority.integration, source.integrationGrants, mode)
-      const content = await pool.query<{ bytes: Buffer }>('SELECT content_bytes AS bytes FROM crm_import_sources WHERE workspace_id=$1 AND id=$2', [context.workspaceId, id])
-      const bytes = content.rows[0]?.bytes
-      if (!bytes) throw new CrmOperationsError('not_found', 'CRM import source is unavailable.')
+      const bytes = source.bytes
       if (createHash('sha256').update(bytes).digest('hex') !== source.sourceHash) throw new CrmOperationsError('conflict', 'CRM import source integrity check failed.')
       return { ...source, bytes }
     },

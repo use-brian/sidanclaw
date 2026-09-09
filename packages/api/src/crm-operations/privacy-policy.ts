@@ -3,7 +3,8 @@ import type { PoolClient } from 'pg'
 import { CrmOperationsError, type CrmOperationsCommand, type CrmOperationsContext } from '@use-brian/core'
 import { query } from '../db/client.js'
 
-type Policy = { intakeReplay: { retentionSeconds: number } | null; addressSuppression?: { retentionSeconds: number } | null }
+type Policy = { intakeReplay: { retentionSeconds: number } | null; addressSuppression?: { retentionSeconds: number } | null
+  importSourceErasure?: { receiptRetentionSeconds: number; heldSourceIds: string[] } | null }
 type PolicyRecord = {
   id: string | null
   version: number
@@ -35,10 +36,22 @@ export async function saveCrmPrivacyPolicy(
     throw new CrmOperationsError('conflict', 'Privacy policy changed. Reload it before approving.', { reason: 'stale_privacy_policy_version' })
   }
   const addressSuppression = command.addressSuppression === undefined ? current.policy.addressSuppression ?? null : command.addressSuppression
+  const requestedSourcePolicy = command.importSourceErasure === undefined ? current.policy.importSourceErasure ?? null : command.importSourceErasure
+  const importSourceErasure = requestedSourcePolicy && { ...requestedSourcePolicy,
+    heldSourceIds: requestedSourcePolicy.heldSourceIds.map(id => id.toLowerCase()).sort() }
+  if (command.importSourceErasure && importSourceErasure!.heldSourceIds.length) {
+    const held = await client.query('SELECT id FROM crm_import_sources WHERE workspace_id=$1 AND id=ANY($2::uuid[]) FOR KEY SHARE',
+      [context.workspaceId, importSourceErasure!.heldSourceIds])
+    if (held.rowCount !== importSourceErasure!.heldSourceIds.length) {
+      throw new CrmOperationsError('invalid_input', 'Source holds must reference sources in this workspace.')
+    }
+  }
   const policy: Policy = { intakeReplay: command.intakeReplay,
-    ...(command.addressSuppression !== undefined || Object.hasOwn(current.policy,'addressSuppression') ? { addressSuppression } : {}) }
+    ...(command.addressSuppression !== undefined || Object.hasOwn(current.policy,'addressSuppression') ? { addressSuppression } : {}),
+    ...(command.importSourceErasure !== undefined || Object.hasOwn(current.policy,'importSourceErasure') ? { importSourceErasure } : {}) }
   if (current.version > 0 && current.policy.intakeReplay?.retentionSeconds === command.intakeReplay?.retentionSeconds
-    && current.policy.addressSuppression?.retentionSeconds === addressSuppression?.retentionSeconds) {
+    && current.policy.addressSuppression?.retentionSeconds === addressSuppression?.retentionSeconds
+    && JSON.stringify(current.policy.importSourceErasure ?? null) === JSON.stringify(importSourceErasure)) {
     return { record: current, created: false }
   }
   const saved = await client.query<PolicyRecord>(
