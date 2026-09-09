@@ -67,6 +67,14 @@ export function createAssociationService(options: {
         }
         case 'list_tickets': return { ...output, items: await store.listTickets(workspaceId, command.eventId) }
         case 'save_ticket': return { ...output, ...(await store.upsertTicket(workspaceId, command.eventId, command.ticket, dbActor)) }
+        case 'list_waitlist': {
+          const events = integration ? crmIntegrationResourceSelection(integration, 'association.read', 'eventIds') : 'all'
+          if (integration) requireCrmIntegrationOperation(integration, 'crm.submissions.read')
+          const definitions = integration ? crmIntegrationResourceSelection(integration, 'crm.submissions.read', 'definitionIds') : 'all'
+          return { ...output, ...(await store.listWaitlist(workspaceId, { ...pagination(), eventId: command.eventId, includeClosed: command.includeClosed,
+            ...(events === 'all' ? {} : { allowedEventIds: events }), ...(definitions === 'all' ? {} : { allowedDefinitionIds: definitions }) })) }
+        }
+        case 'offer_waitlist_place': return { ...output, ...(await store.offerWaitlistPlace(workspaceId, command.offer, dbActor)) }
         case 'create_order': return { ...output, ...(await store.createOrder(workspaceId, command.order, dbActor)) }
         case 'get_order': {
           const record = await store.getOrder(workspaceId, command.orderId, dbActor)

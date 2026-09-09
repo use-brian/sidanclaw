@@ -14,6 +14,7 @@ import { WorkspaceModuleError } from '../db/workspace-modules-store.js'
 import {
   CrmOperationsError,
   CrmIntegrationScopeError,
+  AssociationWaitlistOfferInputSchema,
   type AssociationContext,
   type AssociationServicePort,
   type CrmOperationsActor,
@@ -459,6 +460,20 @@ export function associationRoutes(opts: Options): Router {
     if (!registrationId || !update) return
     const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'update_registration', registrationId, update })
     res.json({ registration: result.record })
+  }))
+
+  router.get('/waitlist', endpoint(async (req, res) => {
+    const query = parsed(ListPageSchema.extend({ eventId: UUID.optional(), includeClosed: truthyQuery.optional() }), req.query, res)
+    if (!query) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'list_waitlist', ...query, includeClosed: query.includeClosed ?? false })
+    res.json({ submissions: result.items, nextCursor: result.nextCursor })
+  }))
+
+  router.post('/waitlist/:id/offer', endpoint(async (req, res) => {
+    const offer = parsed(AssociationWaitlistOfferInputSchema, { ...req.body, submissionId: req.params.id }, res)
+    if (!offer) return
+    const result = await associationService.execute(associationContextFor(res.locals.associationAuth), { kind: 'offer_waitlist_place', offer })
+    res.status(result.created ? 201 : 200).json({ offer: result.record, created: result.created })
   }))
 
   router.post('/orders', endpoint(async (req, res) => {

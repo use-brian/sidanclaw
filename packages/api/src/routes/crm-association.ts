@@ -33,7 +33,7 @@ export function crmAssociationRoutes(options: { service: AssociationServicePort;
         if (!context) return
         const input = AssociationCommandSchema.parse(command(req))
         const result = await options.service.execute(context, input)
-        const createsResource = ['save_ticket', 'create_order', 'reconcile_provider_event'].includes(input.kind)
+        const createsResource = ['save_ticket', 'create_order', 'reconcile_provider_event', 'offer_waitlist_place'].includes(input.kind)
         res.status(result.created && createsResource ? 201 : 200).json({
           [key]: result.items ?? result.record, ...(result.nextCursor !== undefined ? { nextCursor: result.nextCursor } : {}),
           ...(result.created !== undefined ? { created: result.created } : {}),
@@ -48,6 +48,9 @@ export function crmAssociationRoutes(options: { service: AssociationServicePort;
   route('post', '/events/:eventId/tickets', (req) => ({ kind: 'save_ticket', eventId: req.params.eventId, ticket: req.body }), 'ticket')
   route('get', '/events/:eventId/registrations', (req) => ({ ...req.query, kind: 'list_registrations', eventId: req.params.eventId }), 'registrations')
   route('patch', '/registrations/:id', (req) => ({ kind: 'update_registration', registrationId: req.params.id, update: req.body }), 'registration')
+  route('get', '/waitlist', req => ({ ...req.query, kind: 'list_waitlist',
+    includeClosed: req.query.includeClosed === undefined ? false : z.enum(['true', 'false']).parse(req.query.includeClosed) === 'true' }), 'submissions')
+  route('post', '/waitlist/:id/offer', req => ({ kind: 'offer_waitlist_place', offer: { ...req.body, submissionId: req.params.id } }), 'offer')
   route('get', '/orders', (req) => ({ ...req.query, kind: 'list_orders' }), 'orders')
   route('post', '/orders', (req) => ({ kind: 'create_order', order: req.body }), 'order')
   route('get', '/orders/:id', (req) => ({ kind: 'get_order', orderId: req.params.id }), 'order')

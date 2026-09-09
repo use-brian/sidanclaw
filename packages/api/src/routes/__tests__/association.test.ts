@@ -47,6 +47,8 @@ function fakeStore(): AssociationStore {
     listEvents: vi.fn(),
     upsertTicket: vi.fn(),
     listTickets: vi.fn(),
+    listWaitlist: vi.fn(),
+    offerWaitlistPlace: vi.fn(),
     createOrder: vi.fn(),
     getOrder: vi.fn(),
     listOrders: vi.fn(),
@@ -78,6 +80,20 @@ function makeApp(
 }
 
 describe('[COMP:api/association-route] credential and workspace authority', () => {
+  it('adapts paginated waitlist reads and explicit offers through the shared command service', async () => {
+    const store = fakeStore()
+    vi.mocked(store.listWaitlist).mockResolvedValue({ items: [{ id: RECORD_ID, waitlistState: 'waiting' }], nextCursor: null })
+    vi.mocked(store.offerWaitlistPlace).mockResolvedValue({ record: { orderId: CONTACT_ID }, created: true })
+    const app = makeApp(store)
+    const page = await request(app).get('/api/association/waitlist').query({ includeClosed: 'true', limit: '10' })
+    expect(page.status).toBe(200)
+    expect(page.body).toMatchObject({ submissions: [{ id: RECORD_ID }], nextCursor: null })
+    expect(store.listWaitlist).toHaveBeenCalledWith(WID, expect.objectContaining({ includeClosed: true, limit: 10 }))
+    const offered = await request(app).post(`/api/association/waitlist/${RECORD_ID}/offer`).send({ promotionId: CONTACT_ID })
+    expect(offered.status).toBe(201)
+    expect(store.offerWaitlistPlace).toHaveBeenCalledWith(WID, expect.objectContaining({ submissionId: RECORD_ID, promotionId: CONTACT_ID, reservationMinutes: 20 }), expect.any(Object))
+    expect((await request(makeApp(store, auth({ scope: 'read' }))).post(`/api/association/waitlist/${RECORD_ID}/offer`).send({ promotionId: CONTACT_ID })).status).toBe(403)
+  })
   it('lists retired notifications with their prior delivery state through the compatibility route', async () => {
     const store=fakeStore()
     vi.mocked(store.listNotifications).mockResolvedValue({items:[{id:RECORD_ID,status:'retired',retiredFromStatus:'sending',retiredAt:'2026-01-01T00:00:00Z'}],nextCursor:null})

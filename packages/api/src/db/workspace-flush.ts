@@ -115,6 +115,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   // Retired-receipt parent FKs refuse deletion unless receipts leave first.
   'crm_intake_idempotency',
   'crm_delivery_receipt_contacts',
+  'association_waitlist_offers',
   'entities',
   'memories',
   'consolidation_logs',

@@ -2,6 +2,7 @@
  * [COMP:crm/association-service]
  */
 import { z } from 'zod'
+import { AssociationWaitlistOfferInputSchema } from './waitlist.js'
 import { WORKSPACE_MODULE_ACTIONS } from '@use-brian/shared'
 import { CrmOperationsActorSchema, CrmOperationsAuthoritySchema } from '../crm/operations-types.js'
 import {
@@ -25,6 +26,8 @@ export const AssociationCommandSchema = z.union([
   z.object({ kind: z.literal('module_action'), action: z.enum(WORKSPACE_MODULE_ACTIONS), expectedVersion: z.number().int().nonnegative() }).strict(),
   z.object({ kind: z.literal('list_tickets'), eventId: Id }).strict(),
   z.object({ kind: z.literal('save_ticket'), eventId: Id, ticket: AssociationTicketInputSchema }).strict(),
+  AssociationListPageSchema.extend({ kind: z.literal('list_waitlist'), eventId: Id.optional(), includeClosed: z.boolean().default(false) }).strict(),
+  z.object({ kind: z.literal('offer_waitlist_place'), offer: AssociationWaitlistOfferInputSchema }).strict(),
   z.object({ kind: z.literal('create_order'), order: AssociationOrderCreateSchema }).strict(),
   z.object({ kind: z.literal('get_order'), orderId: Id }).strict(),
   AssociationListPageSchema.extend({ kind: z.literal('list_orders'), eventId: Id.optional(),
@@ -49,4 +52,4 @@ export type AssociationCommandResult = {
 export interface AssociationServicePort {
   execute(context: AssociationContext, command: AssociationCommand): Promise<AssociationCommandResult>
 }
-export const ASSOCIATION_READ_COMMANDS = ['module_status', 'list_tickets', 'get_order', 'list_orders', 'module_blockers', 'list_registrations'] as const
+export const ASSOCIATION_READ_COMMANDS = ['module_status', 'list_tickets', 'get_order', 'list_orders', 'module_blockers', 'list_registrations', 'list_waitlist'] as const

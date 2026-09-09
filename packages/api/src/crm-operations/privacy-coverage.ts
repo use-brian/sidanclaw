@@ -17,6 +17,14 @@ export type CrmPrivacyCoverageEntry = {
 }
 export const CRM_PRIVACY_COVERAGE: readonly CrmPrivacyCoverageEntry[] = [
   {
+    domain: 'association_waitlist_offers',
+    columns: ['id','workspace_id','submission_id','ticket_id','promotion_id','order_id','request_fingerprint','actor_kind','actor_credential_id','created_at'],
+    excludedColumns: [], workspaceWhere: 'true',
+    subjectWhere: 'EXISTS(SELECT 1 FROM association_enquiries q WHERE q.workspace_id=$1 AND q.id=t.submission_id AND q.contact_id=$2) OR EXISTS(SELECT 1 FROM association_orders o WHERE o.workspace_id=$1 AND o.id=t.order_id AND o.contact_id=$2)',
+    subjectRedactions: { request_fingerprint: 'NULL', actor_credential_id: 'NULL' }, transforms: {}, orderBy: 't.id',
+    reason: 'One canonical contact links the waitlist submission to its order; promotion identity contains no copied form payload.',
+  },
+  {
     domain: 'association_inventory_boundaries',
     columns: ['id','workspace_id','event_id','ticket_id','sold_out','revision','capacity','used','created_at','updated_at'],
     excludedColumns: [], workspaceWhere: 'true', subjectWhere: null,

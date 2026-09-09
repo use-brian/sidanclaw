@@ -13,6 +13,8 @@ function fixture() {
   const store = {
     listOrders: vi.fn().mockResolvedValue({ items: [], nextCursor: null, total: 7 }),
     listTickets: vi.fn().mockResolvedValue([]), getOrder: vi.fn().mockResolvedValue({ id: orderId }),
+    listWaitlist: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    offerWaitlistPlace: vi.fn().mockResolvedValue({ record: { orderId }, created: true }),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'manual', eventId }),
     updateRegistration: vi.fn(), reconcileProviderEvent: vi.fn().mockResolvedValue({ record: { id: orderId }, created: true }),
     expireDueOrder: vi.fn(),
@@ -30,6 +32,13 @@ function integration(): AssociationContext {
 }
 
 describe('[COMP:crm/association-service] Canonical authority and adapters', () => {
+  it('intersects waitlist event and definition read authority before pagination', async () => {
+    const f = fixture(), context = integration(), definitionId = randomUUID()
+    await expect(f.service.execute(context, command({ kind: 'list_waitlist' }))).rejects.toMatchObject({ code: 'integration_scope_denied' })
+    context.authority.integration!.grants.push({ operation: 'crm.submissions.read', selectors: { definitionIds: [definitionId] } })
+    await f.service.execute(context, command({ kind: 'list_waitlist', limit: 10 }))
+    expect(f.store.listWaitlist).toHaveBeenCalledWith(workspaceId, expect.objectContaining({ limit: 10, allowedEventIds: [eventId], allowedDefinitionIds: [definitionId] }))
+  })
   it('keeps history/recovery usable without an admission precheck that could hide disabled history', async () => {
     const f = fixture()
     expect((await f.service.execute(member, { kind: 'get_order', orderId })).record?.id).toBe(orderId)

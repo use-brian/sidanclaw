@@ -11,6 +11,8 @@
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import { CrmOperationsError, CrmEffectiveEntitlementQuerySchema, type CrmEffectiveEntitlementQuery, type CrmPageQuery, CrmIntegrationScopeError, requireCrmIntegrationResources, type CrmIntegrationOperation } from '@use-brian/core'
+import { listAssociationWaitlist, offerAssociationWaitlist, type WaitlistListInput } from '../association/waitlist.js'
+import type { AssociationWaitlistOfferInput } from '@use-brian/core'
 import { prepareProviderEntitlementPeriod, requireProviderEntitlementActor } from '../crm-operations/entitlement-periods.js'
 import { mayTransitionCrmEntitlement } from '@use-brian/core'
 import {lockAssociationInventory,refreshAssociationInventory} from '../association/inventory.js'
@@ -71,6 +73,8 @@ export type AssociationStore = {
   listEvents(workspaceId: string, input: AssociationListInput & { status?: string }): Promise<AssociationPage>
   upsertTicket(workspaceId: string, eventId: string, input: TicketInput, actor: AssociationActor): Promise<MutationResult>
   listTickets(workspaceId: string, eventId: string): Promise<AssociationRecord[]>
+  listWaitlist(workspaceId: string, input: WaitlistListInput): Promise<AssociationPage>
+  offerWaitlistPlace(workspaceId: string, input: AssociationWaitlistOfferInput, actor: AssociationActor): Promise<MutationResult>
   createOrder(workspaceId: string, input: OrderCreateInput, actor: AssociationActor): Promise<MutationResult>
   getOrder(workspaceId: string, id: string, actor?: AssociationActor): Promise<AssociationRecord | null>
   listOrders(workspaceId: string, input: AssociationListInput & { status?: OrderStatus; eventId?: string; contactId?: string; allowedEventIds?: readonly string[] }): Promise<AssociationPage & { total: number }>
@@ -382,10 +386,12 @@ export async function saveCrmEventRecord(client: PoolClient, workspaceId: string
   return { record: event, created }
 }
 
-export function createAssociationStore(pool: Pool = getPool()): AssociationStore {
+export function createAssociationStore(pool: Pool = getPool(), transactionClient?: PoolClient): AssociationStore {
+  // A waitlist promotion shares this exact order implementation and outer commit.
+  const transact = <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> => transactionClient ? fn(transactionClient) : transaction(pool, fn)
   return {
     async linkExternalIdentity(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         await requirePerson(client, workspaceId, input.contactId)
         const inserted = await client.query<DbRow>(
           `INSERT INTO association_external_identities
@@ -422,7 +428,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async createEnquiry(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const fingerprint = associationFingerprint(input)
         await requirePerson(client, workspaceId, input.contactId)
         const inserted = await client.query<DbRow>(
@@ -489,7 +495,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async updateEnquiry(workspaceId, id, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         if (input.ownerUserId) await requireWorkspaceUser(client, workspaceId, input.ownerUserId)
         const result = await client.query<DbRow>(
           `UPDATE association_enquiries
@@ -509,7 +515,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async addEnquiryNote(workspaceId, enquiryId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const enquiry = await client.query(
           `SELECT 1 FROM association_enquiries WHERE workspace_id = $1 AND id = $2`,
           [workspaceId, enquiryId],
@@ -542,7 +548,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async appendConsent(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const request: CrmEvidenceRequest = { kind: 'consent', contactId: input.contactId,
           purposeKey: input.purpose, action: input.action, wordingVersion: input.wordingVersion,
           locale: input.locale,
@@ -618,7 +624,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async upsertPlan(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const saved = await saveCrmEntitlementPlanRecord(client, workspaceId, input)
         await audit(client, workspaceId, saved.created ? 'plan.created' : 'plan.updated', 'membership_plan', String(saved.record.id), actor)
         return saved
@@ -637,7 +643,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async createMembership(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         authorizeIntegration(actor, 'crm.entitlements.write', { planIds: input.planId }, integration)
         if (input.provider) {
@@ -729,7 +735,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async updateMembership(workspaceId, id, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         const current = await client.query<{ starts_at: Date; status: string; plan_id: string; provider: string | null }>(
           `SELECT starts_at,status,plan_id,provider FROM association_memberships
@@ -772,7 +778,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async upsertEvent(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const saved = await saveCrmEventRecord(client, workspaceId, input, actor.credentialKind)
         await audit(client, workspaceId, saved.created ? 'event.created' : 'event.updated', 'event', String(saved.record.id), actor)
         return saved
@@ -791,7 +797,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async upsertTicket(workspaceId, eventId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         const module = await lockAssociationModule(client, workspaceId)
         requireAssociationAdmission(module)
@@ -875,8 +881,13 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
       return result.rows
     },
 
+    listWaitlist: (workspaceId, input) => listAssociationWaitlist(pool, workspaceId, input),
+    offerWaitlistPlace: (workspaceId, input, actor) => transact(client => offerAssociationWaitlist(client, workspaceId, input, actor,
+      order => createAssociationStore(pool, client).createOrder(workspaceId, order, actor),
+      id => getOrderRecord(client, workspaceId, id))),
+
     async createOrder(workspaceId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         const module = await lockAssociationModule(client, workspaceId)
         const fingerprint = associationFingerprint(input)
@@ -1130,7 +1141,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     confirmFreeOrder: (workspaceId, id, actor) => settleWithoutProvider(pool, workspaceId, id, actor, 'confirm_free'),
 
     async reconcileProviderEvent(workspaceId, orderId, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         await lockAssociationModule(client, workspaceId)
         await authorizeOrderIntegration(client, workspaceId, orderId, actor, 'association.provider_events.write', input.provider, integration)
@@ -1262,7 +1273,7 @@ export function createAssociationStore(pool: Pool = getPool()): AssociationStore
     },
 
     async updateRegistration(workspaceId, id, input, actor) {
-      return transaction(pool, async (client) => {
+      return transact(async (client) => {
         const integration = await lockIntegrationActor(client, workspaceId, actor)
         await lockAssociationModule(client, workspaceId)
         if (actor.integration || actor.credentialKind === 'integration_key') {
