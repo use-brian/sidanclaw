@@ -1,8 +1,9 @@
 /** Native owner administration; never uses a machine credential. [COMP:app-web/association] */
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import { authFetch } from "@/lib/auth-fetch";
 import { listCrmIntakeDefinitions,listCrmConsentPurposes,listCrmEntitlementPlans,listCrmEvents } from "./crm";
 import { AssociationApiError } from "./association";
-const API_URL=process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL=publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 async function request<T>(workspaceId:string,path:string,input?:unknown):Promise<T>{
   const response=await authFetch(`${API_URL}/api/crm/${encodeURIComponent(workspaceId)}/operations/${path}`,input===undefined?undefined:{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});
   const body=await response.json();if(!response.ok)throw new AssociationApiError(typeof body?.error==="string"?body.error:"unavailable",response.status);return body as T;

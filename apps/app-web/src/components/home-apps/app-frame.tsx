@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Custom Home app frame — the host side of running someone else's code.
  *
@@ -47,7 +49,7 @@ import { useCachedResource } from "@/lib/surface-cache";
 import { homeAppSessionCacheKey } from "@/lib/surface-prefetch";
 import { fetchHomeAppSession, type HomeAppSession } from "@/lib/api/home-apps";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /**
  * Only in-app paths. A `ub:navigate` carrying an absolute URL would make the

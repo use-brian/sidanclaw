@@ -3,7 +3,7 @@
  */
 import { z } from "zod";
 import { encryptBlob, type StoredTokens, type TokenCipher } from "./desktop-token-store.js";
-import type { TargetAuth, TargetKind } from "./target-store.js";
+import { parseDesktopConfig, type DesktopPublicConfig, type TargetAuth, type TargetKind } from "./target-store.js";
 
 const url = z.string().url().refine((value) => {
   const parsed = new URL(value);
@@ -12,6 +12,7 @@ const url = z.string().url().refine((value) => {
 const targetSchema = z.object({
   kind: z.enum(["cloud", "local"]), appUrl: url, apiUrl: url,
   auth: z.enum(["pkce", "local-session"]),
+  publicConfig: z.unknown().transform((value) => parseDesktopConfig(value)?.publicConfig ?? null).optional(),
 });
 const tokensSchema = z.object({
   accessToken: z.string().min(1), refreshToken: z.string().min(1),
@@ -20,7 +21,7 @@ const tokensSchema = z.object({
 });
 const entrySchema = z.object({ target: targetSchema, tokens: tokensSchema });
 const storeSchema = z.object({ version: z.literal(1), entries: z.array(entrySchema), active: z.record(z.string()) });
-export type AccountTarget = { kind: TargetKind; appUrl: string; apiUrl: string; auth: TargetAuth };
+export type AccountTarget = { kind: TargetKind; appUrl: string; apiUrl: string; auth: TargetAuth; publicConfig?: DesktopPublicConfig | null };
 export type SavedDeploymentAccount = z.infer<typeof entrySchema>;
 type AccountStore = z.infer<typeof storeSchema>;
 export type DeploymentAccountRow = {

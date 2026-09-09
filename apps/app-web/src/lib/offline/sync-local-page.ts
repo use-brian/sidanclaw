@@ -1,12 +1,14 @@
 /** Upload a closed local page through the same authenticated Yjs protocol.
  * [COMP:app-web/offline-pages]
  */
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import * as Y from "yjs";
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/provider";
 import { getValidAccessToken } from "@/lib/auth-fetch";
 
 export function resolveSyncUrl(): string {
-  if (process.env.NEXT_PUBLIC_DOC_SYNC_URL) return process.env.NEXT_PUBLIC_DOC_SYNC_URL;
+  const configuredSyncUrl = publicRuntimeConfig().docSyncUrl;
+  if (configuredSyncUrl) return configuredSyncUrl;
   if (typeof window !== "undefined" && window.location.hostname === "app.usebrian.ai") {
     return "wss://doc-sync.usebrian.ai";
   }

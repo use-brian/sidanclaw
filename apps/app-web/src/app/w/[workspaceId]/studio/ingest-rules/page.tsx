@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Studio → Events — the ingestion control plane (app-web), master-detail.
  *
@@ -54,7 +56,7 @@ import {
   type IngestSource,
 } from "./use-ingest-data";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /**
  * Whether a source's events can actually reach the brain.

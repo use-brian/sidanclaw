@@ -1,3 +1,4 @@
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * CRM operator-surface SDK. Keyset collection pages, authoritative summary,
  * compact relationship lookup, canonical cold record reads, typed record
@@ -11,7 +12,7 @@
 import type { AppLocale } from "@use-brian/shared";
 import { authFetch } from "@/lib/auth-fetch";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type DealStage =
   | "lead"

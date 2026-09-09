@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Dialog } from "@base-ui/react/dialog";
-import { ArchiveRestore, Download, GitMerge, MoreHorizontal, Plus, Upload, X } from "lucide-react";
+import { Archive, ArchiveRestore, Download, GitMerge, MoreHorizontal, Plus, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -590,7 +590,22 @@ export function DuplicatesDialog({ workspaceId, open, onOpenChange, onMerged }: 
               } catch (cause) {
                 setError(cause instanceof Error ? cause.message : t.keepSeparateFailed);
               }
-            })()}>{t.keepSeparate}</Button></div>}</div>)}</div>
+            })()}>{t.keepSeparate}</Button><Button size="xs" variant="ghost" onClick={() => void (async () => {
+              // Archive, not merge: for a record that is genuinely junk rather
+              // than the same person seen twice, merging would fold its (wrong)
+              // attributes into the survivor. Archiving leaves the survivor
+              // untouched and is restorable from Archived records.
+              const confirmed = await confirmDialog({ title: t.archiveTitle, description: t.archiveDescription.replace("{name}", record.name), confirmLabel: t.archive, cancelLabel: t.cancel });
+              if (!confirmed) return;
+              setError(null);
+              try {
+                await setCrmRecordArchived(workspaceId, record.id, true);
+                setGroups(await fetchCrmDuplicates(workspaceId));
+                onMerged();
+              } catch (cause) {
+                setError(cause instanceof Error ? cause.message : t.archiveFailed);
+              }
+            })()}><Archive aria-hidden />{t.archive}</Button></div>}</div>)}</div>
           </div>
         ))}
         {loaded && !loading && !error && groups.length === 0 && <div className="text-sm text-muted-foreground">{t.noDuplicates}</div>}

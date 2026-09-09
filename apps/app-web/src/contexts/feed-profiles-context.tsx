@@ -1,5 +1,6 @@
 "use client";
 
+
 /**
  * Feed workspace context — the app-web replacement for feed-web's
  * `TeamContextProvider` (`apps/feed-web/src/lib/workspace-context.tsx`).

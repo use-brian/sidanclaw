@@ -12,12 +12,13 @@
  * [COMP:app-web/studio-lists-cache]
  */
 
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import type { ConnectorInstanceOption } from "@/components/knowledge/add-source-modal";
 import { authFetch } from "@/lib/auth-fetch";
 import { useCachedResource } from "@/lib/surface-cache";
 import { kbInstancesCacheKey, kbSourcesCacheKey } from "@/lib/surface-prefetch";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type Sensitivity = "public" | "internal" | "confidential";
 

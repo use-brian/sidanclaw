@@ -57,6 +57,14 @@ export type BrainEpisodeInput = {
    */
   sourceKind?: SourceKind
   /**
+   * Provider-verified identity for people named in `content`, keyed by the
+   * name the content uses. Extraction reads names out of prose, and a name is
+   * not an identity: it is shared, it changes, and most chat senders publish
+   * none. Supplying the adapter's own subject id is what lets a person write
+   * resolve to the existing record instead of minting another.
+   */
+  personExternalRefs?: Array<{ name: string; externalRef: Record<string, unknown>; phone?: string }>
+  /**
    * The Episode's `source_ref` payload (JSONB). Doc-page distillation passes
    * `{ source_kind:'doc_page', page_id, section_block_id, version }` so every
    * fact gets a precise `(page_id, block_id)` back-edge via `source_episode_id`.

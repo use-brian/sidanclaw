@@ -1,9 +1,10 @@
 /** Authenticated native Association member client. [COMP:app-web/association] */
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import type { WorkspaceModule, WorkspaceModuleAction, WorkspaceModuleActionResult } from "@use-brian/shared";
 import { authFetch } from "@/lib/auth-fetch";
 import { getWorkspaceRole } from "@/lib/api/workspaces";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 export class AssociationApiError extends Error {
   constructor(readonly code: string, readonly status: number) { super(code); }
 }

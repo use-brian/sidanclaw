@@ -23,6 +23,7 @@
  * [COMP:app-web/studio-lists-cache]
  */
 
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import { useCallback } from "react";
 import { authFetch } from "@/lib/auth-fetch";
 import {
@@ -41,7 +42,7 @@ import {
   workspaceMembershipCacheKey,
 } from "@/lib/surface-prefetch";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type ChannelsSnapshot = {
   channels: Channel[];

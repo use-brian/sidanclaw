@@ -246,6 +246,7 @@ type SpyCrm = {
     email: string | null
     externalRef: Record<string, unknown> | null
     stableIdentity?: { provider: string; providerInstanceKey: string; subjectId: string }
+    phone?: string
   }>
   companies: Array<{ name: string; domain: string | null }>
   contactReturns: ContactRecord[]
@@ -298,6 +299,7 @@ function spyCrm(world?: World): SpyCrm {
         email: params.email ?? null,
         externalRef: params.externalRef ?? null,
         ...(params.stableIdentity ? { stableIdentity: params.stableIdentity } : {}),
+        ...(params.phone ? { phone: params.phone } : {}),
       })
       const entityId = `ent-con-${c.contacts.length}`
       const rec = makeContact({
@@ -734,7 +736,7 @@ describe('[COMP:brain/pipeline-b] processEpisode', () => {
       episodes: episodes.port,
     }
 
-    const result = await processEpisode(baseEpisode({ preStampedTags: ['domain:engineering'] }), 'meeting notes …', deps)
+    const result = await processEpisode(baseEpisode({ preStampedTags: ['domain:engineering'] }), 'meeting notes … sarah@notion.so', deps)
 
     expect(result.extracted).toBe(true)
     expect(result.summaryText).toContain('Sarah at Notion')
@@ -1488,7 +1490,7 @@ describe('[COMP:brain/pipeline-b] processEpisode', () => {
     const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
     const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
 
-    const result = await processEpisode(baseEpisode(), 'follow-up', deps)
+    const result = await processEpisode(baseEpisode(), 'follow-up with sarah@notion.so', deps)
 
     expect(crm.contacts).toEqual([
       { name: 'Sarah Lee', email: 'sarah@notion.so', externalRef: null },
@@ -1677,6 +1679,88 @@ describe('[COMP:brain/pipeline-b] processEpisode', () => {
           subjectId: 'U0AQT24KHEV',
         },
       },
+    ])
+  })
+
+  it('takes the phone from the adapter ref, never from the extraction', async () => {
+    const crm = spyCrm()
+    const entities = spyEntities()
+    const extraction = JSON.stringify({
+      summary: 'Chat',
+      entities: [{ kind: 'person', display_name: 'Cindy', canonical_id: null }],
+      edges: [],
+      memories: [],
+      tags: [],
+    })
+    const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
+    const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
+
+    await processEpisode(
+      baseEpisode({
+        personExternalRefs: [{
+          name: 'Cindy',
+          externalRef: { provider: 'whatsapp', id: '85268719565@s.whatsapp.net', instance_id: 'inst-1' },
+          phone: '+85268719565',
+        }],
+      }),
+      'chat window',
+      deps,
+    )
+
+    expect(crm.contacts).toHaveLength(1)
+    expect(crm.contacts[0]).toMatchObject({ name: 'Cindy', phone: '+85268719565' })
+  })
+
+  it('drops an extracted email the source text does not attest', async () => {
+    const crm = spyCrm()
+    const entities = spyEntities()
+    const extraction = JSON.stringify({
+      summary: 'Talked to Ben and Dana',
+      entities: [
+        // Fabricated: the model was asked for an email it did not have.
+        { kind: 'person', display_name: 'Ben Luk', canonical_id: 'benluk@example.com' },
+        // Genuinely present in the note below.
+        { kind: 'person', display_name: 'Dana Reed', canonical_id: 'dana@acme.test' },
+      ],
+      edges: [],
+      memories: [],
+      tags: [],
+    })
+    const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
+    const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
+
+    await processEpisode(baseEpisode({}), 'Ben said hi. Reach Dana at DANA@acme.test.', deps)
+
+    expect(crm.contacts.map((c) => ({ name: c.name, email: c.email }))).toEqual([
+      { name: 'Ben Luk', email: null },
+      // Case differs in the source; attestation is case-insensitive.
+      { name: 'Dana Reed', email: 'dana@acme.test' },
+    ])
+  })
+
+  it('does not treat a chat provider JID as an email address', async () => {
+    const crm = spyCrm()
+    const entities = spyEntities()
+    const extraction = JSON.stringify({
+      summary: 'Chatted with TW',
+      entities: [
+        // A WhatsApp JID passes every generic email check: it has an @, a dot,
+        // and a real TLD. Only the domain gives it away.
+        { kind: 'person', display_name: 'TW', canonical_id: '85292052939@s.whatsapp.net' },
+        { kind: 'person', display_name: 'Real Person', canonical_id: 'real@example.com' },
+      ],
+      edges: [],
+      memories: [],
+      tags: [],
+    })
+    const provider = sequencedProvider([extraction, JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' })])
+    const deps = makeDeps({ provider, crm: crm.store, entities: entities.store })
+
+    await processEpisode(baseEpisode({}), 'note mentioning real@example.com', deps)
+
+    expect(crm.contacts.map((c) => ({ name: c.name, email: c.email }))).toEqual([
+      { name: 'TW', email: null },
+      { name: 'Real Person', email: 'real@example.com' },
     ])
   })
 
@@ -2386,6 +2470,63 @@ describe('[COMP:brain/pipeline-b] extraction prompt spotlighting', () => {
     const { provider, requests } = capturingProvider(goodOutputs)
     await processEpisode(baseEpisode(), 'plain content', makeDeps({ provider }))
     expect(requests[0]!.systemPrompt).toContain('UNTRUSTED_CONTENT')
+  })
+})
+
+// ── canonical_id rule is worded for the source's medium ───────────────
+//
+// The unconditional "prefer email as canonical_id" asked every source for a
+// value that chat and speech sources do not contain, and a model told to
+// prefer a value it cannot find constructs one. `attestedEmail` refuses to
+// write such a value; these assert the prompt stops asking for it.
+
+describe('[COMP:brain/pipeline-b] person canonical_id prompt rule', () => {
+  const goodOutputs = [
+    JSON.stringify({ summary: 'A note.', entities: [], edges: [], memories: [], tags: [] }),
+    JSON.stringify({ inferred_sensitivity: 'internal', brief_reason: 'routine' }),
+  ]
+
+  async function extractionPromptFor(sourceKind: PipelineBEpisode['sourceKind']): Promise<string> {
+    const { provider, requests } = capturingProvider(goodOutputs)
+    await processEpisode(baseEpisode({ sourceKind }), 'plain content', makeDeps({ provider }))
+    return requests[0]!.messages
+      .flatMap((m) => (typeof m.content === 'string' ? [m.content] : []))
+      .join('\n')
+  }
+
+  it('never tells any source to prefer an email it may not have', async () => {
+    for (const kind of ['manual_paste', 'email_thread', 'channel_window', 'recording'] as const) {
+      expect(await extractionPromptFor(kind)).not.toContain('prefer email as canonical_id')
+    }
+  })
+
+  it('requires the address to appear in the content for an email-bearing source', async () => {
+    const prompt = await extractionPromptFor('email_thread')
+    expect(prompt).toContain('appears verbatim in the content above')
+    expect(prompt).toContain('NEVER derive')
+  })
+
+  it('tells a chat archive that null is the expected answer', async () => {
+    // channel_window is the WhatsApp/WeChat archive: 334,943 messages, no
+    // email addresses, and the source that produced `benluk@example.com`.
+    const prompt = await extractionPromptFor('channel_window')
+    expect(prompt).toContain('canonical_id MUST be null')
+    expect(prompt).toContain('null is the expected answer')
+  })
+
+  it('tells a chat archive not to read a messaging id as an address', async () => {
+    // `85292052939@s.whatsapp.net` passes every email shape check there is.
+    const prompt = await extractionPromptFor('channel_window')
+    expect(prompt).toContain('@lid')
+    expect(prompt).toContain('85292052939@s.whatsapp.net')
+  })
+
+  it('still permits an address a chat genuinely contains', async () => {
+    // The store's own guard is verbatim-attestation, not source kind. A prompt
+    // that forbade the value outright would discard real data the writer would
+    // have accepted.
+    const prompt = await extractionPromptFor('voice_memo')
+    expect(prompt).toContain('unless an email address appears verbatim in the content above')
   })
 })
 

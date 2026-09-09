@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 // Ported from apps/web/src/app/(app)/settings/billing/page.tsx
 // — see docs/architecture/platform/cost-and-pricing.md
 // The "Plan & usage" section: plan tier, payment, invoices, plus the
@@ -23,7 +25,7 @@ import { settingsBillingCacheKey } from "@/lib/surface-prefetch";
 import { Skeleton } from "@/components/skeleton";
 import { UsageSection } from "./usage-section";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 // Deep-link target for `/plans`, which still lives in the marketing app
 // (apps/web). `webAppUrl()` resolves the prod-safe base (usebrian.ai in prod)

@@ -76,6 +76,7 @@ import {
   serializePersistedTarget,
   targetWindowTitle,
   type DeclaredDesktopConfig,
+  type DesktopPublicConfig,
   type TargetAuth,
   type TargetKind,
 } from "./target-store.js";
@@ -260,7 +261,7 @@ let changingTarget = false;
 let selectingAccount = false;
 let connectingDeployment = false;
 function accountTarget(): AccountTarget {
-  return { kind: cfg.target, appUrl: cfg.appUrl, apiUrl: cfg.apiUrl, auth: cfg.targetAuth };
+  return { kind: cfg.target, appUrl: cfg.appUrl, apiUrl: cfg.apiUrl, auth: cfg.targetAuth, publicConfig: cfg.publicConfig };
 }
 /** Browser storage and gateway cookies are isolated by deployment in both modes. */
 function targetSession(target = accountTarget()) {
@@ -1432,6 +1433,7 @@ async function validateLocalTarget(
   apiUrl: string
   declaredApiUrl: string | null
   auth: TargetAuth
+  publicConfig: DesktopPublicConfig | null
 }>> {
   return targetOperations.run(async () => {
     console.log(`[gateway-auth] validating app ${appUrl}`);
@@ -1448,6 +1450,7 @@ async function validateLocalTarget(
       appUrl,
       config.value?.apiUrl,
       config.value?.auth ?? "local-session",
+      config.value?.publicConfig,
     ) ?? localTarget(appUrl);
     const apiUrl = target?.apiUrl ?? fallbackApiUrl;
     const health = await probeWithVisibleGatewayFallback(
@@ -1465,6 +1468,7 @@ async function validateLocalTarget(
         apiUrl,
         declaredApiUrl: config.value?.apiUrl ?? null,
         auth: target?.auth ?? "local-session",
+        publicConfig: config.value?.publicConfig ?? null,
       },
     };
 
@@ -1478,6 +1482,7 @@ async function activateTarget(
   apiUrl?: string | null,
   auth?: TargetAuth,
   installSession?: () => Promise<void>,
+  publicConfig?: DesktopPublicConfig | null,
 ): Promise<boolean> {
   if (cfg.envTargetOverride || changingTarget || recorderOverlay) return false;
   changingTarget = true;
@@ -1504,7 +1509,7 @@ async function activateTarget(
     }
     // Closing may flush work. It must finish against the original config.
     if (!(await targetOperations.idle())) { ensureWindow(); return false; }
-    const raw = serializePersistedTarget(kind, appUrl, apiUrl, auth);
+    const raw = serializePersistedTarget(kind, appUrl, apiUrl, auth, publicConfig);
     const next = resolveConfig(process.env, raw, bundledDefaultForRuntime(app.isPackaged));
     writeFileSync(targetFile(), raw);
     stopRetryWatchers();
@@ -1548,12 +1553,16 @@ async function activateTarget(
 
 function useCloud(installSession?: () => Promise<void>): Promise<boolean> {
   if (selectingAccount || connectingDeployment) return Promise.resolve(false);
-  return activateTarget("cloud", rememberedLocalAppUrl(), rememberedLocalApiUrl(), rememberedLocalAuth(), installSession);
+  return activateTarget("cloud", rememberedLocalAppUrl(), rememberedLocalApiUrl(), rememberedLocalAuth(), installSession, rememberedLocalPublicConfig());
 }
 
 /** The last local address ever used (remembered across a switch to cloud). */
 function rememberedLocalAppUrl(): string {
   return parsePersistedTarget(readPersistedTargetRaw())?.appUrl ?? DEFAULT_LOCAL_APP_URL;
+}
+
+function rememberedLocalPublicConfig(): DesktopPublicConfig | null {
+  return parsePersistedTarget(readPersistedTargetRaw())?.publicConfig ?? null;
 }
 
 /**
@@ -1768,7 +1777,7 @@ async function loadApp(
       // The bundled renderer loads from file://, so it has no env: hand it the API
       // base (and the capture/record intent) via the query string. The client reads
       // `?api=` to know which backend to call with its Bearer token.
-      const query: Record<string, string> = { api: cfg.apiUrl };
+      const query: Record<string, string> = { api: cfg.apiUrl, publicConfig: JSON.stringify(cfg.publicConfig) };
       if (opts.capture) query.capture = "1";
       if (opts.record) query.record = "1";
       if (hasUseBrianPrompt) query.useBrian = "1";
@@ -1986,8 +1995,8 @@ async function selectDeploymentAccount(key: string): Promise<SwitchResult> {
       }
     };
     const ok = saved.target.kind === "cloud"
-      ? await activateTarget("cloud", rememberedLocalAppUrl(), rememberedLocalApiUrl(), rememberedLocalAuth(), installSession)
-      : await activateTarget("local", saved.target.appUrl, saved.target.apiUrl, saved.target.auth, installSession);
+      ? await activateTarget("cloud", rememberedLocalAppUrl(), rememberedLocalApiUrl(), rememberedLocalAuth(), installSession, rememberedLocalPublicConfig())
+      : await activateTarget("local", saved.target.appUrl, saved.target.apiUrl, saved.target.auth, installSession, saved.target.publicConfig);
     return ok ? { ok: true } : { ok: false, error: "switch" };
   } finally { selectingAccount = false; }
 }
@@ -3790,6 +3799,7 @@ if (!gotLock) {
         normalized.appUrl,
         declaredApiUrl,
         declaredConfig?.auth ?? "local-session",
+        declaredConfig?.publicConfig,
       ) ?? normalized;
       pendingLocalGatewayUrl = target.appUrl;
       const validation = await validateLocalTarget(target.appUrl, target.apiUrl).finally(() => {
@@ -3807,8 +3817,9 @@ if (!gotLock) {
         target.appUrl,
         resolvedDeclaredApiUrl,
         validation.value.auth,
+        validation.value.publicConfig,
       ) ?? target;
-      const ok = await activateTarget("local", resolvedTarget.appUrl, resolvedDeclaredApiUrl, resolvedTarget.auth);
+      const ok = await activateTarget("local", resolvedTarget.appUrl, resolvedDeclaredApiUrl, resolvedTarget.auth, undefined, validation.value.publicConfig);
       return ok ? { ok: true, url: resolvedTarget.appUrl } : { ok: false, error: "switch", url: resolvedTarget.appUrl };
     } finally { connectingDeployment = false; }
   });

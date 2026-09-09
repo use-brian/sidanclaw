@@ -30,6 +30,7 @@
  * docs/architecture/engine/provider-abstraction.md.
  */
 import { providerAliasMap, providerModelIds, type ModelProvider } from '@use-brian/shared/model-registry'
+import { systemContextParts } from './system-context.js'
 import type {
   ContentBlock,
   LLMProvider,
@@ -291,6 +292,7 @@ async function* streamCompat(
   systemPrompt: string,
   messages: Message[],
   options: {
+    runtimeSystemContext?: string
     tools?: ToolDefinition[]
     maxTokens?: number
     temperature?: number
@@ -301,9 +303,12 @@ async function* streamCompat(
   },
   // Set by the fail-open retry below; suppresses the schema on the second try.
   omitSchema = false,
+  combineSystemMessages = false,
 ): AsyncGenerator<StreamChunk> {
+  const systemParts = systemContextParts({ systemPrompt, runtimeSystemContext: options.runtimeSystemContext })
   const ccMessages: CCMessage[] = [
-    ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
+    ...(combineSystemMessages && systemParts.length > 1 ? [systemParts.join('\n\n')] : systemParts)
+      .map((content) => ({ role: 'system' as const, content })),
     ...toCCMessages(messages, cfg.supportsVision),
   ]
   const tools = toCCTools(options.tools)
@@ -349,20 +354,29 @@ async function* streamCompat(
     body: JSON.stringify(body),
     signal: options.signal,
   })
+  const errorDetail = !res.ok ? (await res.text().catch(() => '')).slice(0, 500) : ''
+  // A few compatible endpoints require one system message. Preserve both
+  // sections and their authority; retry only an explicit shape rejection,
+  // before any output, and never repeat this compatibility retry.
+  if (res.status === 400 && systemParts.length > 1 && !combineSystemMessages &&
+      /only (?:one|a single) system message|multiple system messages (?:are )?(?:not supported|not allowed)|system message must be (?:at the beginning|the first)/i.test(errorDetail)) {
+    yield* streamCompat(cfg, wireModel, recordedModel, systemPrompt, messages, options, omitSchema, true)
+    return
+  }
   // Fail open on a rejected schema. "OpenAI-compatible" is a broad church and
   // json_schema is one of the first things a smaller endpoint drops; degrading
   // to json_object costs output quality, whereas propagating the 400 would
   // break every extraction call on that deployment.
   if (res.status === 400 && options.responseSchema && !omitSchema) {
-    const detail = (await res.text().catch(() => '')).slice(0, 300)
+    const detail = errorDetail.slice(0, 300)
     console.warn(
       `[openai-compat:${cfg.label}] endpoint rejected response_format json_schema; retrying with json_object${detail ? `: ${detail}` : ''}`,
     )
-    yield* streamCompat(cfg, wireModel, recordedModel, systemPrompt, messages, options, true)
+    yield* streamCompat(cfg, wireModel, recordedModel, systemPrompt, messages, options, true, combineSystemMessages)
     return
   }
   if (!res.ok || !res.body) {
-    const detail = (await res.text().catch(() => '')).slice(0, 500)
+    const detail = errorDetail
     const suffix = cfg.includeErrorDetail && detail ? `: ${detail}` : ''
     const err = new Error(`[openai-compat:${cfg.label}] HTTP ${res.status}${suffix}`, {
       cause: detail || undefined,
@@ -526,6 +540,7 @@ export function createOpenAICompatProvider(options: OpenAICompatProviderOptions)
 
     stream(request: ProviderRequest): AsyncIterable<StreamChunk> {
       return streamCompat(cfg, resolveWireModel(request.model), resolveRecordedModel(request.model), request.systemPrompt, request.messages, {
+        runtimeSystemContext: request.runtimeSystemContext,
         tools: request.tools,
         maxTokens: request.maxTokens,
         temperature: request.temperature,
@@ -547,6 +562,7 @@ export function createOpenAICompatProvider(options: OpenAICompatProviderOptions)
         send: (messages: Message[], sendOpts?: SendOptions): AsyncIterable<StreamChunk> => {
           const attempt: Message[] = [...history, ...messages]
           const inner = streamCompat(cfg, resolveWireModel(sessionOpts.model), resolveRecordedModel(sessionOpts.model), sessionOpts.systemPrompt, attempt, {
+            runtimeSystemContext: sessionOpts.runtimeSystemContext,
             tools: sessionOpts.tools,
             maxTokens: sessionOpts.maxTokens,
             temperature: sessionOpts.temperature,

@@ -1,5 +1,6 @@
 "use client";
 
+
 /**
  * Studio → Brand — the workspace brand record's management surface.
  *

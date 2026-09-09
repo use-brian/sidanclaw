@@ -171,30 +171,32 @@ async function startToolTurn(
 }
 
 describe('[COMP:providers/codex-app-server] Codex app-server provider bridge', () => {
-  it('starts an isolated ephemeral thread, injects history, and normalizes streaming output', async () => {
+  it.each([false, true])('starts an isolated thread with both system sections (stateless=%s)', async (stateless) => {
     const harness = createHarness()
     const provider = createCodexAppServerProvider({
       transport: { rpc: harness.peer, cwd: '/tmp/brian-codex-test' },
       models: [MODEL],
     })
-    const session = provider.createSession({
+    const options = {
       model: MODEL,
       systemPrompt: 'You are Brian.',
       tools: [ECHO_TOOL],
-      thinkingLevel: 'high',
-    })
-    const chunks = collect(
-      session.send([
-        { role: 'system', content: 'Prior policy.' },
-        { role: 'assistant', content: 'Earlier answer.' },
-        { role: 'user', content: 'Current question.' },
-      ]),
-    )
+      thinkingLevel: 'high' as const,
+      runtimeSystemContext: 'Current time: 12:00',
+    }
+    const messages: Message[] = [
+      { role: 'system', content: 'Prior policy.' },
+      { role: 'assistant', content: 'Earlier answer.' },
+      { role: 'user', content: 'Current question.' },
+    ]
+    const chunks = collect(stateless
+      ? provider.stream({ ...options, messages })
+      : provider.createSession(options).send(messages))
 
     const threadStart = await waitForMethod(harness, 'thread/start')
     expect(threadStart.params).toMatchObject({
       model: MODEL,
-      baseInstructions: 'You are Brian.',
+      baseInstructions: 'You are Brian.\n\n<runtime_context>\nCurrent time: 12:00\n</runtime_context>',
       developerInstructions: null,
       cwd: '/tmp/brian-codex-test',
       ephemeral: true,
@@ -255,6 +257,11 @@ describe('[COMP:providers/codex-app-server] Codex app-server provider bridge', (
     })
     usage(harness, 'thread-1', 'turn-1')
     complete(harness, 'thread-1', 'turn-1')
+
+    if (stateless) {
+      const unsubscribe = await waitForMethod(harness, 'thread/unsubscribe')
+      respond(harness, unsubscribe, {})
+    }
 
     await expect(chunks).resolves.toEqual([
       { type: 'message_start', model: MODEL },

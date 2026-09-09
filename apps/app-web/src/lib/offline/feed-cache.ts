@@ -1,11 +1,12 @@
 /** Viewer-scoped Feed reads. [COMP:app-web/feed-offline] */
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import { authFetch } from "@/lib/auth-fetch";
 import { getUserInfo } from "@/lib/user";
 import { desktopBridge, isDesktopAuth } from "@/lib/desktop-auth-source";
 import { loadSurfaceCache, readSurfaceCache } from "@/lib/surface-cache";
 import { idbDelete, idbGet, idbSet } from "./idb";
 
-export const FEED_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+export const FEED_API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 export const feedOwner = () => getUserInfo()?.id ?? "";
 export class FeedReadError extends Error {
   constructor(public status: number) { super(`Feed API ${status}`); }

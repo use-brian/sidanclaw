@@ -12,7 +12,7 @@ describe("[COMP:app/outpost-auth] runtime configuration", () => {
     })).toMatchObject({ cookieDomain: ".brian.example.com" });
   });
 
-  it("fails production without an isolated cookie domain", () => {
+  it("fails production without a cookie domain", () => {
     expect(() => resolvePortalConfig({
       NODE_ENV: "production",
       AUTH_PORTAL_URL: "https://auth.example.com",
@@ -29,19 +29,50 @@ describe("[COMP:app/outpost-auth] runtime configuration", () => {
     })).toThrow(/inside COOKIE_DOMAIN/);
   });
 
-  it("rejects public and overly broad cookie suffixes", () => {
+  it.each(["com", "co.uk", "github.io"])("rejects public cookie suffix %s", (suffix) => {
     expect(() => resolvePortalConfig({
       NODE_ENV: "production",
-      AUTH_PORTAL_URL: "https://auth.com",
-      AUTHED_APP_URL: "https://app.com",
-      COOKIE_DOMAIN: ".com",
+      AUTH_PORTAL_URL: `https://auth.${suffix}`,
+      AUTHED_APP_URL: `https://app.${suffix}`,
+      COOKIE_DOMAIN: `.${suffix}`,
     })).toThrow(/COOKIE_DOMAIN/);
+  });
+
+  it.each(["example.com", "example.co.uk"])("accepts single-level hosts under %s", (domain) => {
+    expect(resolvePortalConfig({
+      NODE_ENV: "production",
+      AUTH_PORTAL_URL: `https://auth.${domain}`,
+      AUTHED_APP_URL: `https://app.${domain}`,
+      COOKIE_DOMAIN: `.${domain}`,
+    })).toMatchObject({ cookieDomain: `.${domain}` });
+  });
+
+  it.each(["app.notexample.com", "app.example.com.attacker.test"])("rejects misleading host %s", (host) => {
+    expect(() => resolvePortalConfig({
+      NODE_ENV: "production",
+      AUTH_PORTAL_URL: "https://auth.example.com",
+      AUTHED_APP_URL: `https://${host}`,
+      COOKIE_DOMAIN: ".example.com",
+    })).toThrow(/inside COOKIE_DOMAIN/);
+  });
+
+  it.each(["example.com", ".-example.com", ".127.0.0.1"])("rejects invalid cookie domain %s", (domain) => {
+    expect(() => resolvePortalConfig({
+      NODE_ENV: "production",
+      AUTH_PORTAL_URL: "https://auth.example.com",
+      AUTHED_APP_URL: "https://app.example.com",
+      COOKIE_DOMAIN: domain,
+    })).toThrow(/COOKIE_DOMAIN/);
+  });
+
+  it.each(["AUTH_PORTAL_URL", "AUTHED_APP_URL"])("requires HTTPS for %s in production", (name) => {
     expect(() => resolvePortalConfig({
       NODE_ENV: "production",
       AUTH_PORTAL_URL: "https://auth.example.com",
       AUTHED_APP_URL: "https://app.example.com",
       COOKIE_DOMAIN: ".example.com",
-    })).toThrow(/COOKIE_DOMAIN/);
+      [name]: "http://app.example.com",
+    })).toThrow(/https/);
   });
 
   it("defaults to email-only and rejects disabling every provider", () => {

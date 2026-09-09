@@ -46,9 +46,25 @@ export function stableExternalIdentityFromCrmRef(
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null
   const ref = input as Record<string, unknown>
   const provider = typeof ref.provider === 'string' ? ref.provider.trim().toLowerCase() : ''
-  if (provider !== 'slack') return null
-  const providerInstanceKey = typeof ref.team_id === 'string' ? ref.team_id.trim() : ''
-  const subjectId = typeof ref.id === 'string' ? ref.id.trim() : ''
+  const str = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
+  let providerInstanceKey = ''
+  let subjectId = ''
+  switch (provider) {
+    case 'slack':
+      providerInstanceKey = str(ref.team_id)
+      subjectId = str(ref.id)
+      break
+    case 'whatsapp':
+      // The subject is the account's JID or privacy id, which the device's own
+      // database supplies — not a name an extractor read out of a transcript.
+      // The namespace is the archive connector instance: the same JID under a
+      // different linked account is a different person's address book.
+      providerInstanceKey = str(ref.instance_id)
+      subjectId = str(ref.id)
+      break
+    default:
+      return null
+  }
   const parsed = stableExternalIdentitySchema.safeParse({ provider, providerInstanceKey, subjectId })
   return parsed.success ? parsed.data : null
 }

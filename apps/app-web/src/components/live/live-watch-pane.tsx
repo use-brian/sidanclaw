@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Live watch pane — token-by-token body of one focused session. The parent
  * Live surface owns the shared top-bar title and Open-in-chat action.
@@ -69,7 +71,7 @@ import { ChatConfirmationCard } from "@/components/chrome/chat-confirmation-card
 import { PendingQuestionPanel } from "@/components/chrome/pending-question-panel";
 import { QueuedInputs } from "@/components/ui/queued-inputs";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /** How much settled history the pane shows above the live turn. */
 const HISTORY_TAIL = 8;

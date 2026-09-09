@@ -126,6 +126,8 @@ export type SessionOptions = {
    */
   allowProviderFallback?: boolean
   systemPrompt: string
+  /** Per-turn system context, separate from the reusable systemPrompt prefix. */
+  runtimeSystemContext?: string
   tools?: ToolDefinition[]
   maxTokens?: number
   /** Request-scoped context window for models that are not in the registry. */
@@ -168,6 +170,8 @@ export type ProviderRequest = {
   allowProviderFallback?: boolean
   messages: Message[]
   systemPrompt: string
+  /** Per-turn system context. Never map this field to a user message. */
+  runtimeSystemContext?: string
   tools?: ToolDefinition[]
   maxTokens?: number
   /** Request-scoped context window for models that are not in the registry. */

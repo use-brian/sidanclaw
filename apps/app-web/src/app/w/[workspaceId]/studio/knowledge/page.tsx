@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Studio → Knowledge — the master-detail knowledge-base surface (app-web).
  *
@@ -51,7 +53,7 @@ import {
   type Sensitivity,
 } from "./use-knowledge-data";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /** Rail selection: a source id, or the manual-entries pseudo-row. */
 type Selection = { kind: "source"; id: string } | { kind: "manual" };

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DeploymentAccounts, TargetOperations, deploymentAccountKey, deploymentKey, deploymentKind, type AccountTarget } from "../deployment-accounts.js";
+import { parseDesktopConfig } from "../target-store.js";
 import type { StoredTokens } from "../desktop-token-store.js";
 
 const cloud: AccountTarget = { kind: "cloud", appUrl: "https://app.usebrian.ai", apiUrl: "https://api.usebrian.ai", auth: "pkce" };
@@ -24,6 +25,16 @@ describe("[COMP:app-desktop/deployment-accounts] saved sessions", () => {
     expect(JSON.stringify(rows)).not.toContain("secret");
     expect(bytes().toString()).not.toContain("cloud-secret");
     expect(store.current(cloud)?.refreshToken).toBe("cloud-secret");
+  });
+  it("retains each saved deployment's public runtime configuration", () => {
+    const { store } = setup();
+    const publicConfig = parseDesktopConfig({
+      apiUrl: local.apiUrl, edition: "outpost", docSyncUrl: "wss://sync.example.com",
+    })!.publicConfig;
+    const target = { ...local, publicConfig };
+    expect(store.put(target, tokens("one"))).toBe(true);
+    expect(store.find(deploymentAccountKey({ target, tokens: tokens("one") }))?.target.publicConfig).toEqual(publicConfig);
+    expect(deploymentKey(target)).toBe(deploymentKey(local));
   });
   it("keeps other accounts through rotation and active-account logout", () => {
     const { store } = setup();
