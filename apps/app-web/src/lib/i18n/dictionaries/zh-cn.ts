@@ -189,6 +189,33 @@ export const zhCN: Dictionary = {
       "contactClear": "清除联系人筛选",
       "manualOnly": "免费授予需使用未绑定供应商的免费计划。",
       "renewalHelp": "手动调整不能替代供应商证据，原开始日期会保留。"
+    },
+    "admin": {
+      "title": "管理",
+      "keys": "集成密钥",
+      "createKey": "创建密钥",
+      "revokeKey": "撤销密钥",
+      "rotateKey": "轮换密钥",
+      "expiry": "到期时间",
+      "label": "标签",
+      "permissions": "权限",
+      "scopeHelp": "只选择集成所需的资源。空白选择不会授予资源访问权。",
+      "allResources": "所有资源（包括未来记录）",
+      "selectedResources": "已选资源",
+      "providerKeysInput": "供应商密钥（每行一个）",
+      "workspaceScope": "此操作适用于整个工作区。",
+      "secretHelp": "请立即复制并妥善保存此密钥，之后无法再次显示。",
+      "dismissSecret": "关闭密钥",
+      "uncertainKey": "创建可能已成功。请先检查更新后的密钥列表，再开始新请求。",
+      "reviewNewKey": "检查后开始新请求",
+      "revokeOld": "创建新密钥时撤销所选的旧密钥",
+      "revoked": "已撤销",
+      "expired": "已到期",
+      "definitionIds": "提交表单定义",
+      "purposeKeys": "同意用途",
+      "planIds": "会籍计划",
+      "eventIds": "活动",
+      "providerKeys": "供应商标识符"
     }
   },
   common: {

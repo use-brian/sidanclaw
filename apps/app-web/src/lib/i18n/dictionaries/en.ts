@@ -191,6 +191,33 @@ export const en = {
       "contactClear": "Clear contact filter",
       "manualOnly": "Complimentary grants require a free plan with no provider binding.",
       "renewalHelp": "Manual adjustments cannot replace provider evidence. The original start date is retained."
+    },
+    "admin": {
+      "title": "Administration",
+      "keys": "Integration keys",
+      "createKey": "Create key",
+      "revokeKey": "Revoke key",
+      "rotateKey": "Rotate key",
+      "expiry": "Expiry",
+      "label": "Label",
+      "permissions": "Permissions",
+      "scopeHelp": "Select only the resources this integration needs. Empty selections grant no resource access.",
+      "allResources": "All resources, including future records",
+      "selectedResources": "Selected resources",
+      "providerKeysInput": "Provider keys (one per line)",
+      "workspaceScope": "This operation applies across the workspace.",
+      "secretHelp": "Copy and store this key now. It will not be shown again.",
+      "dismissSecret": "Dismiss secret",
+      "uncertainKey": "Creation may have succeeded. Review the refreshed key list before starting another request.",
+      "reviewNewKey": "New request after review",
+      "revokeOld": "Revoke the selected old key when the replacement is created",
+      "revoked": "Revoked",
+      "expired": "Expired",
+      "definitionIds": "Intake definitions",
+      "purposeKeys": "Consent purposes",
+      "planIds": "Membership plans",
+      "eventIds": "Events",
+      "providerKeys": "Provider identifiers"
     }
   },
   common: {

@@ -178,6 +178,33 @@ export const zh: Dictionary = {
       "contactClear": "清除聯絡人篩選",
       "manualOnly": "免費授予需使用未綁定供應商的免費計劃。",
       "renewalHelp": "手動調整不能取代供應商證據，原開始日期會保留。"
+    },
+    "admin": {
+      "title": "管理",
+      "keys": "整合金鑰",
+      "createKey": "建立金鑰",
+      "revokeKey": "撤銷金鑰",
+      "rotateKey": "輪換金鑰",
+      "expiry": "到期時間",
+      "label": "標籤",
+      "permissions": "權限",
+      "scopeHelp": "只選擇整合所需的資源。空白選擇不會授予資源存取權。",
+      "allResources": "所有資源（包括未來記錄）",
+      "selectedResources": "已選資源",
+      "providerKeysInput": "供應商金鑰（每行一個）",
+      "workspaceScope": "此操作適用於整個工作區。",
+      "secretHelp": "請立即複製並妥善保存此金鑰，之後無法再次顯示。",
+      "dismissSecret": "關閉密鑰",
+      "uncertainKey": "建立可能已成功。請先檢查更新後的金鑰清單，再開始新請求。",
+      "reviewNewKey": "檢查後開始新請求",
+      "revokeOld": "建立新金鑰時撤銷所選的舊金鑰",
+      "revoked": "已撤銷",
+      "expired": "已到期",
+      "definitionIds": "提交表單定義",
+      "purposeKeys": "同意用途",
+      "planIds": "會籍計劃",
+      "eventIds": "活動",
+      "providerKeys": "供應商識別碼"
     }
   },
   common: {

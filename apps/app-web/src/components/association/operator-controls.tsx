@@ -75,11 +75,12 @@ export function useAssociationIntent(workspaceId:string,operation:string,target:
     if(!/^[a-f0-9-]{36}$/i.test(current))throw new Error("Invalid request identity");
     sessionStorage.setItem(key,current);setStored({key,id:current});return current;
   }
-  async function reset() {
-    if(!await confirmDialog({title:t.manage.newRequest,description:t.manage.newRequestHelp,confirmLabel:t.manage.newRequest,cancelLabel:t.cancel}))return;
-    try {sessionStorage.removeItem(key);setStored({key,id:""});}catch{/* The retained identity remains authoritative. */}
+  async function reset(copy?:{title:string;description:string}) {
+    const title=copy?.title ?? t.manage.newRequest;
+    if(!await confirmDialog({title,description:copy?.description ?? t.manage.newRequestHelp,confirmLabel:title,cancelLabel:t.cancel}))return false;
+    try {sessionStorage.removeItem(key);setStored({key,id:""});return true;}catch{return false;}
   }
-  return {identity,reference:stored?.key===key?stored.id:"",reset};
+  return {identity,reference:stored?.key===key?stored.id:"",hasReference:()=>sessionStorage.getItem(key)!==null,reset};
 }
 export function AssociationContactPicker({workspaceId,onSelect}:{workspaceId:string;onSelect:(row:CrmLookupRow)=>void}) {
   const t=useT().associationPage.manage;

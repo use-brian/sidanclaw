@@ -178,6 +178,33 @@ export const ja: Dictionary = {
       "contactClear": "連絡先の絞り込みを解除",
       "manualOnly": "無償付与には、プロバイダーと紐付いていない無料プランが必要です。",
       "renewalHelp": "手動変更はプロバイダーの証拠を代替できません。元の開始日時を保持します。"
+    },
+    "admin": {
+      "title": "管理",
+      "keys": "連携キー",
+      "createKey": "キーを作成",
+      "revokeKey": "キーを無効化",
+      "rotateKey": "キーを更新",
+      "expiry": "有効期限",
+      "label": "ラベル",
+      "permissions": "権限",
+      "scopeHelp": "この連携に必要なリソースのみ選択してください。未選択ではアクセス権を付与しません。",
+      "allResources": "今後のレコードを含む全リソース",
+      "selectedResources": "選択したリソース",
+      "providerKeysInput": "プロバイダーキー（1行に1つ）",
+      "workspaceScope": "この操作はワークスペース全体が対象です。",
+      "secretHelp": "今すぐこのキーをコピーして保管してください。再表示はできません。",
+      "dismissSecret": "シークレットを閉じる",
+      "uncertainKey": "作成済みの可能性があります。更新されたキー一覧を確認してから新しいリクエストを開始してください。",
+      "reviewNewKey": "確認後に新しいリクエスト",
+      "revokeOld": "新しいキーの作成時に選択した旧キーを無効化",
+      "revoked": "無効化済み",
+      "expired": "期限切れ",
+      "definitionIds": "受付フォーム定義",
+      "purposeKeys": "同意目的",
+      "planIds": "会員プラン",
+      "eventIds": "イベント",
+      "providerKeys": "プロバイダー識別子"
     }
   },
   common: {
