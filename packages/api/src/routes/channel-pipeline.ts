@@ -1,3 +1,4 @@
+import { renderSystemContext } from '@use-brian/core'
 // REBRAND-CUTOVER: this file contains sidan.ai runtime values that must flip to usebrian.ai when DNS + Vercel domains + OAuth consoles + webhooks are cut over. Grep REBRAND-CUTOVER.
 /**
  * Shared channel message processing pipeline.
@@ -1690,7 +1691,7 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
     groupChatContext,
   })
   // Everything appended below remains in the trusted system channel.
-  let fullSystemPrompt = splitPrompt.stablePrompt
+  let systemAddenda = ''
   const privateRuntimeContextParts = splitPrompt.privateRuntimeContext
     ? [splitPrompt.privateRuntimeContext]
     : []
@@ -1769,11 +1770,11 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
   // to Telegram/WhatsApp is the common "forward this for me" case — yet the
   // block was web-only until 2026-08-06. Tool-agnostic and capability-gated
   // (returns '' without `files`), so appending is unconditional.
-  fullSystemPrompt += buildUploadPolicyBlock(activeCapabilities.has('files'))
+  systemAddenda += buildUploadPolicyBlock(activeCapabilities.has('files'))
 
   // ── Channel formatting hints ──
   if (channelType === 'whatsapp') {
-    fullSystemPrompt += `\n\n# Formatting\nYou're on WhatsApp. Supported: *bold*, _italic_, ~strikethrough~, \`code\`, \`\`\`code blocks\`\`\`, > quotes, and lists. NOT supported: tables, headers (#), links ([text](url)). For comparisons, use bullet lists or numbered lists instead of tables.`
+    systemAddenda += `\n\n# Formatting\nYou're on WhatsApp. Supported: *bold*, _italic_, ~strikethrough~, \`code\`, \`\`\`code blocks\`\`\`, > quotes, and lists. NOT supported: tables, headers (#), links ([text](url)). For comparisons, use bullet lists or numbered lists instead of tables.`
   }
 
   // ── Tools: capability filter + memory ──
@@ -1984,18 +1985,18 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
       workspaceSkillFilesStore: params.workspaceSkillFilesStore,
       invocationBuffer: params.invocationBuffer,
     })
-    fullSystemPrompt += skillResult.promptFragment
+    systemAddenda += skillResult.promptFragment
     if (slashCommand && skillResult.enforcedPromptFragment) {
-      fullSystemPrompt += skillResult.enforcedPromptFragment
+      systemAddenda += skillResult.enforcedPromptFragment
       privateRuntimeContextParts.push(buildSlashCommandBlock(slashCommand))
     }
   }
   if (preparedCommand?.kind === 'workflow' && allTools.has('runWorkflow')) {
     privateRuntimeContextParts.push(buildWorkflowSlashCommandBlock(preparedCommand))
   }
-  fullSystemPrompt += buildUnavailableCapabilitiesPrompt(unavailableCapabilities, allTools)
-  fullSystemPrompt += buildBrowserEscalationPrompt(allTools)
-  fullSystemPrompt += buildEmailDraftAnchorPrompt(allTools)
+  systemAddenda += buildUnavailableCapabilitiesPrompt(unavailableCapabilities, allTools)
+  systemAddenda += buildBrowserEscalationPrompt(allTools)
+  systemAddenda += buildEmailDraftAnchorPrompt(allTools)
 
   // ── Pre-flight-confirm reply correlation (channel-recording-preflight-confirm §6) ──
   // If a big recording in THIS conversation is awaiting the user's confirmation,
@@ -2022,7 +2023,7 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
             : ' No workspace default blueprint is set.'
           return `- recordingId: ${p.recordingId}${labelPart} — about ${mins} min, costs ${p.surchargeCredits} ${creditWord} to process.${defaultPart}`
         })
-        fullSystemPrompt +=
+        systemAddenda +=
           `\n\n# Recording awaiting confirmation\n` +
           `The user dropped ${pendingRecordings.length === 1 ? 'a recording' : 'recordings'} that ${pendingRecordings.length === 1 ? 'is' : 'are'} held until they confirm processing (it would incur a credit surcharge). ` +
           `When the user replies about it, call \`confirmRecordingProcessing\` with the matching recordingId and their choice: a blueprint id to shape a brief, "ingest-only" to just file the transcript, or "cancel" to skip it.\n` +
@@ -2212,7 +2213,7 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
       console.error(`[${channelType}] pre-flight failed, continuing without:`, err)
     }
   }
-  let systemPromptWithPreflight = fullSystemPrompt
+  let runtimeSystemContext = systemAddenda
   if (preflightContext) {
     privateRuntimeContextParts.push(
       buildPreflightPrompt('', preflightContext).replace(/^\n+/, ''),
@@ -2242,7 +2243,7 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
     privateRuntimeContextParts.filter((s) => s.trim().length > 0).join('\n\n'),
   )
   if (privateRuntimeBlock) {
-    systemPromptWithPreflight = `${systemPromptWithPreflight}\n\n${privateRuntimeBlock}`
+    runtimeSystemContext = `${runtimeSystemContext}\n\n${privateRuntimeBlock}`
   }
 
   // ── Reply evidence (grounding gate) ──
@@ -2254,7 +2255,7 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
   // Accumulate-only here (no gatedTools): the identifier write-gate stays a
   // workflow-lane behavior.
   const replyEvidence = new EvidenceAccumulator()
-  replyEvidence.note(systemPromptWithPreflight)
+  replyEvidence.note(renderSystemContext({ systemPrompt: splitPrompt.stablePrompt, runtimeSystemContext }))
   // The replied-to quote is represented on the user turn, so seed that
   // visible material explicitly as evidence too.
   replyEvidence.note(userVisibleContext)
@@ -2267,8 +2268,8 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
   if (envelopedMessages) {
     messages = envelopedMessages
   } else if (userVisibleContext) {
-    systemPromptWithPreflight =
-      `${systemPromptWithPreflight}\n\n${formatUserVisibleContext(userVisibleContext)}`
+    runtimeSystemContext =
+      `${runtimeSystemContext}\n\n${formatUserVisibleContext(userVisibleContext)}`
   }
 
   // Claim ledger stash — persisted after flushBufferedTurns (which creates
@@ -2297,7 +2298,8 @@ export async function processChannelMessage(params: ChannelPipelineParams): Prom
       provider: turnProvider, model,
       maxTokens: customLlmRuntime?.maxTokens,
       inputTokenLimit: customLlmRuntime?.inputTokenLimit,
-      systemPrompt: systemPromptWithPreflight,
+      systemPrompt: splitPrompt.stablePrompt,
+      runtimeSystemContext,
       messages, tools: scopedTools,
       context: {
         userId, assistantId: assistant.id, sessionId: session.id,

@@ -26,6 +26,7 @@ describeIf('[COMP:providers/openai-compat] DashScope intl (integration)', () => 
       model: MODEL,
       messages: [{ role: 'user', content: 'Say "hello world" and nothing else.' }],
       systemPrompt: 'You are a test assistant. Be extremely concise.',
+      runtimeSystemContext: 'This is a synthetic system-context compatibility check.',
       maxTokens: 64,
     })
 

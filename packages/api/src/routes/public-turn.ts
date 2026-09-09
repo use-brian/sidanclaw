@@ -1,3 +1,4 @@
+import { renderSystemContext } from '@use-brian/core'
 /**
  * Shared public turn pipeline — the body of the public API's message
  * handler, extracted so two front doors can drive it:
@@ -1116,6 +1117,7 @@ export async function executePublicTurn(
   const playbookRules = decisionPlaybookContext.playbookRules
 
   let fullSystemPrompt: string
+  let runtimeSystemContext = ''
   // Representations of content the visitor can actually see. Empty on this
   // surface today (no reply quotes, no open page), but the three-way split
   // contract is wired rather than assumed: an authority collapse is not
@@ -1168,9 +1170,8 @@ export async function executePublicTurn(
       split.privateRuntimeContext,
       formatActiveWorkspaceContext(turnScope),
     ].filter(Boolean).join('\n\n'))
-    fullSystemPrompt = privateBlock
-      ? `${split.stablePrompt}\n\n${privateBlock}`
-      : split.stablePrompt
+    fullSystemPrompt = split.stablePrompt
+    runtimeSystemContext = privateBlock
     userVisibleContext = split.userVisibleContext
   } else {
     // Same Layer 2 the shared builder renders: the charter block (with
@@ -1186,15 +1187,14 @@ export async function executePublicTurn(
     // Append the unavailable-capabilities block so the model doesn't
     // burn turns hunting for tools that aren't connected. Same pattern
     // as chat.ts (line 1124).
-    const promptWithCapabilities =
-      promptWithMemory + buildUnavailableCapabilitiesPrompt(mcpInjection.unavailable, baseTools)
+    const capabilityAddendum = buildUnavailableCapabilitiesPrompt(mcpInjection.unavailable, baseTools)
     const identityBlock = formatPrivateRuntimeContext([
       endUserContext,
       formatActiveWorkspaceContext(turnScope),
     ].filter(Boolean).join('\n\n'))
-    fullSystemPrompt = identityBlock
-      ? `${promptWithCapabilities}\n\n${identityBlock}`
-      : promptWithCapabilities
+    fullSystemPrompt = promptWithMemory
+    runtimeSystemContext = [capabilityAddendum, identityBlock]
+      .filter(Boolean).join('\n\n')
   }
 
   // ── 10. Load history + proactive compaction ──────────────
@@ -1225,7 +1225,7 @@ export async function executePublicTurn(
     inputTokenLimit: backgroundLlmRuntime?.inputTokenLimit,
     modelTier: 'standard',
     providerKeySource: backgroundLlmRuntime?.providerKeySource ?? 'platform',
-    systemPrompt: fullSystemPrompt,
+    systemPrompt: renderSystemContext({ systemPrompt: fullSystemPrompt, runtimeSystemContext }),
     assistantId: assistant.id,
     userId: user.id,
     ownerId,
@@ -1274,7 +1274,7 @@ export async function executePublicTurn(
     if (enveloped) {
       messages = enveloped
     } else {
-      fullSystemPrompt = `${fullSystemPrompt}\n\n${formatUserVisibleContext(userVisibleContext)}`
+      runtimeSystemContext = `${runtimeSystemContext}\n\n${formatUserVisibleContext(userVisibleContext)}`
     }
   }
 
@@ -1312,6 +1312,7 @@ export async function executePublicTurn(
       maxTokens: customLlmRuntime?.maxTokens,
       inputTokenLimit: customLlmRuntime?.inputTokenLimit,
       systemPrompt: fullSystemPrompt,
+      runtimeSystemContext,
       messages,
       tools: scopedTools,
       context: {

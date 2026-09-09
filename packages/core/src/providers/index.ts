@@ -1,5 +1,7 @@
 export type { StreamChunk, StreamFn, LLMProvider, ProviderRequest, ProviderSession, SessionOptions, Message, ContentBlock, ToolDefinition, ToolParameter, AssistantResponse, TokenUsage, StopReason } from './types.js'
 export { createGeminiProvider } from './gemini.js'
+export { systemContextParts, renderSystemContext } from './system-context.js'
+export type { SystemContext } from './system-context.js'
 export { createAnthropicProvider, classifyAnthropicError } from './anthropic.js'
 export type { AnthropicProviderOptions } from './anthropic.js'
 export { wrapFallback, extractStatus } from './wrap-fallback.js'
