@@ -27,3 +27,16 @@ describe("[COMP:app-web/association] Credential catalog and member API",()=>{
     for(const call of [api.definitions,api.purposes,api.plans,api.events])expect(call).toHaveBeenCalledExactlyOnceWith("w");
   });
 });
+
+describe("[COMP:app-web/association] Managed-mailbox member API",()=>{
+  it("lists only concrete supported mailbox instances without copying credential material",async()=>{
+    const {listCrmMailboxes}=await import("@/lib/api/crm-administration");
+    api.fetch.mockResolvedValue(response({connectors:[{id:"gmail",name:"Mail",connectorInstanceId:"gmail-one",connectedEmail:"mail@example.com",secret:"never-copy"},{id:"imap",name:"Second",connectorInstanceId:"imap-one"},{id:"agentmail",name:"Agent",connectorInstanceId:"agent-one"},{id:"gmail",name:"Placeholder"},{id:"gdrive",name:"Drive",connectorInstanceId:"drive-one"}]}));
+    expect(await listCrmMailboxes("w")).toEqual([{id:"gmail-one",provider:"gmail",label:"mail@example.com"},{id:"imap-one",provider:"imap",label:"Second"},{id:"agent-one",provider:"agentmail",label:"Agent"}]);
+  });
+  it("keeps mailbox policy and credential binding versions independent",async()=>{
+    const {getCrmMailboxPolicy,saveCrmMailboxPolicy,getCrmMailboxGrant,saveCrmMailboxGrant}=await import("@/lib/api/crm-administration");api.fetch.mockImplementation(async()=>response({}));
+    await getCrmMailboxPolicy("w","mailbox");await saveCrmMailboxPolicy("w","mailbox",{expectedVersion:4,confirmed:true,providerKey:"outreach",managed:true,purposeKeys:["updates"],templatePurposes:{}});await getCrmMailboxGrant("w","mailbox","key");await saveCrmMailboxGrant("w","mailbox","key",{expectedVersion:2,confirmed:true,enabled:false});
+    expect(api.fetch.mock.calls.map(c=>new URL(c[0]).pathname)).toEqual(["/api/crm/w/operations/mailbox-policies/mailbox","/api/crm/w/operations/mailbox-policies/mailbox","/api/crm/w/operations/mailbox-policies/mailbox/integration-grants/key","/api/crm/w/operations/mailbox-policies/mailbox/integration-grants/key"]);expect(JSON.parse(api.fetch.mock.calls[1][1].body).expectedVersion).toBe(4);expect(JSON.parse(api.fetch.mock.calls[3][1].body)).toEqual({expectedVersion:2,confirmed:true,enabled:false});
+  });
+});

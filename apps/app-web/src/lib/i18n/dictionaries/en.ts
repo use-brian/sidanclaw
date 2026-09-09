@@ -217,7 +217,24 @@ export const en = {
       "purposeKeys": "Consent purposes",
       "planIds": "Membership plans",
       "eventIds": "Events",
-      "providerKeys": "Provider identifiers"
+      "providerKeys": "Provider identifiers",
+      "mailboxes": "Managed mailboxes",
+      "mailboxId": "Mailbox instance ID",
+      "loadMailbox": "Load mailbox",
+      "providerKey": "Provider key",
+      "providerKeyHelp": "Choose the stable provider identifier used by this integration. It cannot change after the first save.",
+      "managed": "Enforce CRM sending policy",
+      "purposes": "Allowed purposes",
+      "templates": "Template purpose bindings",
+      "templateKey": "Template key",
+      "addTemplate": "Add template",
+      "removeTemplate": "Remove template",
+      "mailboxGrant": "Integration mailbox access",
+      "allowMailbox": "Allow this integration to use this mailbox",
+      "bindingHelp": "This binding is separate from CRM operation grants. Both are required for dispatch.",
+      "readVersion": "Reviewed version",
+      "unconfigured": "Unconfigured",
+      "reviewPolicy": "Review the current policy before editing."
     }
   },
   common: {

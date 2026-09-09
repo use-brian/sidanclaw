@@ -204,7 +204,24 @@ export const zh: Dictionary = {
       "purposeKeys": "同意用途",
       "planIds": "會籍計劃",
       "eventIds": "活動",
-      "providerKeys": "供應商識別碼"
+      "providerKeys": "供應商識別碼",
+      "mailboxes": "受管理的郵箱",
+      "mailboxId": "郵箱執行個體 ID",
+      "loadMailbox": "載入郵箱",
+      "providerKey": "供應商金鑰",
+      "providerKeyHelp": "指定此整合使用的固定供應商識別碼。首次儲存後不可更改。",
+      "managed": "強制執行 CRM 傳送政策",
+      "purposes": "允許的用途",
+      "templates": "範本用途綁定",
+      "templateKey": "範本金鑰",
+      "addTemplate": "新增範本",
+      "removeTemplate": "移除範本",
+      "mailboxGrant": "整合郵箱存取",
+      "allowMailbox": "允許此整合使用此郵箱",
+      "bindingHelp": "此綁定與 CRM 操作權限分開管理，傳送時必須同時具備兩者。",
+      "readVersion": "已檢視版本",
+      "unconfigured": "未設定",
+      "reviewPolicy": "編輯前請檢視目前政策。"
     }
   },
   common: {

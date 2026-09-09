@@ -204,7 +204,24 @@ export const ja: Dictionary = {
       "purposeKeys": "同意目的",
       "planIds": "会員プラン",
       "eventIds": "イベント",
-      "providerKeys": "プロバイダー識別子"
+      "providerKeys": "プロバイダー識別子",
+      "mailboxes": "管理対象メールボックス",
+      "mailboxId": "メールボックスのインスタンスID",
+      "loadMailbox": "メールボックスを読み込む",
+      "providerKey": "プロバイダーキー",
+      "providerKeyHelp": "この連携で使う固定のプロバイダー識別子を指定してください。初回保存後は変更できません。",
+      "managed": "CRM送信ポリシーを適用",
+      "purposes": "許可する目的",
+      "templates": "テンプレートと目的の紐付け",
+      "templateKey": "テンプレートキー",
+      "addTemplate": "テンプレートを追加",
+      "removeTemplate": "テンプレートを削除",
+      "mailboxGrant": "連携のメールボックス権限",
+      "allowMailbox": "この連携によるメールボックスの使用を許可",
+      "bindingHelp": "この紐付けはCRM操作権限とは別です。送信には両方が必要です。",
+      "readVersion": "確認したバージョン",
+      "unconfigured": "未設定",
+      "reviewPolicy": "編集前に現在のポリシーを確認してください。"
     }
   },
   common: {

@@ -215,7 +215,24 @@ export const zhCN: Dictionary = {
       "purposeKeys": "同意用途",
       "planIds": "会籍计划",
       "eventIds": "活动",
-      "providerKeys": "供应商标识符"
+      "providerKeys": "供应商标识符",
+      "mailboxes": "受管理的邮箱",
+      "mailboxId": "邮箱实例 ID",
+      "loadMailbox": "加载邮箱",
+      "providerKey": "供应商密钥",
+      "providerKeyHelp": "指定此集成使用的固定供应商标识符。首次保存后不可更改。",
+      "managed": "强制执行 CRM 发送策略",
+      "purposes": "允许的用途",
+      "templates": "模板用途绑定",
+      "templateKey": "模板密钥",
+      "addTemplate": "添加模板",
+      "removeTemplate": "移除模板",
+      "mailboxGrant": "集成邮箱访问",
+      "allowMailbox": "允许此集成使用此邮箱",
+      "bindingHelp": "此绑定与 CRM 操作权限分开管理，发送时必须同时具备两者。",
+      "readVersion": "已查看版本",
+      "unconfigured": "未配置",
+      "reviewPolicy": "编辑前请查看当前策略。"
     }
   },
   common: {

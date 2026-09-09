@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useAssociationModule } from "./module-controls";
+import { AssociationMailboxPanel } from "./mailbox-panel";
 import { AssociationCredentialsPanel } from "./credentials-panel";
 import { useT } from "@/lib/i18n/client";
 import { AssociationListState,useAssociationPage } from "./operator-controls";
@@ -27,6 +28,6 @@ export function AssociationOperationsPanel({workspaceId}:{workspaceId:string}) {
       {deliveries.data?.items.map(row=><article className="space-y-1 break-words py-3 text-sm" key={row.id}><p>{row.eventType} · {t.manage.options[row.status]}</p><p>{t.manage.attempts}: {row.attempts}</p><p className="text-muted-foreground">{new Date(row.occurredAt).toLocaleString()} · {row.id}</p></article>)}
     </div>{deliveries.data?.items.length===0?<p>{crm.eventDeliveryEmpty}</p>:null}</AssociationListState></section>
     {module.data?.canManage&&!module.error?<section className="space-y-4"><Button type="button" className="min-h-11" variant="outline" aria-expanded={administration} onClick={()=>setAdministration(value=>!value)}>{t.admin.title}</Button>
-      {administration?<AssociationCredentialsPanel workspaceId={workspaceId} disabled={false}/>:null}</section>:null}
+      {administration?<><AssociationCredentialsPanel workspaceId={workspaceId} disabled={false}/><AssociationMailboxPanel workspaceId={workspaceId} disabled={false}/></>:null}</section>:null}
   </section>;
 }
