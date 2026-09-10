@@ -135,7 +135,7 @@ function previewFor(block: Block): string {
       return truncate(`chart (${block.chartType}, ${src})${title}`)
     }
     case 'drawing':
-      return truncate(`drawing (Excalidraw, ${block.scene.elements.length} elements)`)
+      return truncate(`${block.title?.trim() ? `"${block.title.trim()}" ` : ''}drawing (Excalidraw, ${block.scene.elements.length} elements)`)
     case 'diagram': {
       const title = block.title ? ` "${block.title}"` : ''
       return truncate(`diagram (${block.syntax})${title}`)

@@ -276,7 +276,7 @@ function applyOne(
       }
       if (merged.kind === 'drawing') {
         if ('scene' in op.patch) delete merged.preview
-        drawingBlockSchema.parse(merged)
+        Object.assign(merged, drawingBlockSchema.parse(merged))
       }
 
       // Mirror the binding guard for charts: an `edit` patch touching a chart's

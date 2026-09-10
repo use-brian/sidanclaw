@@ -18,6 +18,18 @@ describe('[COMP:doc-model/drawing] canonical persistence', () => {
       sceneDigest: 'a'.repeat(64) }
     const page = pageSchema.parse({ blocks: [{ ...block, preview }] })
     expect(snapshotFromUpdate(pageToYDocUpdate(page, '')).page).toEqual(page)
+    const rename = opsSchema.parse([{ op: 'edit', blockId: block.id, patch: { title: '  Architecture sketch  ' } }])
+    const named = { ...block, preview, title: 'Architecture sketch' }
+    expect(applyOps(page, rename).page.blocks[0]).toEqual(named)
+    const renamedDoc = pageToYDoc(page, '')
+    applyOpsToYDoc(renamedDoc, [{ op: 'edit', blockId: block.id, patch: { title: '  Architecture sketch  ' } }])
+    expect(yDocToSnapshot(renamedDoc).page.blocks[0]).toEqual(named)
+    const invalidRename = { op: 'edit' as const, blockId: block.id, patch: { title: 'x'.repeat(201) } }
+    expect(() => applyOps(page, [invalidRename])).toThrow()
+    expect(applyOpsToYDoc(renamedDoc, [invalidRename]).skipped).toHaveLength(1)
+    expect(yDocToSnapshot(renamedDoc).page.blocks[0]).toEqual(named)
+    expect(snapshotFromUpdate(pageToYDocUpdate({ blocks: [named] }, '')).page.blocks[0]).toEqual(named)
+    renamedDoc.destroy()
     const scene = { ...block.scene, appState: { viewBackgroundColor: '#123456' } }
     const ops = opsSchema.parse([{ op: 'edit', blockId: block.id, patch: { scene, preview } }])
     expect(applyOps(page, ops).page.blocks[0]).toEqual({ ...block, scene })

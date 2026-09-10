@@ -4,6 +4,22 @@ export const MAX_DRAWING_BYTES = 2 * 1024 * 1024
 export const MAX_DRAWING_PREVIEW_BYTES = 1024 * 1024
 export const MAX_DRAWING_PREVIEW_DIMENSION = 1600
 
+export const drawingLibraryPreviewPathSchema = z.string().max(1024)
+  .regex(/^(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\.(?:png|jpe?g|webp|svg)$/)
+
+export const drawingLibraryIndexSchema = z.array(z.object({
+  name: z.string().trim().min(1).max(200),
+  authors: z.array(z.object({ name: z.string().trim().min(1).max(200) })).max(20),
+  source: z.string().max(1024).regex(/^(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\.excalidrawlib$/),
+  preview: drawingLibraryPreviewPathSchema.optional().catch(undefined),
+})).min(1).max(2000)
+
+export const drawingLibraryMessageSchema = z.object({
+  type: z.literal('brian:drawing-library'),
+  token: z.string().regex(/^[a-f0-9]{32}$/),
+  url: z.string().max(2048),
+}).strict()
+
 // Portable envelope checks only. Core must fully decode before model delivery.
 export const drawingPreviewSchema = z.object({
   mimeType: z.literal('image/png'),
@@ -51,7 +67,7 @@ const elementBaseSchema = z.object({
   fileId: z.string().nullable().optional(),
   link: z.null().optional(),
   groupIds: z.array(z.string()).optional(),
-  boundElementIds: z.array(z.string()).optional(),
+  boundElementIds: z.array(z.string()).nullable().optional(),
   boundElements: z.array(z.object({ id: z.string(), type: z.enum(['arrow', 'text']) }).passthrough()).nullable().optional(),
 }).passthrough()
 
@@ -125,8 +141,11 @@ export const drawingSceneSchema = z.object({
   }
 })
 
+export const drawingTitleSchema = z.string().trim().max(200).optional()
+
 export const drawingBlockSchema = z.object({
   kind: z.literal('drawing'),
+  title: drawingTitleSchema,
   id: z.string().min(1).max(128),
   scene: drawingSceneSchema,
   preview: drawingPreviewSchema.optional(),

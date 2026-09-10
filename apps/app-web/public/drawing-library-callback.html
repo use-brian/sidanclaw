@@ -1,0 +1,9 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-MaWDXTChk03fHVyc47vPIM3xMwp9juhLm21e08bT6tM='; base-uri 'none'; form-action 'none'"><title>Brian</title></head><body><script>(() => {
+  if (window.parent === window || !["http:", "https:"].includes(location.protocol) || location.hash.length > 4096) return;
+  const params = new URLSearchParams(location.hash.slice(1));
+  const token = params.get("token");
+  const url = params.get("addLibrary");
+  if (!token || !/^[a-f0-9]{32}$/.test(token) || !url || url.length > 2048 || [...params.keys()].length !== 2) return;
+  window.parent.postMessage({ type: "brian:drawing-library", token, url }, location.origin);
+})();</script></body></html>

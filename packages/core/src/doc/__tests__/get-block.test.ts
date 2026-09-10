@@ -96,6 +96,16 @@ async function drawing(): Promise<DrawingBlock> {
 }
 
 describe('[COMP:doc/drawing-read] visual evidence', () => {
+  it('reads named and legacy drawings and exposes names in outlines without losing visual evidence', async () => {
+    const { buildOutline } = await import('../outline.js')
+    for (const title of [undefined, 'Architecture sketch']) {
+      const block = { ...await drawing(), ...(title ? { title } : {}) }
+      const result = await createGetBlockTool(deps({ blocks: [block] })).execute({ pageId: PAGE_ID, blockId: 'd1' }, ctx())
+      expect(result.images).toHaveLength(1)
+      if (title) expect(JSON.stringify(result.data)).toContain(title)
+      expect(buildOutline({ blocks: [block] }).blocks[0].preview).toBe(`${title ? '"Architecture sketch" ' : ''}drawing (Excalidraw, 0 elements)`)
+    }
+  })
   it.each([
     'missing IDAT', 'invalid compressed data', 'bad zlib checksum', 'invalid pixel filter',
     'bad IDAT CRC', 'bad ancillary CRC', 'oversized chunk length', 'undersized chunk length',

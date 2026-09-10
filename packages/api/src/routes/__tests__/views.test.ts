@@ -1426,9 +1426,9 @@ describe('[COMP:api/views-routes] view-page metadata', () => {
 })
 
 describe('[COMP:api/views-routes] view-page edits', () => {
-  it('persists a bounded drawing export with its editable scene, rejects bad metadata, and requires authentication', async () => {
+  it.each([undefined, 'Architecture sketch'])('persists a drawing named %s with its export, rejects bad metadata, and requires authentication', async title => {
     const scene: DrawingBlock['scene'] = { version: 1, elements: [], appState: { viewBackgroundColor: '#fff' }, files: {} }
-    const block: DrawingBlock = { kind: 'drawing', id: 'drawing-1', scene, preview: {
+    const block: DrawingBlock = { kind: 'drawing', id: 'drawing-1', ...(title ? { title } : {}), scene, preview: {
       mimeType: 'image/png', width: 1, height: 1, sceneDigest: await drawingSceneDigest(scene),
       data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
     } }

@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 import dotenv from "dotenv";
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 const GIT_COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
 
@@ -67,6 +67,23 @@ const workspaceRoot = nextPackagePath.slice(
   nextPackagePath.indexOf(`${sep}node_modules${sep}`),
 );
 
+// Keep this in the compiled config: Next's requireFromString cannot resolve
+// sibling config helpers. The browser regression checks parity with Vite's
+// scripts/collab-singletons.mjs, including actual import/require constructors.
+const appRequire = createRequire(import.meta.url);
+const pmRoot = resolve(dirname(appRequire.resolve("@tiptap/pm/view")), "../..");
+const pm = JSON.parse(readFileSync(resolve(pmRoot, "package.json"), "utf8"));
+const pmRequire = createRequire(resolve(pmRoot, "package.json"));
+const collabSingletonAliases: Record<string, string> = Object.fromEntries(
+  ["yjs", "y-prosemirror", ...Object.keys(pm.dependencies).filter(name => name.startsWith("prosemirror-"))]
+    .map(name => {
+      const entry = (name.startsWith("prosemirror-") ? pmRequire : appRequire).resolve(name);
+      const root = resolve(dirname(entry), "..");
+      const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+      return [name, realpathSync(resolve(root, manifest.module))];
+    }),
+);
+
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: workspaceRoot,
@@ -75,6 +92,12 @@ const nextConfig: NextConfig = {
   // Follow the physical pnpm store so Turbopack can resolve Next in either.
   turbopack: {
     root: workspaceRoot,
+    resolveAlias: Object.fromEntries(Object.entries(collabSingletonAliases).map(([name, path]) =>
+      [name, `./${relative(import.meta.dirname, path).replaceAll("\\", "/")}`])),
+  },
+  webpack(config) {
+    Object.assign(config.resolve.alias, collabSingletonAliases);
+    return config;
   },
   env: {
     // Public build provenance for Settings. Prefer OSS_GIT_COMMIT_SHA when a

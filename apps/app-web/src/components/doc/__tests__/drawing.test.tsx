@@ -17,17 +17,22 @@ import { webcrypto } from 'node:crypto';
 
 Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==';
-const exporting = vi.hoisted(() => ({ wait: null as Promise<void> | null, invalid: false }));
+const exporting = vi.hoisted(() => ({ wait: null as Promise<void> | null, invalid: false, restoreDefaults: false }));
+const captureInitialData = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/theme', () => ({ useTheme: () => ({ resolved: 'light' }) }));
 // Mock only the canvas engine. The real dialog, Save/Cancel, validation, and
 // lazy boundary run in the DOM; persistence uses an actual ProseMirror editor.
 vi.mock('../drawing-runtime', () => ({ loadDrawingRuntime: async () => ({
-  Excalidraw: ({ initialData, excalidrawAPI }: { initialData: DrawingBlock['scene']; excalidrawAPI: (api: unknown) => void }) => {
-    const [elements, setElements] = useState(initialData.elements);
+  FONT_FAMILY: { Nunito: 6 },
+  Excalidraw: ({ initialData, excalidrawAPI, onChange }: { initialData: DrawingBlock['scene']; excalidrawAPI: (api: unknown) => void; onChange: (elements: unknown, appState: unknown, files: unknown) => void }) => {
+    captureInitialData(initialData);
+    const [elements, setElements] = useState(() => initialData.elements.map(element => exporting.restoreDefaults ? { ...element, roughness: 1 } : element));
     const [files, setFiles] = useState<Record<string, unknown>>(initialData.files);
+    const [appState] = useState(initialData.appState);
+    useEffect(() => { onChange(elements, appState, files); }, [elements, appState, files, onChange]);
     useEffect(() => { excalidrawAPI({ getSceneElements: () => elements, getFiles: () => files,
-      getAppState: () => initialData.appState }); }, [elements, excalidrawAPI, files, initialData.appState]);
+      getAppState: () => appState }); }, [elements, excalidrawAPI, files, appState]);
     return <>
       <button onClick={() => setElements([{ id: 'shape', type: 'rectangle', x: 0, y: 0, width: 100, height: 80 }])}>engine draw {elements.length}</button>
       <button onClick={() => setElements([{ id: 'image', type: 'image', x: 0, y: 0, width: 100, height: 80, fileId: 'missing' }])}>engine missing image</button>
@@ -56,7 +61,7 @@ const t = en.docPage.diagramSource;
 let root: Root;
 let host: HTMLDivElement;
 let editor: Editor | undefined;
-afterEach(() => { act(() => root?.unmount()); host?.remove(); editor?.destroy(); editor = undefined; exporting.wait = null; exporting.invalid = false; });
+afterEach(() => { act(() => root?.unmount()); host?.remove(); editor?.destroy(); editor = undefined; exporting.wait = null; exporting.invalid = false; exporting.restoreDefaults = false; captureInitialData.mockClear(); });
 async function render(node: React.ReactNode) {
   if (!host?.isConnected) { host = document.createElement('div'); document.body.append(host); root = createRoot(host); }
   await act(async () => { root.render(<I18nProvider locale="en" dict={en}>{node}</I18nProvider>); });
@@ -71,8 +76,73 @@ async function click(label: string) {
   expect(button).toBeTruthy();
   await act(async () => button!.click());
 }
+async function settle(check: () => void) {
+  for (let i = 0; i < 100; i++) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    try { check(); return; } catch { /* Flush lazy loading and async export state. */ }
+  }
+  check();
+}
 
 describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
+  it('saves and reopens a trimmed name, cancels a rename, and preserves scene and PNG on title-only edits', async () => {
+    exporting.restoreDefaults = true;
+    const scene: DrawingBlock['scene'] = { ...original.scene, elements: [{ id: 'shape', type: 'rectangle', x: 0, y: 0, width: 100, height: 80 }] };
+    const block: DrawingBlock = { ...original, scene, preview: { mimeType: 'image/png', data: png, width: 1, height: 1, sceneDigest: await drawingSceneDigest(scene) } };
+    const write = vi.fn();
+    function Page() {
+      const [saved, setSaved] = useState(block);
+      return <BlockDrawing block={saved} editable onSave={next => { write(next); setSaved(next); return true; }} />;
+    }
+    async function name(value: string) {
+      await settle(() => expect(document.querySelector('input[maxlength="200"]')).not.toBeNull());
+      const input = document.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+      expect(input.getAttribute('aria-label')).toBe(t.drawingName);
+      expect(input.closest('label')).toBeNull();
+      expect(document.querySelectorAll('input[maxlength="200"]')).toHaveLength(1);
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    await render(<Page />);
+    expect(host.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(t.drawing);
+    await click(t.drawingEdit);
+    await name('  Architecture sketch  ');
+    const input = document.querySelector<HTMLInputElement>('input[maxlength="200"]')!;
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })));
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await act(async () => input.focus());
+    await name('Reverted edit');
+    await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
+    expect(input.value).toBe('  Architecture sketch  ');
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent).toBe('Architecture sketch');
+    expect(document.activeElement).not.toBe(input);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    exporting.invalid = true; // A rename must not depend on exporting a new PNG.
+    await click(t.drawingSave);
+    expect(write).toHaveBeenCalledWith({ ...block, title: 'Architecture sketch' });
+    expect(write.mock.calls[0][0].scene).toEqual(scene);
+    expect(write.mock.calls[0][0].preview).toEqual(block.preview);
+    expect(host.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe('Architecture sketch');
+    await click(t.drawingEdit);
+    expect(document.querySelector<HTMLInputElement>('input[maxlength="200"]')?.value).toBe('Architecture sketch');
+    await name('Cancelled name');
+    await click(t.cancel);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain('Architecture sketch');
+    await click(t.drawingEdit);
+    expect(document.querySelector<HTMLInputElement>('input[maxlength="200"]')?.value).toBe('Architecture sketch');
+    await name('   ');
+    await click(t.drawingSave);
+    expect(write.mock.calls[1][0]).toEqual({ ...block, title: '' });
+    expect(host.querySelector('[role="img"]')?.getAttribute('aria-label')).toBe(t.drawing);
+    await render(<BlockDrawing block={{ ...block, title: 'Read-only name' }} />);
+    expect(host.textContent).toContain('Read-only name');
+    expect(host.querySelector('input, button')).toBeNull();
+  });
   it.each(['svg', 'oversized'])('recovers after deleting a %s asset and preserves live image bytes', async kind => {
     const liveFile = { id: 'live', mimeType: 'image/png' as const, dataURL: 'data:image/png;base64,YQ==', created: 1 };
     const block: DrawingBlock = { ...original, scene: { ...original.scene,
@@ -109,14 +179,32 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     await click('engine draw 0');
     await click(t.drawingSave);
     await act(async () => { await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1)); });
+    expect(captureInitialData).toHaveBeenLastCalledWith({ ...original.scene,
+      appState: { ...original.scene.appState, currentItemFontFamily: 6 }, scrollToContent: true });
+    expect(write.mock.calls[0][0].scene.appState).toEqual(original.scene.appState);
     expect(write.mock.calls[0][0].preview).toEqual({ mimeType: 'image/png', data: png, width: 1, height: 1,
       sceneDigest: await drawingSceneDigest(write.mock.calls[0][0].scene) });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(host.querySelector('canvas')).toBeTruthy();
     await click(t.drawingEdit);
     expect(document.body.textContent).toContain('engine draw 1');
+    expect(captureInitialData).toHaveBeenLastCalledWith({ ...write.mock.calls[0][0].scene,
+      appState: { ...original.scene.appState, currentItemFontFamily: 6 }, scrollToContent: true });
     await click(t.cancel);
     expect(write).toHaveBeenCalledTimes(1);
+  });
+  it('defaults to Normal without changing existing text fonts on open or save', async () => {
+    const block: DrawingBlock = { ...original, scene: { ...original.scene,
+      elements: [{ id: 'text', type: 'text', x: 0, y: 0, width: 100, height: 25,
+        text: 'Existing text', fontFamily: 1, fontSize: 20, lineHeight: 1.25 }] } };
+    const write = vi.fn(() => true);
+    await render(<BlockDrawing block={block} editable onSave={write} />);
+    await click(t.drawingEdit);
+    await click(t.drawingSave);
+    await act(async () => { await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1)); });
+    expect(captureInitialData).toHaveBeenLastCalledWith({ ...block.scene,
+      appState: { ...block.scene.appState, currentItemFontFamily: 6 }, scrollToContent: true });
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({ scene: block.scene }), block);
   });
   it('offers no edit in read-only mode and disables save after permission loss', async () => {
     const write = vi.fn(() => true);
@@ -125,6 +213,7 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     await render(<BlockDrawing block={original} editable onSave={write} />);
     await click(t.drawingEdit);
     await render(<BlockDrawing block={original} editable={false} onSave={write} />);
+    expect(document.querySelector<HTMLInputElement>('input[maxlength="200"]')?.disabled).toBe(true);
     await click(t.drawingSave);
     expect(write).not.toHaveBeenCalled();
     await click(t.cancel);
@@ -151,7 +240,7 @@ describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
     exporting.invalid = true;
     await click(t.drawingSave);
     expect(write).not.toHaveBeenCalled();
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingFailed);
+    await settle(() => expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingFailed));
     await click('engine delete retained image');
     await click(t.drawingSave);
     expect(write).toHaveBeenCalledWith({ ...original, preview: undefined }, original);

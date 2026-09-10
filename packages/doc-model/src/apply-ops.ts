@@ -92,7 +92,7 @@ function genId(): string {
  *  `clone()` must be called on the *integrated* temp-doc node — a detached
  *  clone can't be read into further. */
 function buildBlockNodes(block: Block): Y.XmlElement[] {
-  if (block.kind === 'drawing') blockSchema.parse(block)
+  if (block.kind === 'drawing') block = blockSchema.parse(block)
   const tmp = pageToYDoc({ blocks: [block] } as Page, '')
   const frag = tmp.getXmlFragment(FRAGMENT_FIELD)
   const clones = frag
