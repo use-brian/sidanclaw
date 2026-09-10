@@ -6,6 +6,7 @@ import {
   publicRuntimeConfig,
   resolveRuntimePublicConfig,
   runtimePublicConfigScript,
+  serverRuntimePublicConfig,
 } from "@/lib/runtime-public-config";
 
 describe("[COMP:app-web/runtime-public-config] runtime public config", () => {
@@ -83,6 +84,27 @@ describe("[COMP:app-web/runtime-public-config] runtime public config", () => {
       googleApiKey: "browser-picker-key",
       edition: "hosted",
     });
+  });
+
+  it("preserves build-only compatibility values in server-rendered config", () => {
+    expect(serverRuntimePublicConfig(
+      { USEBRIAN_EDITION: "oss" },
+      {
+        NEXT_PUBLIC_API_URL: "https://api.selfhost.example",
+        NEXT_PUBLIC_DOC_SYNC_URL: "wss://docs.selfhost.example",
+      },
+    )).toMatchObject({
+      apiUrl: "https://api.selfhost.example",
+      docSyncUrl: "wss://docs.selfhost.example",
+      edition: "oss",
+    });
+  });
+
+  it("keeps runtime public values authoritative over server build fallbacks", () => {
+    expect(serverRuntimePublicConfig(
+      { PUBLIC_API_URL: "https://runtime.example" },
+      { NEXT_PUBLIC_API_URL: "https://build.example" },
+    ).apiUrl).toBe("https://runtime.example");
   });
 
   it("lets runtime values, including same-origin, override hosted build defaults", () => {
