@@ -88,17 +88,6 @@ export async function fetchInbox(
   return asJson<InboxPayload>(res);
 }
 
-/** The unread-badge total: pending replies + unread mentions. Returns 0 on
- *  error so the sidebar badge degrades silently. */
-async function fetchInboxBadgeCount(workspaceId: string): Promise<number> {
-  try {
-    const p = await fetchInbox(workspaceId);
-    return p.pendingCount + p.unreadMentionCount;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Mark mentions read. Omit `ids` to mark all of the caller's mentions read.
  * Reading is what removes a mention from the Inbox — the list is unread-only —

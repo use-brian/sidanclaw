@@ -395,8 +395,7 @@ export async function fetchFeedExternalPost(
 
 /**
  * Cross-platform pending-approval total for the Feed inbox badge. Returns 0
- * on any error so the badge degrades silently (same contract as
- * `fetchInboxBadgeCount`).
+ * on any error so the badge degrades silently.
  */
 export async function fetchFeedApprovalsCount(
   assistantIds: string[],

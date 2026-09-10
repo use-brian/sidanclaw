@@ -175,7 +175,8 @@ type WorkspaceDetail = {
  * entry never re-runs against a broken endpoint. A cold failure reports
  * `data: null` with `loading` false, and the next mount retries once.
  *
- * Exported for its test only.
+ * Private to this module: its test drives it through `WorkspaceMembersSection`
+ * rather than reaching the hook directly, so there is nothing to export.
  */
 function useWorkspaceDetail(workspaceId: string | null) {
   const key = workspaceId ? workspaceDetailCacheKey(workspaceId) : null;

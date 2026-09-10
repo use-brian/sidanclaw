@@ -15,8 +15,10 @@
  * for `inbox` change signals from ANY tab, device, or teammate — the server
  * emits the primitive from `notifyRoomMentionRecorded`
  * (`packages/api/src/brain-stream/notify.ts`) after a room mention is
- * recorded. Payloads are signals, never data: subscribers re-fetch through
- * their own authed loader (`fetchInbox` / `fetchInboxBadgeCount`).
+ * recorded. Payloads are signals, never data: the map marks the shared
+ * `inbox:<wid>` slot stale and its subscribers revalidate through the one
+ * authed loader (`fetchInbox`). The sidebar badge and the flyout read that
+ * same slot, so neither carries a private loader or a listener of its own.
  *
  * Distinct from `INBOX_CHANGED_EVENT` (`inbox-events.ts`), which is a
  * same-tab echo `InboxPanel` fires after ITS OWN read/dismiss action — that
