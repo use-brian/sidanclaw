@@ -173,8 +173,6 @@ export type DiagramBlock = {
   title?: string;
 };
 
-export type { DrawingBlock } from '@use-brian/shared/drawing';
-
 // ── Phase 2 block extensions ─────────────────────────────────────────
 //
 // Mirrors the local block shapes declared in each `block-<kind>.tsx`

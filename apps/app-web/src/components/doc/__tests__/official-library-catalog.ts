@@ -10,7 +10,7 @@ export const officialScript = readFileSync(resolve(__dirname, 'fixtures/official
 export const officialHtml = readFileSync(resolve(__dirname, 'fixtures/official-library-index.html.txt'), 'utf8');
 const { JSDOM, VirtualConsole } = createRequire(import.meta.url)('jsdom');
 
-export async function catalogPage(browse: string, source = 'example/shapes.excalidrawlib', referrer?: string, denyStorage = false) {
+async function catalogPage(browse: string, source = 'example/shapes.excalidrawlib', referrer?: string, denyStorage = false) {
   const errors: Error[] = [];
   const requests: string[] = [];
   const history: string[] = [];
