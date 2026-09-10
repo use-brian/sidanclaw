@@ -9,6 +9,29 @@
  */
 import type { DoneWhenNode, EventSubscription, GoalBrief, GoalCompletionClaim, GoalCreateParams, GoalHostRef, GoalListFilters, GoalListRow, GoalMeans, GoalRecord, GoalStatus } from '@use-brian/core'
 import { query, queryWithRLS } from './client.js'
+import { notifyWorkspaceChange } from '../brain-stream/notify.js'
+import type { BrainChangeAction } from '../brain-stream/sse-fanout.js'
+
+/**
+ * Store-seam emitter for the `goal` workspace primitive (the goals board /
+ * Triage panel / goal detail — docs/architecture/platform/realtime-sync.md).
+ * Fired at the lifecycle seams only: create, amend / confirm, status
+ * transitions, completion stamps, context narrowing and the host-task cascade.
+ * NEVER from `tryClaimGoalForTick` (one flip per acting-loop iteration) and
+ * never for the `until:event` park markers — those are the acting loop's
+ * bookkeeping, not a change a board needs to repaint for. The 2s coalescer
+ * folds bursts per (workspace, primitive). Fire-and-forget, same as
+ * `sessions.ts#notifySessionChange`: the write path must never feel a NOTIFY
+ * failure, and every emitter reads the workspace id off the row it just
+ * wrote (`RETURNING workspace_id`), never a second lookup.
+ */
+function notifyGoalChange(
+  workspaceId: string | null | undefined,
+  action: BrainChangeAction,
+  goalId: string,
+): void {
+  notifyWorkspaceChange(workspaceId, 'goal', action, goalId)
+}
 
 /**
  * The durable event-park marker stored in `goals.awaiting_event` (mig 293).
@@ -122,7 +145,9 @@ export async function createGoal(params: GoalCreateParams): Promise<GoalRecord> 
       params.brief ? JSON.stringify(params.brief) : null,
     ],
   )
-  return toRecord(result.rows[0])
+  const created = toRecord(result.rows[0])
+  notifyGoalChange(created.workspaceId, 'create', created.id)
+  return created
 }
 
 /** User-scoped read (RLS by workspace membership). */
@@ -158,7 +183,10 @@ export async function stampGoalCompletionSystem(
     `UPDATE goals SET completion_claim = $1::jsonb WHERE id = $2 RETURNING ${FULL_SELECT}`,
     [JSON.stringify(claim), id],
   )
-  return result.rows.length === 0 ? null : toRecord(result.rows[0])
+  if (result.rows.length === 0) return null
+  const stamped = toRecord(result.rows[0])
+  notifyGoalChange(stamped.workspaceId, 'update', stamped.id)
+  return stamped
 }
 
 /** User-scoped workspace listing for the goals board + triage surface. Each
@@ -256,7 +284,16 @@ const CLOSE_CASCADE_SKIP_STATUSES = [...GOAL_TERMINAL_STATUSES, 'running']
  *  already inside a transaction passes its own client so the cascade commits
  *  atomically with the task write (`updateTask`'s supersede path). */
 type GoalCascadeExecutor = {
-  query: (text: string, values: unknown[]) => Promise<{ rowCount: number | null }>
+  query: (
+    text: string,
+    values: unknown[],
+  ) => Promise<{
+    rowCount: number | null
+    /** The retired rows (`RETURNING id, workspace_id`) — a pg client returns
+     *  them; a narrower executor may omit them and the cascade then emits no
+     *  `goal` signal (the write still lands). */
+    rows?: Array<{ id: string; workspaceId: string }>
+  }>
 }
 
 /**
@@ -284,9 +321,11 @@ export async function abandonGoalsForHostTaskSystem(
     `UPDATE goals
         SET status = 'abandoned', blocker_reason = $2, updated_at = now()
       WHERE host_type = 'task' AND host_id = $1
-        AND status <> ALL($3)${opts.draftsOnly ? '\n        AND confirmed_at IS NULL' : ''}`,
+        AND status <> ALL($3)${opts.draftsOnly ? '\n        AND confirmed_at IS NULL' : ''}
+      RETURNING id, workspace_id as "workspaceId"`,
     [taskId, reason, skippedStatuses],
   )
+  for (const row of result.rows ?? []) notifyGoalChange(row.workspaceId, 'update', row.id)
   return result.rowCount ?? 0
 }
 
@@ -311,7 +350,10 @@ export async function setGoalStatusSystem(
     `UPDATE goals SET status = $1, blocker_reason = $2 WHERE id = $3 RETURNING ${FULL_SELECT}`,
     [status, blockerReason, id],
   )
-  return result.rows.length === 0 ? null : toRecord(result.rows[0])
+  if (result.rows.length === 0) return null
+  const updated = toRecord(result.rows[0])
+  notifyGoalChange(updated.workspaceId, 'update', updated.id)
+  return updated
 }
 
 /**
@@ -326,14 +368,16 @@ export async function transitionRunningGoalStatusSystem(
   status: GoalStatus,
   blockerReason: string | null = null,
 ): Promise<boolean> {
-  const result = await query(
+  const result = await query<{ id: string; workspaceId: string }>(
     `UPDATE goals
         SET status = $1, blocker_reason = $2, updated_at = now()
       WHERE id = $3 AND status = 'running'
-      RETURNING id`,
+      RETURNING id, workspace_id as "workspaceId"`,
     [status, blockerReason, id],
   )
-  return (result.rowCount ?? 0) > 0
+  const transitioned = (result.rowCount ?? 0) > 0
+  if (transitioned) notifyGoalChange(result.rows[0]?.workspaceId, 'update', id)
+  return transitioned
 }
 
 /** Update a goal's curated fields and/or confirm it (autopilot §4). `confirm:
@@ -372,7 +416,10 @@ export async function updateGoalSystem(
     `UPDATE goals SET ${sets.join(', ')} WHERE id = $${idx} RETURNING ${FULL_SELECT}`,
     values,
   )
-  return result.rows.length === 0 ? null : toRecord(result.rows[0])
+  if (result.rows.length === 0) return null
+  const updated = toRecord(result.rows[0])
+  notifyGoalChange(updated.workspaceId, 'update', updated.id)
+  return updated
 }
 
 /**
@@ -397,7 +444,10 @@ export async function narrowGoalContextSystem(
       RETURNING ${FULL_SELECT}`,
     [contextGroupId, contextProjectId, id],
   )
-  return result.rows.length === 0 ? null : toRecord(result.rows[0])
+  if (result.rows.length === 0) return null
+  const narrowed = toRecord(result.rows[0])
+  notifyGoalChange(narrowed.workspaceId, 'update', narrowed.id)
+  return narrowed
 }
 
 /** Single-flight claim for the acting loop: atomically flip an `active` goal to

@@ -100,7 +100,7 @@ export function TriggerEditor({
   };
 
   return (
-    <div className="rounded-xl border border-border/60 bg-card p-5 flex flex-col gap-4">
+    <div className="rounded-xl border border-border/60 bg-card p-4 sm:p-5 flex flex-col gap-4">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/60">
         {b.triggerHeading}
       </div>

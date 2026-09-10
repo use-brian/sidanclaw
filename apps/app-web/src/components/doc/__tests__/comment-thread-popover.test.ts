@@ -149,3 +149,40 @@ describe("[COMP:app-web/comment-thread-popover] scrollMovesAnchor", () => {
     expect(scrollMovesAnchor(null, panel)).toBe(true);
   });
 });
+
+/**
+ * [COMP:app-web/comment-thread-popover] the on-screen keyboard (report B row
+ * 36). The keyboard shrinks the VISUAL viewport while `innerHeight` (the
+ * layout viewport `position:fixed` resolves against) stays put on iOS. The
+ * placement therefore takes the visible bottom as its floor: a panel that
+ * would sit under the keys flips above the anchor or compresses, while the
+ * `bottom` pin is still measured from the layout viewport.
+ */
+describe("[COMP:app-web/comment-thread-popover] visible floor (keyboard)", () => {
+  const VW = 390;
+  const VH = 844;
+  const rect = (top: number, bottom: number, left = 20) =>
+    ({ top, bottom, left }) as Pick<DOMRect, "top" | "bottom" | "left">;
+
+  it("keeps a below-placement above the visible bottom, not the layout bottom", () => {
+    // Keyboard up: only the top 500px are visible.
+    const pos = placeAnchoredPanel(rect(100, 120), VW, VH, 0, 500);
+    expect(pos.top).toBe(128);
+    expect(pos.top! + pos.maxHeight).toBeLessThanOrEqual(500);
+  });
+
+  it("flips above an anchor near the keyboard and pins bottom from the LAYOUT viewport", () => {
+    const pos = placeAnchoredPanel(rect(440, 460), VW, VH, 0, 500);
+    expect(pos.top).toBeUndefined();
+    // `bottom` is a CSS offset from the layout viewport's bottom edge.
+    expect(pos.bottom).toBe(VH - 440 + 8);
+    // The box grows upward from the anchor and stays under the ceiling.
+    expect(VH - pos.bottom! - pos.maxHeight).toBeGreaterThanOrEqual(0);
+  });
+
+  it("is a no-op when the visible bottom equals the layout bottom (no keyboard)", () => {
+    expect(placeAnchoredPanel(rect(100, 120), VW, VH, 0, VH)).toEqual(
+      placeAnchoredPanel(rect(100, 120), VW, VH),
+    );
+  });
+});

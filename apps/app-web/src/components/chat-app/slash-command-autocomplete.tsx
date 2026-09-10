@@ -336,7 +336,7 @@ export function SlashCommandMenuList(props: {
       ref={commands.listRef}
       role="listbox"
       className={cn(
-        "absolute z-20 max-h-64 w-80 overflow-y-auto rounded-md border border-border bg-popover shadow-md",
+        "absolute z-20 max-h-64 w-[min(20rem,calc(100vw-2.5rem))] overflow-y-auto rounded-md border border-border bg-popover shadow-md",
         props.className,
       )}
     >

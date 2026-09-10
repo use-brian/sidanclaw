@@ -15,6 +15,8 @@
  */
 
 import { z } from 'zod'
+import { isEmailChannelReply } from '@use-brian/channels'
+import { withCrmMailAdmission, type CrmMailContext, type CrmMailIntent } from '../crm-operations/delivery-policy.js'
 
 const AGENTMAIL_API_BASE = 'https://api.agentmail.to/v0'
 
@@ -238,8 +240,8 @@ export type AgentmailClient = {
   getInbox(inboxId: string): Promise<AgentmailInbox | null>
   deleteInbox(inboxId: string): Promise<void>
   // Messages
-  sendMessage(inboxId: string, params: AgentmailSendParams): Promise<AgentmailSendResult>
-  replyToMessage(inboxId: string, messageId: string, params: AgentmailReplyParams): Promise<AgentmailSendResult>
+  sendMessage(inboxId: string, params: AgentmailSendParams, context?: CrmMailContext, intent?: CrmMailIntent): Promise<AgentmailSendResult>
+  replyToMessage(inboxId: string, messageId: string, params: AgentmailReplyParams, context?: CrmMailContext, intent?: CrmMailIntent): Promise<AgentmailSendResult>
   getMessage(inboxId: string, messageId: string): Promise<AgentmailMessage | null>
   getAttachment(inboxId: string, messageId: string, attachmentId: string): Promise<AgentmailAttachmentDownload | null>
   // Threads
@@ -248,8 +250,8 @@ export type AgentmailClient = {
     params?: { limit?: number; page_token?: string; senders?: string[]; recipients?: string[]; subject?: string[] },
   ): Promise<AgentmailThreadList>
   // Drafts
-  createDraft(inboxId: string, params: AgentmailCreateDraftParams): Promise<AgentmailDraft>
-  sendDraft(inboxId: string, draftId: string): Promise<AgentmailSendResult>
+  createDraft(inboxId: string, params: AgentmailCreateDraftParams, context?: CrmMailContext, intent?: CrmMailIntent): Promise<AgentmailDraft>
+  sendDraft(inboxId: string, draftId: string, context?: CrmMailContext, intent?: CrmMailIntent): Promise<AgentmailSendResult>
   deleteDraft(inboxId: string, draftId: string): Promise<void>
   // Domains
   createDomain(params: { domain: string; feedback_enabled?: boolean; subdomains_enabled?: boolean }): Promise<AgentmailDomain>
@@ -292,8 +294,9 @@ export function createAgentmailClient(params: { apiKey: string; fetchImpl?: Fetc
 
     if (res.status === 404 && opts?.nullOn404) return null
     if (!res.ok) {
-      const errBody = await res.text().catch(() => '')
-      console.warn(`[agentmail] ${method} ${path} → ${res.status}: ${errBody.slice(0, 200)}`)
+      const delivery = method === 'POST' && (/\/messages\/.+\/reply$/.test(path) || /\/messages\/send$/.test(path) || /\/drafts(?:\/[^/]+\/send)?$/.test(path))
+      const errBody = delivery ? '' : await res.text().catch(() => '')
+      console.warn(delivery ? `[agentmail] Email operation rejected (${res.status})` : `[agentmail] ${method} ${path} → ${res.status}: ${errBody.slice(0, 200)}`)
       if (res.status === 401 || res.status === 403) {
         throw new AgentmailApiError(
           'AgentMail rejected the API key. Check the configured key (or reconnect the inbox).',
@@ -321,6 +324,7 @@ export function createAgentmailClient(params: { apiKey: string; fetchImpl?: Fetc
     return parsed.data as z.output<S>
   }
 
+  const list = (value?: string | string[]): string[] => value === undefined ? [] : Array.isArray(value) ? [...value] : [value]
   const enc = encodeURIComponent
   const EmptySchema = z.object({}).passthrough()
 
@@ -335,16 +339,30 @@ export function createAgentmailClient(params: { apiKey: string; fetchImpl?: Fetc
       await call(EmptySchema, 'DELETE', `/inboxes/${enc(inboxId)}`)
     },
 
-    async sendMessage(inboxId, p) {
-      return (await call(AgentmailSendResultSchema, 'POST', `/inboxes/${enc(inboxId)}/messages/send`, p)) as AgentmailSendResult
+    async sendMessage(inboxId, params, context, intent) {
+      const p = structuredClone(params)
+      return withCrmMailAdmission(context, 'agentmail', {
+        ...intent, to: list(p.to), cc: list(p.cc), bcc: list(p.bcc),
+      }, async () => (await call(AgentmailSendResultSchema, 'POST', `/inboxes/${enc(inboxId)}/messages/send`, p)) as AgentmailSendResult)
     },
-    async replyToMessage(inboxId, messageId, p) {
-      return (await call(
-        AgentmailSendResultSchema,
-        'POST',
-        `/inboxes/${enc(inboxId)}/messages/${enc(messageId)}/reply`,
-        p,
-      )) as AgentmailSendResult
+    async replyToMessage(inboxId, messageId, params, context, intent) {
+      const p = structuredClone(params)
+      if (p.to !== undefined && !p.reply_all) {
+        // Pin every recipient field instead of relying on vendor defaults.
+        p.reply_all = false
+        p.cc = list(p.cc)
+        p.bcc = list(p.bcc)
+      }
+      const invoke = async () => (await call(AgentmailSendResultSchema, 'POST',
+        `/inboxes/${enc(inboxId)}/messages/${enc(messageId)}/reply`, p)) as AgentmailSendResult
+      if (isEmailChannelReply(inboxId, messageId) && !p.reply_all && p.to === undefined
+        && p.cc === undefined && p.bcc === undefined && !intent?.crmPurposeKey && !intent?.crmTemplateKey) return invoke()
+      // Implicit vendor recipients and reply-all are not a fixed envelope.
+      // Explicit overrides are the only supported managed reply path.
+      return withCrmMailAdmission(context, 'agentmail', {
+        ...intent, to: list(p.to), cc: list(p.cc), bcc: list(p.bcc),
+        ...(!p.to || p.reply_all ? { unsupportedManagedPath: 'implicit_reply' as const } : {}),
+      }, invoke)
     },
     async getMessage(inboxId, messageId) {
       return call(AgentmailMessageSchema, 'GET', `/inboxes/${enc(inboxId)}/messages/${enc(messageId)}`, undefined, {
@@ -373,16 +391,22 @@ export function createAgentmailClient(params: { apiKey: string; fetchImpl?: Fetc
       })) as AgentmailThreadList
     },
 
-    async createDraft(inboxId, p) {
-      return (await call(AgentmailDraftSchema, 'POST', `/inboxes/${enc(inboxId)}/drafts`, p)) as AgentmailDraft
+    async createDraft(inboxId, params, context, intent) {
+      const p = structuredClone(params)
+      const invoke = async () => (await call(AgentmailDraftSchema, 'POST', `/inboxes/${enc(inboxId)}/drafts`, p)) as AgentmailDraft
+      // An unscheduled provider draft is not a delivery. Scheduled drafts can
+      // send later without Brian rechecking consent and are refused if managed.
+      if (!p.send_at) return invoke()
+      return withCrmMailAdmission(context, 'agentmail', {
+        ...intent, to: p.to ?? [], cc: p.cc, bcc: p.bcc, scheduled: true,
+      }, invoke)
     },
-    async sendDraft(inboxId, draftId) {
-      return (await call(
-        AgentmailSendResultSchema,
-        'POST',
-        `/inboxes/${enc(inboxId)}/drafts/${enc(draftId)}/send`,
-        {},
-      )) as AgentmailSendResult
+    async sendDraft(inboxId, draftId, context, intent) {
+      // A GET then send-by-id cannot pin a mutable provider draft's envelope.
+      return withCrmMailAdmission(context, 'agentmail', {
+        ...intent, to: [], unsupportedManagedPath: 'provider_draft',
+      }, async () => (await call(AgentmailSendResultSchema, 'POST',
+        `/inboxes/${enc(inboxId)}/drafts/${enc(draftId)}/send`)) as AgentmailSendResult)
     },
     async deleteDraft(inboxId, draftId) {
       await call(EmptySchema, 'DELETE', `/inboxes/${enc(inboxId)}/drafts/${enc(draftId)}`)

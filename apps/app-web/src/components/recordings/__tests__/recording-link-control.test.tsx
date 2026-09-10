@@ -51,7 +51,8 @@ vi.mock("@/components/ui/searchable-select", () => ({
 vi.mock("@/lib/i18n/client", () => ({
   useT: () => ({
     recordings: {
-      linkTitle: "Link a recording",
+      linkTitle: "Pin video or audio",
+      pinTimestampHint: "Pin a recording, then add timestamps such as [01:23] to your notes.",
       linkPlaceholder: "Choose a recording",
       linkLoading: "Loading recordings...",
       linkSearchPlaceholder: "Search recordings",
@@ -118,6 +119,8 @@ describe("[COMP:app-web/recording-chrome] recording link control", () => {
     await mount();
     expect(listRecordings).toHaveBeenCalledWith("ws-1", { limit: 100 });
     expect(container?.querySelector('[data-testid="picker"]')).toBeTruthy();
+    expect(container?.textContent).toContain("Pin video or audio");
+    expect(container?.textContent).toContain("[01:23]");
   });
 
   it("links the picked recording and hands the updated metadata back", async () => {

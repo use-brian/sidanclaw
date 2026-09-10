@@ -20,6 +20,14 @@ import {
   resolveCrmPersonIdentity,
 } from './crm-identity-store.js'
 
+// Explicit composition for imports; projections run only after their owning commit.
+export type CrmWriteTransaction = { client: pg.PoolClient; afterCommit(effect: () => void): void }
+
+function projectAfterCommit(transaction: CrmWriteTransaction | undefined, effect: () => void): void {
+  if (transaction) transaction.afterCommit(effect)
+  else effect()
+}
+
 export class CrmPersonIdentityConflictError extends Error {
   readonly code = 'person_identity_conflict'
   constructor(readonly entityIds: readonly string[]) {
@@ -80,9 +88,10 @@ async function assertSameWorkspace(
   refId: string | null | undefined,
   workspaceId: string,
   label: string,
+  transactionClient?: pg.PoolClient,
 ): Promise<void> {
   if (!refId) return
-  const r = await query<{ workspaceId: string | null }>(
+  const r = await (transactionClient ? transactionClient.query.bind(transactionClient) : query)<{ workspaceId: string | null }>(
     `SELECT workspace_id AS "workspaceId" FROM entities WHERE id = $1 AND valid_to IS NULL`,
     [refId],
   )
@@ -96,9 +105,10 @@ async function assertCrmContactReference(
   refId: string | null | undefined,
   workspaceId: string,
   label: string,
+  transactionClient?: pg.PoolClient,
 ): Promise<void> {
   if (!refId) return
-  const result = await query<{
+  const result = await (transactionClient ? transactionClient.query.bind(transactionClient) : query)<{
     workspaceId: string | null
     kind: string
     isSelf: boolean
@@ -187,7 +197,7 @@ function companyFromEntity(e: EntityRecord): CompanyRecord {
   const a = e.attributes
   return {
     id: e.id, workspaceId: e.workspaceId, entityId: e.id,
-    name: e.displayName,
+    name: e.displayName, aliases: e.aliases,
     domain: attrStr(a, 'domain') ?? e.canonicalId ?? null,
     tags: attrTags(a), externalRef: attrRef(a),
     sensitivity: e.sensitivity, compartments: e.compartments, projectIds: e.projectIds,
@@ -198,7 +208,7 @@ function contactFromEntity(e: EntityRecord): ContactRecord {
   const a = e.attributes
   return {
     id: e.id, workspaceId: e.workspaceId, entityId: e.id,
-    name: e.displayName,
+    name: e.displayName, aliases: e.aliases,
     email: attrStr(a, 'email') ?? e.canonicalId ?? null,
     phone: attrStr(a, 'phone'),
     companyId: attrStr(a, 'company_id'),
@@ -213,7 +223,7 @@ function dealFromEntity(e: EntityRecord): DealRecord {
   const closeDate = a.close_date
   return {
     id: e.id, workspaceId: e.workspaceId, entityId: e.id,
-    name: e.displayName,
+    name: e.displayName, aliases: e.aliases,
     contactId: attrStr(a, 'contact_id'),
     companyId: attrStr(a, 'company_id'),
     stage: (attrStr(a, 'stage') as DealStage) ?? 'lead',
@@ -232,7 +242,7 @@ type CompanyRow = Omit<CompanyRecord, 'tags' | 'externalRef'> & {
 }
 const COMPANY_SELECT = `
   e.id, e.id AS "entityId", e.workspace_id AS "workspaceId",
-  e.display_name AS name,
+  e.display_name AS name, e.aliases,
   COALESCE(e.attributes->>'domain', e.canonical_id) AS domain,
   e.attributes->'tags' AS tags,
   e.attributes->'external_ref' AS "externalRef",
@@ -240,7 +250,7 @@ const COMPANY_SELECT = `
   e.created_at AS "createdAt", e.updated_at AS "updatedAt"`
 
 function toCompanyRow(row: CompanyRow): CompanyRecord {
-  return { ...row, tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
+  return { ...row, aliases: row.aliases ?? [], tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
 }
 
 function companyAttributes(p: {
@@ -272,6 +282,7 @@ export async function createCompany(
     createdByAssistantId?: string | null
     access?: AccessContext
   },
+  transaction?: CrmWriteTransaction,
 ): Promise<CompanyRecord> {
   assertAuthorshipPresent('createCompany', userId)
 
@@ -281,8 +292,9 @@ export async function createCompany(
     dedupeAccessContext(userId, params.workspaceId, params.access),
     { startIdx: 3 },
   )
-  const existing = await queryWithRLS<{ id: string }>(
-    userId,
+  if (transaction) await transaction.client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [JSON.stringify(['crm-company', params.workspaceId, params.name.toLowerCase()])])
+  const run = transaction ? transaction.client.query.bind(transaction.client) : <T extends pg.QueryResultRow>(sql: string, values: unknown[]) => queryWithRLS<T>(userId, sql, values)
+  const existing = await run<{ id: string }>(
     `SELECT id FROM entities
       WHERE workspace_id = $1 AND kind = 'company'
         AND lower(display_name) = lower($2)
@@ -294,7 +306,7 @@ export async function createCompany(
   if (existing.rows[0]) {
     const merged = await mergeCompanyFields(userId, existing.rows[0].id, {
       domain: params.domain ?? null, tags: params.tags, externalRef: params.externalRef,
-    }, { compartments: params.compartments ?? [], projectIds: params.projectIds ?? [] })
+    }, { compartments: params.compartments ?? [], projectIds: params.projectIds ?? [] }, params.access, transaction)
     if (merged) return merged
   }
 
@@ -316,7 +328,7 @@ export async function createCompany(
     sourceSessionId: params.sourceSessionId ?? null,
     compartments: params.compartments ?? [],
     projectIds: params.projectIds ?? [],
-  })
+  }, transaction?.client)
   return companyFromEntity(entity)
 }
 
@@ -325,8 +337,11 @@ async function mergeCompanyFields(
   id: string,
   incoming: { domain?: string | null; tags?: string[]; externalRef?: CrmExternalRef },
   scope: { compartments: string[]; projectIds: string[] },
+  access?: AccessContext,
+  transaction?: CrmWriteTransaction,
 ): Promise<CompanyRecord | null> {
-  const cur = await getCompanyByIdSystem(userId, id)
+  const entity = transaction ? (access ? await getEntityById(access, id, {}, transaction.client) : await getEntityByIdSystem(userId, id, {}, transaction.client)) : null
+  const cur = transaction ? (entity?.kind === 'company' ? companyFromEntity(entity) : null) : await getCompanyByIdSystem(userId, id)
   if (!cur) return null
   const fields: CompanyUpdateFields = {}
   if (incoming.domain && incoming.domain !== cur.domain) fields.domain = incoming.domain
@@ -340,7 +355,7 @@ async function mergeCompanyFields(
   const scopeAdds = scope.compartments.some((value) => !cur.compartments?.includes(value))
     || scope.projectIds.some((value) => !cur.projectIds?.includes(value))
   if (Object.keys(fields).length === 0 && !scopeAdds) return cur
-  return updateCompany(userId, id, fields, undefined, undefined, scope)
+  return updateCompany(userId, id, fields, access, transaction?.client, scope)
 }
 
 async function getCompanyByIdSystem(userId: string, id: string): Promise<CompanyRecord | null> {
@@ -369,7 +384,7 @@ export async function listCompanies(ctx: AccessContext, filters: CompanyListFilt
   let idx = ap.nextIdx
 
   if (filters.query) {
-    wheres.push(`(e.display_name ILIKE $${idx} OR e.attributes->>'domain' ILIKE $${idx})`)
+    wheres.push(`(e.display_name ILIKE $${idx} OR COALESCE(e.attributes->>'domain', e.canonical_id) ILIKE $${idx} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${idx}))`)
     values.push(`%${filters.query}%`); idx++
   }
   if (filters.tag) {
@@ -438,7 +453,7 @@ type ContactRow = Omit<ContactRecord, 'tags' | 'externalRef'> & {
 }
 const CONTACT_SELECT = `
   e.id, e.id AS "entityId", e.workspace_id AS "workspaceId",
-  e.display_name AS name,
+  e.display_name AS name, e.aliases,
   COALESCE(e.attributes->>'email', e.canonical_id) AS email,
   e.attributes->>'phone' AS phone,
   e.attributes->>'company_id' AS "companyId",
@@ -448,7 +463,7 @@ const CONTACT_SELECT = `
   e.created_at AS "createdAt", e.updated_at AS "updatedAt"`
 
 function toContactRow(row: ContactRow): ContactRecord {
-  return { ...row, tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
+  return { ...row, aliases: row.aliases ?? [], tags: row.tags ?? [], externalRef: row.externalRef ?? {} }
 }
 
 function contactAttributes(p: {
@@ -487,9 +502,10 @@ export async function createContact(
     access?: AccessContext
   },
   entityLinks?: EntityLinksStore,
+  transaction?: CrmWriteTransaction,
 ): Promise<ContactRecord> {
   assertAuthorshipPresent('createContact', userId)
-  await assertSameWorkspace(params.companyId, params.workspaceId, 'company_id')
+  await assertSameWorkspace(params.companyId, params.workspaceId, 'company_id', transaction?.client)
 
   // Person writes never resolve by name/email/phone/alias/fuzzy evidence.
   // Only an adapter-verified stable provider identity may select an existing
@@ -497,7 +513,10 @@ export async function createContact(
   // upsert (duplicates are recoverable; identity corruption is not).
   if (params.stableIdentity) {
     try {
-      const resolution = await resolveCrmPersonIdentity(params.workspaceId, params.stableIdentity)
+      if (transaction) await transaction.client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`crm-identity:${params.workspaceId}`])
+      const resolution = transaction
+        ? await resolveCrmPersonIdentity(params.workspaceId, params.stableIdentity, transaction.client)
+        : await resolveCrmPersonIdentity(params.workspaceId, params.stableIdentity)
       if (resolution.status === 'conflict') {
         throw new CrmPersonIdentityConflictError(resolution.entityIds)
       }
@@ -511,12 +530,12 @@ export async function createContact(
         }, entityLinks, params.access, {
           compartments: params.compartments ?? [],
           projectIds: params.projectIds ?? [],
-        })
+        }, transaction)
         if (merged) return merged
         throw new CrmPersonIdentityConflictError([resolution.binding.entityId])
       }
     } catch (err) {
-      if (err instanceof CrmPersonIdentityConflictError) throw err
+      if (transaction || err instanceof CrmPersonIdentityConflictError) throw err
       console.error('[crm] stable person identity lookup unavailable; creating a distinct record')
     }
   }
@@ -540,15 +559,16 @@ export async function createContact(
     sourceSessionId: params.sourceSessionId ?? null,
     compartments: params.compartments ?? [],
     projectIds: params.projectIds ?? [],
-  })
+  }, transaction?.client)
 
   if (params.companyId) {
     if (entityLinks) {
-      void emitCrmRelationEdge(entityLinks, userId, {
-        sourceEntityId: entity.id, targetEntityId: params.companyId,
+      const companyId = params.companyId
+      projectAfterCommit(transaction, () => { void emitCrmRelationEdge(entityLinks, userId, {
+        sourceEntityId: entity.id, targetEntityId: companyId,
         edgeType: 'works_at', workspaceId: params.workspaceId, source: 'user', userId,
         compartments: entity.compartments, projectIds: entity.projectIds,
-      })
+      }) })
     }
   }
   if (params.stableIdentity) {
@@ -558,11 +578,11 @@ export async function createContact(
         entityId: entity.id,
         identity: params.stableIdentity,
         sensitivity: params.sensitivity ?? 'internal',
-      })
+      }, transaction?.client)
       if (binding.status === 'conflict') {
         // A concurrent writer won the namespace lock after our initial read.
         // Close the redundant fresh row and return the authoritative target.
-        await query(
+        await (transaction ? transaction.client.query.bind(transaction.client) : query)(
           `UPDATE entities SET valid_to = now(), superseded_by = $2, updated_at = now()
             WHERE id = $1 AND workspace_id = $3 AND valid_to IS NULL`,
           [entity.id, binding.entityId, params.workspaceId],
@@ -576,12 +596,12 @@ export async function createContact(
         }, entityLinks, params.access, {
           compartments: params.compartments ?? [],
           projectIds: params.projectIds ?? [],
-        })
+        }, transaction)
         if (authoritative) return authoritative
         throw new CrmPersonIdentityConflictError([binding.entityId])
       }
     } catch (err) {
-      if (err instanceof CrmPersonIdentityConflictError) throw err
+      if (transaction || err instanceof CrmPersonIdentityConflictError) throw err
       console.error('[crm] stable person identity binding unavailable; retained a distinct record')
     }
   }
@@ -598,8 +618,10 @@ async function mergeContactFields(
   entityLinks?: EntityLinksStore,
   access?: AccessContext,
   scope: { compartments: string[]; projectIds: string[] } = { compartments: [], projectIds: [] },
+  transaction?: CrmWriteTransaction,
 ): Promise<ContactRecord | null> {
-  const cur = access ? await getContactById(access, id) : await getContactByIdSystem(userId, id)
+  const entity = transaction ? (access ? await getEntityById(access, id, {}, transaction.client) : await getEntityByIdSystem(userId, id, {}, transaction.client)) : null
+  const cur = transaction ? (entity?.kind === 'person' ? contactFromEntity(entity) : null) : access ? await getContactById(access, id) : await getContactByIdSystem(userId, id)
   if (!cur) return null
   const fields: ContactUpdateFields = {}
   if (incoming.email && incoming.email !== cur.email) fields.email = incoming.email
@@ -615,7 +637,7 @@ async function mergeContactFields(
   const scopeAdds = scope.compartments.some((value) => !cur.compartments?.includes(value))
     || scope.projectIds.some((value) => !cur.projectIds?.includes(value))
   if (Object.keys(fields).length === 0 && !scopeAdds) return cur
-  return updateContact(userId, id, fields, entityLinks, access, undefined, scope)
+  return updateContact(userId, id, fields, entityLinks, access, transaction?.client, scope, transaction?.afterCommit)
 }
 
 async function getContactByIdSystem(userId: string, id: string): Promise<ContactRecord | null> {
@@ -655,7 +677,7 @@ export async function listContacts(ctx: AccessContext, filters: ContactListFilte
     const phoneArm = queryDigits.length >= 5
       ? ` OR regexp_replace(COALESCE(e.attributes->>'phone', ''), '[^0-9]', '', 'g') LIKE '%' || regexp_replace($${idx}, '[^0-9]', '', 'g') || '%'`
       : ''
-    wheres.push(`(e.display_name ILIKE $${idx} OR e.attributes->>'email' ILIKE $${idx}${phoneArm})`)
+    wheres.push(`(e.display_name ILIKE $${idx} OR COALESCE(e.attributes->>'email', e.canonical_id) ILIKE $${idx}${phoneArm} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${idx}))`)
     values.push(`%${filters.query}%`); idx++
   }
   if (filters.tag) {
@@ -688,6 +710,7 @@ export async function updateContact(
   access?: AccessContext,
   transactionClient?: pg.PoolClient,
   scope?: { compartments: string[]; projectIds: string[] },
+  afterCommit?: CrmWriteTransaction['afterCommit'],
 ): Promise<ContactRecord | null> {
   const old = transactionClient
     ? access
@@ -698,7 +721,7 @@ export async function updateContact(
       : await getEntityByIdSystem(userId, id)
   if (!old || old.kind !== 'person') return null
   if (fields.companyId !== undefined) {
-    await assertSameWorkspace(fields.companyId, old.workspaceId, 'company_id')
+    await assertSameWorkspace(fields.companyId, old.workspaceId, 'company_id', transactionClient)
   }
   const a = { ...old.attributes }
   if (fields.email !== undefined) { if (fields.email) a.email = fields.email; else delete a.email }
@@ -716,11 +739,13 @@ export async function updateContact(
   }, dedupeAccessContext(userId, old.workspaceId, access), transactionClient)
   if (!e) return null
   if (fields.companyId !== undefined) {
-    repointGraphEdge(entityLinks, userId, {
+    const project = () => repointGraphEdge(entityLinks, userId, {
       sourceEntityId: id, targetEntityId: fields.companyId ?? null,
       edgeType: 'works_at', workspaceId: old.workspaceId,
       compartments: e.compartments, projectIds: e.projectIds,
     })
+    if (afterCommit) afterCommit(project)
+    else project()
   }
   return contactFromEntity(e)
 }
@@ -732,7 +757,7 @@ type DealRow = Omit<DealRecord, 'amount' | 'externalRef'> & {
 }
 const DEAL_SELECT = `
   e.id, e.id AS "entityId", e.workspace_id AS "workspaceId",
-  e.display_name AS name,
+  e.display_name AS name, e.aliases,
   e.attributes->>'contact_id' AS "contactId",
   e.attributes->>'company_id' AS "companyId",
   COALESCE(e.attributes->>'stage', 'lead') AS stage,
@@ -745,6 +770,7 @@ const DEAL_SELECT = `
 function toDealRow(row: DealRow): DealRecord {
   return {
     ...row,
+    aliases: row.aliases ?? [],
     amount: row.amount === null ? null : Number(row.amount),
     externalRef: row.externalRef ?? {},
   }
@@ -785,16 +811,17 @@ export async function createDeal(
     createdByAssistantId?: string | null
   },
   entityLinks?: EntityLinksStore,
+  transaction?: CrmWriteTransaction,
 ): Promise<DealRecord> {
   assertAuthorshipPresent('createDeal', userId)
   assertValidStage(params.stage)
   assertNonNegativeAmount(params.amount)
-  await assertCrmContactReference(params.contactId, params.workspaceId, 'contact_id')
-  await assertSameWorkspace(params.companyId, params.workspaceId, 'company_id')
+  await assertCrmContactReference(params.contactId, params.workspaceId, 'contact_id', transaction?.client)
+  await assertSameWorkspace(params.companyId, params.workspaceId, 'company_id', transaction?.client)
 
   let displayName = 'Deal'
   if (params.companyId) {
-    const c = await query<{ name: string }>(
+    const c = await (transaction ? transaction.client.query.bind(transaction.client) : query)<{ name: string }>(
       `SELECT display_name AS name FROM entities WHERE id = $1 AND valid_to IS NULL`,
       [params.companyId],
     )
@@ -816,22 +843,24 @@ export async function createDeal(
     sourceSessionId: params.sourceSessionId ?? null,
     compartments: params.compartments ?? [],
     projectIds: params.projectIds ?? [],
-  })
+  }, transaction?.client)
 
   if (entityLinks && params.companyId) {
-    void emitCrmRelationEdge(entityLinks, userId, {
-      sourceEntityId: entity.id, targetEntityId: params.companyId,
+    const companyId = params.companyId
+    projectAfterCommit(transaction, () => { void emitCrmRelationEdge(entityLinks, userId, {
+      sourceEntityId: entity.id, targetEntityId: companyId,
       edgeType: 'engagement_of', workspaceId: params.workspaceId, source: 'user', userId,
       compartments: entity.compartments, projectIds: entity.projectIds,
-    })
+    }) })
   }
   if (entityLinks && params.contactId) {
-    void emitEdgeFireAndForget(entityLinks, userId, {
-      sourceKind: 'entity', sourceId: params.contactId,
+    const contactId = params.contactId
+    projectAfterCommit(transaction, () => { void emitEdgeFireAndForget(entityLinks, userId, {
+      sourceKind: 'entity', sourceId: contactId,
       targetKind: 'entity', targetId: entity.id,
       edgeType: 'represents', workspaceId: params.workspaceId, source: 'user', userId,
       compartments: entity.compartments, projectIds: entity.projectIds,
-    })
+    }) })
   }
   return dealFromEntity(entity)
 }

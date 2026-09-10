@@ -2606,7 +2606,7 @@ describe('[COMP:workflow/tools] trigger capability surface (closed-world, derive
     expect(TRIGGER_INPUT_DESCRIPTION).toMatch(/full live tag set/)
     expect(TRIGGER_INPUT_DESCRIPTION).toMatch(/crm\.submission\.received/)
     expect(TRIGGER_INPUT_DESCRIPTION).toMatch(/crm\.deal\.stage_changed/)
-    expect(TRIGGER_INPUT_DESCRIPTION).toMatch(/stable definition\/purpose\/plan\/event\/pipeline\/stage keys/)
+    expect(TRIGGER_INPUT_DESCRIPTION).toMatch(/stable definition\/purpose\/plan\/event\/ticket\/pipeline\/stage keys/)
   })
 
   it('createWorkflow accepts and persists an event trigger with a task source (chat-authorable, no web builder needed)', async () => {

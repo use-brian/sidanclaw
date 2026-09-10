@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeLiveWindows } from "../live-transcript-pane";
+import { isPinnedToEnd, mergeLiveWindows } from "../live-transcript-pane";
 import type { LiveTranscriptWindowRow } from "@/lib/api/recordings";
 
 function win(chunkId: string, offsetMs: number, text = "hi"): LiveTranscriptWindowRow {
@@ -26,5 +26,32 @@ describe("[COMP:app-web/live-transcript-pane] mergeLiveWindows", () => {
   it("is stable when either side is empty", () => {
     expect(mergeLiveWindows([], [win("a", 0)])).toHaveLength(1);
     expect(mergeLiveWindows([win("a", 0)], [])).toHaveLength(1);
+  });
+});
+
+/**
+ * Follow-the-tail is decided from scroll GEOMETRY on every scroll, whatever
+ * produced it: the old `onWheel` hook covered a mouse and nothing else, so a
+ * phone reader who dragged up to re-read was yanked back to the tail on the
+ * next window (every few seconds during a capture).
+ */
+describe("[COMP:app-web/live-transcript-pane] isPinnedToEnd", () => {
+  it("is pinned at the very end and within the threshold of it", () => {
+    expect(isPinnedToEnd({ scrollHeight: 1000, scrollTop: 700, clientHeight: 300 })).toBe(true);
+    expect(isPinnedToEnd({ scrollHeight: 1000, scrollTop: 661, clientHeight: 300 })).toBe(true);
+  });
+
+  it("un-pins once the reader has scrolled up past the threshold (touch, wheel or keyboard alike)", () => {
+    expect(isPinnedToEnd({ scrollHeight: 1000, scrollTop: 660, clientHeight: 300 })).toBe(false);
+    expect(isPinnedToEnd({ scrollHeight: 1000, scrollTop: 0, clientHeight: 300 })).toBe(false);
+  });
+
+  it("treats a box that does not scroll yet as pinned, so the first windows follow", () => {
+    expect(isPinnedToEnd({ scrollHeight: 200, scrollTop: 0, clientHeight: 300 })).toBe(true);
+  });
+
+  it("honours a custom threshold", () => {
+    expect(isPinnedToEnd({ scrollHeight: 1000, scrollTop: 600, clientHeight: 300 }, 120)).toBe(true);
+    expect(isPinnedToEnd({ scrollHeight: 1000, scrollTop: 600, clientHeight: 300 }, 100)).toBe(false);
   });
 });

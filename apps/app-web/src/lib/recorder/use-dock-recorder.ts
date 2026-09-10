@@ -271,8 +271,8 @@ export type MeetingCaptureOutcome =
 
 /**
  * Pure fork of a long-lane hand-off result into (notice, spool verdict).
- * Exported for the node tests — the imperative shell around it (upload,
- * confirm dialog, spool) is what app-web's vitest cannot run.
+ * Exported for the node tests; the hook's concurrency contract is covered
+ * separately with controlled engine, spool, and upload boundaries.
  */
 export function handOffVerdict(result: MeetingCaptureOutcome): {
   notice: RecorderNotice;
@@ -307,6 +307,8 @@ export type DockRecorderApi = {
   phase: RecorderPhase;
   /** True whenever the recorder owns the pill (anything but idle). */
   active: boolean;
+  /** Upload/confirm jobs are independent of the active capture and chat. */
+  savingCount: number;
   /**
    * Recorder clock ACCESSOR, not state — the strip polls it into its own
    * local tick so a 2-hour capture re-renders the little strip, never the
@@ -374,13 +376,17 @@ export function useDockRecorder(opts: {
     initialSource: Exclude<RecorderCaptureSource, "mic">,
   ) => Promise<PreparedCaptureSource | null>;
   /** Sequential provisional-window upload. */
-  streamLiveWindow?: (window: LiveWindow) => Promise<void>;
+  streamLiveWindow?: (window: LiveWindow, page: LiveRecordingPage) => Promise<void>;
 }): DockRecorderApi {
   const { enabled, workspaceId, assistantId, captureNamePrefix, sendVoiceClip, getSessionId, onMeetingCapture, prepareLivePage, prepareCaptureSource, streamLiveWindow } =
     opts;
   const [phase, setPhase] = useState<RecorderPhase>(IDLE);
   const [notice, setNotice] = useState<RecorderNotice | null>(null);
   const [recovery, setRecovery] = useState<SpoolSessionMeta[]>([]);
+  const [savingCount, setSavingCount] = useState(0);
+  const pendingSavesRef = useRef(new Set<string>());
+  const saveTailRef = useRef<Promise<void>>(Promise.resolve());
+  const mountedRef = useRef(true);
   // Start SSR + hydration in the browser-safe shape (no desktop-only
   // chevron), then resolve the preload capability and device preference
   // after mount. The ref is the capture-time authority, including for a
@@ -434,11 +440,38 @@ export function useDockRecorder(opts: {
   const refreshRecovery = useCallback(async () => {
     try {
       const sessions = await spool().listSessions();
-      setRecovery(recoverableSessions(sessions, engineRef.current?.spoolSessionId() ?? null));
+      setRecovery(recoverableSessions(sessions, engineRef.current?.spoolSessionId() ?? null)
+        .filter((session) => !pendingSavesRef.current.has(session.id)));
     } catch {
       setRecovery([]);
     }
   }, []);
+
+  // One uploader/confirmation at a time, without owning the capture phase.
+  // The job closure snapshots its destination and callback at enqueue time.
+  const enqueueSave = useCallback((id: string, job: () => Promise<void>, serial = true): Promise<void> => {
+    if (pendingSavesRef.current.has(id)) return Promise.resolve();
+    pendingSavesRef.current.add(id);
+    setSavingCount(pendingSavesRef.current.size);
+    setRecovery((sessions) => sessions.filter((session) => session.id !== id));
+    // Voice prompts must not wait behind a meeting's cost confirmation.
+    const next = (serial ? saveTailRef.current : Promise.resolve()).then(async () => {
+      try {
+        // Unmount retains the spooled work; never open a new confirm after exit.
+        if (mountedRef.current) await job();
+      } catch {
+        if (mountedRef.current) setNotice({ kind: "failed" });
+      } finally {
+        pendingSavesRef.current.delete(id);
+        if (mountedRef.current) {
+          setSavingCount(pendingSavesRef.current.size);
+          void refreshRecovery();
+        }
+      }
+    });
+    if (serial) saveTailRef.current = next;
+    return next;
+  }, [refreshRecovery]);
 
   /**
    * Rescue-write a finished capture that was never live-spooled (only
@@ -497,8 +530,10 @@ export function useDockRecorder(opts: {
       durationMs: number,
       recoveredLive?: { pageId?: string; sessionId?: string },
     ): Promise<boolean> => {
-      const livePageId = recoveredLive?.pageId ?? livePageRef.current?.pageId;
-      const liveSessionId = recoveredLive?.sessionId ?? livePageRef.current?.sessionId;
+      // Never consult the current capture here: an older save may be queued
+      // behind another upload while a different live page is recording.
+      const livePageId = recoveredLive?.pageId;
+      const liveSessionId = recoveredLive?.sessionId;
       // A video capture always takes the recording lane (the voice lane's
       // file cache is audio-only) — same rule as the dropped-file fork.
       const isVideo = mime.startsWith("video/");
@@ -606,7 +641,7 @@ export function useDockRecorder(opts: {
                 opportunisticDisplayAudio:
                   source !== "mic" && desktopBridge()?.systemAudioCapture !== true,
                 ...(livePage && streamLiveWindow
-                  ? { onLiveWindow: streamLiveWindow }
+                  ? { onLiveWindow: (window: LiveWindow) => streamLiveWindow(window, livePage) }
                   : {}),
                 // The capture died underneath us (mic unplugged / input
                 // switched / system stream ended / recorder error). Finalize
@@ -695,6 +730,7 @@ export function useDockRecorder(opts: {
               return;
             }
             const sessionId = eng.spoolSessionId();
+            const live = livePageRef.current;
             // Ceiling auto-stop: skip the hand-off entirely — running it
             // would pop the cost-confirm modal MID-CALL, a worse disturb
             // than the stop itself. The capture lands in the spool (the
@@ -702,38 +738,48 @@ export function useDockRecorder(opts: {
             // from the recovery banner whenever the user is ready.
             const skipHandOff = skipHandOffRef.current;
             skipHandOffRef.current = false;
-            let safeToDrop = false;
-            let capture: { blob: Blob; mime: string; durationMs: number } | null = null;
             try {
-              capture = await eng.stop();
+              const capture = await eng.stop();
               engineRef.current = null;
-              if (!skipHandOff) {
-                safeToDrop = await handOff(capture.blob, capture.mime, capture.durationMs);
+              const save = async () => {
+                let safeToDrop = false;
+                try {
+                  if (!skipHandOff) {
+                    await capture.liveWindowsDone;
+                    if (mountedRef.current) {
+                      safeToDrop = await handOff(capture.blob, capture.mime, capture.durationMs, live ?? undefined);
+                    }
+                  }
+                } catch {
+                  setNotice({ kind: "failed" });
+                } finally {
+                  // Only THIS job's spool can be released, and only after
+                  // queue/send success. Failure and cancel remain recoverable.
+                  if (safeToDrop) {
+                    await dropSpoolSession(sessionId);
+                  } else {
+                    if (!sessionId && await rescueCapture(capture)) setNotice({ kind: "kept" });
+                    setTimeout(() => void refreshRecovery(), LIVE_SESSION_GRACE_MS + 5_000);
+                  }
+                }
+              };
+              const lane = live && capture.durationMs >= 2_000
+                ? "recording"
+                : stopLane(capture.durationMs, undefined, capture.mime.startsWith("video/"));
+              if (!skipHandOff && lane !== "discard") {
+                void enqueueSave(sessionId ?? crypto.randomUUID(), save, lane === "recording");
+              } else {
+                // Ceiling stops retain their spool without opening a processing
+                // dialog; sub-floor clips can be discarded immediately.
+                await save();
               }
             } catch {
               setNotice({ kind: "failed" });
               engineRef.current = null;
+              setTimeout(() => void refreshRecovery(), LIVE_SESSION_GRACE_MS + 5_000);
             } finally {
-              // The spool is the ONLY copy of a live capture — drop it only
-              // on a completed hand-off; otherwise it resurfaces as recovery
-              // (a cancelled confirm included: Save re-opens the flow). A
-              // capture that was never live-spooled (hold-to-talk) gets a
-              // RESCUE write on failure, so an offline voice clip recovers
-              // too instead of dying with only a notice. The re-list waits
-              // out the live-session grace window that would otherwise hide
-              // the just-written session.
-              if (safeToDrop) {
-                void dropSpoolSession(sessionId);
-              } else {
-                if (!sessionId && capture) {
-                  // A rescued clip upgrades the failure story: "could not
-                  // send" becomes "kept on this device".
-                  void rescueCapture(capture).then((ok) => {
-                    if (ok) setNotice({ kind: "kept" });
-                  });
-                }
-                setTimeout(() => void refreshRecovery(), LIVE_SESSION_GRACE_MS + 5_000);
-              }
+              // Capture lifecycle ends at the local flush, NOT upload completion.
+              // No background job may dispatch into or clear the next capture.
               dispatchRef.current({ type: "finished" });
               if (!rollOverRef.current) livePageRef.current = null;
               if (rollOverRef.current) {
@@ -747,7 +793,7 @@ export function useDockRecorder(opts: {
           return;
       }
     },
-    [workspaceId, assistantId, handOff, refreshRecovery, prepareLivePage, prepareCaptureSource, streamLiveWindow],
+    [workspaceId, assistantId, handOff, enqueueSave, refreshRecovery, prepareLivePage, prepareCaptureSource, streamLiveWindow],
   );
 
   const dispatch = useCallback(
@@ -878,16 +924,17 @@ export function useDockRecorder(opts: {
     };
   }, [latched]);
 
-  // ── beforeunload while a latched capture is live ─────────────────────
+  // ── beforeunload while capturing or saving ──────────────────────────
+  const finishing = phase.kind === "finishing";
   useEffect(() => {
-    if (!latched) return;
+    if (!latched && !finishing && savingCount === 0) return;
     const guard = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
-  }, [latched]);
+  }, [latched, finishing, savingCount]);
 
   // ── recovery listing on mount ────────────────────────────────────────
   // Twice: once immediately, once past the live-session grace window — a
@@ -935,7 +982,9 @@ export function useDockRecorder(opts: {
 
   // ── unmount: never leave the mic LED on ──────────────────────────────
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       engineRef.current?.cancel();
       engineRef.current = null;
     };
@@ -999,7 +1048,7 @@ export function useDockRecorder(opts: {
     async (sessionId: string) => {
       const meta = recovery.find((s) => s.id === sessionId);
       if (!meta) return;
-      try {
+      await enqueueSave(sessionId, async () => {
         const chunks = await spool().readChunks(sessionId);
         const safeToDrop = await handOff(
           assembleSpooledBlob(meta, chunks),
@@ -1012,16 +1061,14 @@ export function useDockRecorder(opts: {
         // Same retention contract as a live stop: a cancelled confirm or a
         // failed upload keeps the session so Save can be retried.
         if (safeToDrop) await spool().deleteSession(sessionId);
-      } catch {
-        setNotice({ kind: "failed" });
-      }
-      void refreshRecovery();
+      });
     },
-    [recovery, handOff, refreshRecovery],
+    [recovery, handOff, enqueueSave],
   );
 
   const discardRecovery = useCallback(
     async (sessionId: string) => {
+      if (pendingSavesRef.current.has(sessionId)) return;
       await dropSpoolSession(sessionId);
       void refreshRecovery();
     },
@@ -1031,6 +1078,7 @@ export function useDockRecorder(opts: {
   return {
     phase,
     active: phase.kind !== "idle",
+    savingCount,
     elapsedMs: useCallback(() => engineRef.current?.elapsedMs() ?? 0, []),
     notice,
     clearNotices: useCallback(() => setNotice(null), []),

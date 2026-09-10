@@ -30,6 +30,7 @@
 import { useRef, useState } from "react";
 import { Check, ChevronLeft, ListFilter, Search, SlidersHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import {
@@ -70,8 +71,9 @@ function valuesOf(active: FilterActive, key: string): string[] {
 
 // The Brain filter-strip's collapsed-Filter button language: bordered card
 // chrome, muted at rest, foreground on hover.
+// 36px on a phone (responsive contract M3, secondary chips), 28px from `md`.
 const GHOST_BTN =
-  "inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 " +
+  "inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 md:h-7 " +
   "text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
 function OptionRow({
@@ -167,7 +169,7 @@ function FilterPill({
   const lead = chosen[0];
   const extra = chosen.length - 1;
   return (
-    <span className="inline-flex h-7 items-center overflow-hidden rounded-full border border-primary/30 bg-primary/10 text-xs transition-colors">
+    <span className="inline-flex h-9 items-center overflow-hidden rounded-full border border-primary/30 bg-primary/10 text-xs transition-colors md:h-7">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           className="inline-flex h-full items-center gap-1 pl-2.5 pr-1"
@@ -193,9 +195,9 @@ function FilterPill({
         type="button"
         aria-label={`${t.clearFilter}: ${def.label}`}
         onClick={() => onSet([])}
-        className="inline-flex h-full items-center pl-0.5 pr-2 text-muted-foreground/60 hover:text-foreground"
+        className="inline-flex h-full min-w-9 items-center justify-center pl-0.5 pr-2 text-muted-foreground/60 hover:text-foreground md:min-w-0"
       >
-        <X className="size-3" aria-hidden />
+        <X className="size-4 md:size-3" aria-hidden />
       </button>
     </span>
   );
@@ -304,7 +306,11 @@ function ExpandingSearch({
     );
   }
   return (
-    <label className="relative">
+    // Full row below `sm` (a 176px box is a thumb-width on a phone), the
+    // compact 176px from `sm`. 16px so iOS does not zoom the whole operator
+    // surface on focus (M4), and no auto-focus on a phone: the keyboard would
+    // shove the table off-screen before the user has typed.
+    <label className="relative block w-full sm:inline-block sm:w-auto">
       <Search
         className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/60"
         aria-hidden
@@ -312,7 +318,7 @@ function ExpandingSearch({
       <input
         ref={inputRef}
         type="text"
-        autoFocus
+        autoFocus={!isPhoneViewport()}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={() => {
@@ -326,7 +332,7 @@ function ExpandingSearch({
         }}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="h-7 w-44 rounded-md border border-border bg-card pl-7 pr-2 text-[13px] outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring"
+        className="h-9 w-full rounded-md border border-border bg-card pl-7 pr-2 text-[16px] outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-ring sm:w-44 md:h-7 md:text-[13px]"
       />
     </label>
   );

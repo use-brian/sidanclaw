@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { renderSystemContext } from '@use-brian/core'
 import { Router } from 'express'
 import { z } from 'zod'
 import { getDefaultAssistant, getUserAssistant, getWorkspacePrimaryAssistant, getUserProfilesByIds, updateUserLastSeenTz, resolveAssistantAccess } from '../db/users.js'
@@ -4542,7 +4543,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // surface test; `docCtx` is kept as the name the gates below read.)
       const onDocSurface = isDocSurface(session)
       const docCtx = onDocSurface
-      const docSkillTurn = docCtx
+      const docSkillTurn = docCtx && activeCapabilities.has('page') && activeCapabilities.has('home_app:page:read') && activeCapabilities.has('home_app:page:write')
       // The app-web workspace surfaces (Brain / Studio / Workflow / Approvals /
       // Knowledge-base / full Chat) get the doc tools too, but with AMBIENT steering
       // (chat-first, author only on an explicit ask). `docToolsTurn` gates the
@@ -4550,7 +4551,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // coordinator / outline / presence gate stays keyed to the doc-only
       // `docCtx` / `onDocSurface` so those behaviours don't change off-doc.
       const onAppSurface = isAppSurface(session)
-      const docToolsTurn = docCtx || onAppSurface
+      const docToolsTurn = (docCtx || onAppSurface) && activeCapabilities.has('page')
       let basePrompt = resolveLayer1Prompt({
         defaultPrompt: options.systemPrompt,
         assistant: {
@@ -4565,7 +4566,7 @@ export function chatRoutes(options: WebChatOptions): Router {
         // of `bio`, migration 418) - the app-soul hook renders it as the
         // voice + identity anchor.
         assistantBio: charterMission(resolveCharter(assistant)),
-        resolveAppSoul: options.resolveAppSoul,
+        resolveAppSoul: assistant.appType === 'distribution' && (!activeCapabilities.has('feed') || !activeCapabilities.has('home_app:feed:read') || !activeCapabilities.has('home_app:feed:write')) ? undefined : options.resolveAppSoul,
       })
       // Follow-up chips are opt-in per client (see _prompt-builder.ts):
       // appended only when the requesting surface declares it renders chips,
@@ -4670,7 +4671,7 @@ export function chatRoutes(options: WebChatOptions): Router {
               teamName: workspaceIdentity?.name,
               teamPurpose: workspaceIdentity?.purpose ?? undefined,
             }))
-          : onAppSurface
+          : onAppSurface && activeCapabilities.has('page') && activeCapabilities.has('home_app:page:read') && activeCapabilities.has('home_app:page:write')
             ? (docSkillBlockStr = buildAmbientDocSkillBlock({
                 teamName: workspaceIdentity?.name,
                 teamPurpose: workspaceIdentity?.purpose ?? undefined,
@@ -4710,7 +4711,8 @@ export function chatRoutes(options: WebChatOptions): Router {
           ? { text: replyResolved.text, fromAssistant: replyResolved.fromAssistant }
           : null,
       })
-      let fullSystemPrompt = splitPrompt.stablePrompt
+      // Route-specific addenda follow the reusable builder prefix in system context.
+      let systemAddenda = ''
       const privateRuntimeContextParts: string[] = splitPrompt.privateRuntimeContext
         ? [splitPrompt.privateRuntimeContext]
         : []
@@ -4803,7 +4805,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // block was web-only for its whole life). See
       // `workspace-files/upload-policy-block.ts` for the two invariants it
       // holds (tool-agnostic, capability-gated).
-      fullSystemPrompt += buildUploadPolicyBlock(activeCapabilities.has('files'))
+      systemAddenda += buildUploadPolicyBlock(activeCapabilities.has('files'))
 
       // Task autopilot nudge (task-goal-autopilot.md §8). Capability-gated +
       // dynamic (post-`injectMcpTools`), so naming the goal tools here is
@@ -4814,7 +4816,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // What remains is the fails-safe contract: never work an unconfirmed
       // goal.
       if (activeCapabilities.has('goals')) {
-        fullSystemPrompt +=
+        systemAddenda +=
           '\n\n# Goals for tasks\n' +
           'Some tasks are judged in the background as workable by you; those get a DRAFT goal (an outcome, verification criteria, and an approach) the user reviews on their Tasks-assignable surface. A draft goal does NOTHING on its own. ' +
           'Do NOT announce or pitch goals when you create tasks — the judgment happens after creation and most tasks will not have one. ' +
@@ -5118,13 +5120,13 @@ export function chatRoutes(options: WebChatOptions): Router {
       // A host may add a session-specific prompt block (e.g. a draft-session
       // authoring addendum). Open default: none. Pairs with injectExtraTools
       // below so the prompt and the available tools agree.
-      const extraSystemPrompt = await options.resolveExtraSystemPrompt?.({
+      const extraSystemPrompt = (assistant.appType !== 'distribution' || (activeCapabilities.has('feed') && activeCapabilities.has('home_app:feed:write'))) ? await options.resolveExtraSystemPrompt?.({
         mode: session.mode,
         channelType: session.channelType,
         assistantId: assistant.id,
-      })
+      }) : null
       if (extraSystemPrompt) {
-        fullSystemPrompt += `\n\n${extraSystemPrompt}`
+        systemAddenda += `\n\n${extraSystemPrompt}`
       }
 
       // Add memory tools (with analytics callbacks)
@@ -5622,6 +5624,10 @@ export function chatRoutes(options: WebChatOptions): Router {
       // API channel via `applyMcpInjection` — both routes must surface the
       // same tool set or assistants degrade silently when consumers switch
       // transports.
+      const admittedTools = filterToolsByCapabilities(allTools, activeCapabilities)
+      for (const name of allTools.keys()) {
+        if (!admittedTools.has(name)) allTools.delete(name)
+      }
       const connectorUserId = await getConnectorUserId(user.id, assistant.workspaceId)
       const {
         enrichConfirmation,
@@ -5723,9 +5729,9 @@ export function chatRoutes(options: WebChatOptions): Router {
           workspaceId: assistant.workspaceId ?? undefined,
           invocationBuffer: skillInvocationBuffer,
         })
-        fullSystemPrompt += skillResult.promptFragment
+        systemAddenda += skillResult.promptFragment
         if (slashCommand && skillResult.enforcedPromptFragment) {
-          fullSystemPrompt += skillResult.enforcedPromptFragment
+          systemAddenda += skillResult.enforcedPromptFragment
           privateRuntimeContextParts.push(buildSlashCommandBlock(slashCommand))
         }
       }
@@ -5735,14 +5741,14 @@ export function chatRoutes(options: WebChatOptions): Router {
 
       // Inject unavailable capabilities so the model doesn't waste turns
       // searching for tools that don't exist.
-      fullSystemPrompt += buildUnavailableCapabilitiesPrompt(unavailableCapabilities, allTools)
+      systemAddenda += buildUnavailableCapabilitiesPrompt(unavailableCapabilities, allTools)
 
       // Browser-escalation guidance — dynamic injection gated on the acting
       // browser tools being in the map (tool-awareness carve-out): search
       // that can't produce the exact figure escalates to the browser, and
       // zero profiles never blocks a public-site browse.
-      fullSystemPrompt += buildBrowserEscalationPrompt(allTools)
-      fullSystemPrompt += buildEmailDraftAnchorPrompt(allTools)
+      systemAddenda += buildBrowserEscalationPrompt(allTools)
+      systemAddenda += buildEmailDraftAnchorPrompt(allTools)
 
       // Dynamic workspace-blueprints section (blueprint output contract):
       // present only when the workspace has blueprints, naming only blueprints
@@ -5753,7 +5759,7 @@ export function chatRoutes(options: WebChatOptions): Router {
         options.blueprintRecordTools &&
         assistant.workspaceId
       ) {
-        fullSystemPrompt += await options.buildBlueprintPromptFragment(user.id, assistant.workspaceId)
+        systemAddenda += await options.buildBlueprintPromptFragment(user.id, assistant.workspaceId)
       }
 
       // Research-mode override. Suspends the base L1's "two searches and stop"
@@ -5771,7 +5777,7 @@ export function chatRoutes(options: WebChatOptions): Router {
       // contradictory worker instructions.
       if (researchMode && !docCtx) {
         const { RESEARCH_MODE_ADDENDUM } = await import('@use-brian/core')
-        fullSystemPrompt += `\n\n${RESEARCH_MODE_ADDENDUM}`
+        systemAddenda += `\n\n${RESEARCH_MODE_ADDENDUM}`
       }
 
       // Budget gate — see docs/architecture/platform/cost-and-pricing.md
@@ -6472,9 +6478,9 @@ export function chatRoutes(options: WebChatOptions): Router {
       // Coordinator addenda are mode-stable and stay on the system prompt.
       // Preflight findings are hidden runtime metadata, so they also stay in
       // the trusted channel inside the private-runtime suffix.
-      let systemPromptWithPreflight = coordinatorMode
-        ? `${fullSystemPrompt}\n\n${researchMode ? coordinatorResearchAddendum : coordinatorBaseAddendum}`
-        : fullSystemPrompt
+      let runtimeSystemContext = coordinatorMode
+        ? `${systemAddenda}\n\n${researchMode ? coordinatorResearchAddendum : coordinatorBaseAddendum}`
+        : systemAddenda
       if (!coordinatorMode && preflightContext) {
         privateRuntimeContextParts.push(
           buildPreflightPrompt('', preflightContext).replace(/^\n+/, ''),
@@ -6815,7 +6821,7 @@ export function chatRoutes(options: WebChatOptions): Router {
         .join('\n\n')
       const privateRuntimeBlock = formatPrivateRuntimeContext(privateRuntimeContext)
       if (privateRuntimeBlock) {
-        systemPromptWithPreflight = `${systemPromptWithPreflight}\n\n${privateRuntimeBlock}`
+        runtimeSystemContext = `${runtimeSystemContext}\n\n${privateRuntimeBlock}`
       }
 
       // Only content represented on a visible client surface may prefix the
@@ -6829,8 +6835,8 @@ export function chatRoutes(options: WebChatOptions): Router {
       if (enveloped) {
         messages = enveloped
       } else if (userVisibleContext) {
-        systemPromptWithPreflight =
-          `${systemPromptWithPreflight}\n\n${formatUserVisibleContext(userVisibleContext)}`
+        runtimeSystemContext =
+          `${runtimeSystemContext}\n\n${formatUserVisibleContext(userVisibleContext)}`
       }
 
       // ── Reply evidence (grounding gate) ──
@@ -6842,6 +6848,9 @@ export function chatRoutes(options: WebChatOptions): Router {
       // evidence). Accumulate-only: no gatedTools, so the identifier
       // write-gate stays a workflow-lane behavior.
       const replyEvidence = new EvidenceAccumulator()
+      const systemPromptWithPreflight = renderSystemContext({
+        systemPrompt: splitPrompt.stablePrompt, runtimeSystemContext,
+      })
       replyEvidence.note(systemPromptWithPreflight)
       replyEvidence.note(userVisibleContext)
       if (typeof message === 'string') replyEvidence.note(message)
@@ -6924,7 +6933,8 @@ export function chatRoutes(options: WebChatOptions): Router {
           model,
           maxTokens: customLlmRuntime?.maxTokens,
           inputTokenLimit: customLlmRuntime?.inputTokenLimit,
-          systemPrompt: systemPromptWithPreflight,
+          systemPrompt: splitPrompt.stablePrompt,
+          runtimeSystemContext,
           messages,
           tools: scopedLoopTools,
           context: {

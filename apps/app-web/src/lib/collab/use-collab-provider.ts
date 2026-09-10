@@ -17,33 +17,13 @@
 
 import { useEffect, useState } from "react";
 import * as Y from "yjs";
-import { HocuspocusProvider } from "@hocuspocus/provider";
+import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/provider";
 import type { IndexeddbPersistence } from "y-indexeddb";
 import { getValidAccessToken } from "@/lib/auth-fetch";
-import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import { hasLoadedState } from "@/lib/collab/doc-empty";
 
-/**
- * Resolve the sync server URL for this page session. Order:
- *   1. Runtime public doc-sync URL if set — explicit override (staging,
- *      local-against-prod, a future host move).
- *   2. Otherwise derive it from where the app is served: only the prod doc
- *      host dials the prod sync host. Previews (`*.vercel.app`) and local dev
- *      fall back to localhost so they never co-edit prod documents. Reading the
- *      hostname at runtime (rather than a build-time `VERCEL_ENV`) means prod
- *      "just works" with zero Vercel env config and can't silently regress to
- *      localhost if that build var isn't exposed.
- */
-function resolveSyncUrl(): string {
-  if (publicRuntimeConfig().docSyncUrl)
-    return publicRuntimeConfig().docSyncUrl;
-  if (
-    typeof window !== "undefined" &&
-    window.location.hostname === "app.usebrian.ai"
-  )
-    return "wss://doc-sync.usebrian.ai";
-  return "ws://localhost:8080";
-}
+import { resolveSyncUrl } from "@/lib/offline/sync-local-page";
+import { LOCAL_PAGES_CHANGED, readLocalPage } from "@/lib/offline/offline-pages";
 
 export type CollabStatus = "connecting" | "connected" | "disconnected";
 
@@ -74,8 +54,9 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
       return;
     }
     const doc = new Y.Doc();
+    const socket = new HocuspocusProviderWebsocket({ url: resolveSyncUrl(), autoConnect: false });
     const provider = new HocuspocusProvider({
-      url: resolveSyncUrl(),
+      websocketProvider: socket,
       name: pageId,
       document: doc,
       // HocuspocusProvider calls this per (re)connect. Unlike REST (authFetch
@@ -106,6 +87,21 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
     // no destructive "pick one version" path). Loaded dynamically to keep the
     // heavy module out of the initial bundle.
     let cancelled = false;
+    let started = false;
+    const connectRegisteredPage = async () => {
+      const local = await readLocalPage(pageId);
+      if (cancelled) return;
+      if (local && !local.registered) {
+        setStatus("disconnected");
+        return;
+      }
+      if (!started) {
+        started = true;
+        void socket.connect().catch(() => { if (!cancelled) setStatus("disconnected"); });
+      }
+    };
+    window.addEventListener(LOCAL_PAGES_CHANGED, connectRegisteredPage);
+    void connectRegisteredPage();
     let persistence: IndexeddbPersistence | null = null;
     void import("y-indexeddb")
       .then(({ IndexeddbPersistence: Idb }) => {
@@ -119,8 +115,11 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
         // editable doc. Those stay skeleton-gated on the live socket, and the
         // editor shows the offline-unavailable notice instead.
         void persistence.whenSynced
-          .then(() => {
-            if (!cancelled && hasLoadedState(doc)) setSynced(true);
+          .then(async () => {
+            const local = await readLocalPage(pageId);
+            if (cancelled) return;
+            if (local) Y.applyUpdate(doc, local.seed);
+            if (hasLoadedState(doc)) setSynced(true);
           })
           .catch(() => {
             /* local load failed; stay dependent on the live socket */
@@ -133,7 +132,9 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
     return () => {
       cancelled = true;
       void persistence?.destroy();
+      window.removeEventListener(LOCAL_PAGES_CHANGED, connectRegisteredPage);
       provider.destroy();
+      socket.destroy();
       doc.destroy();
       setBundle(null);
       setStatus("connecting");

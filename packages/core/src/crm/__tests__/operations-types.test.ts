@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CrmOperationsCommandSchema,
+  CrmIntakeDefinitionVersionInputSchema,
   CrmOperationsError,
   CrmOperationsContextSchema,
   actorAuditIdentity,
@@ -18,6 +19,43 @@ const ASSISTANT_ID = '33333333-3333-4333-8333-333333333333'
 const SESSION_ID = '44444444-4444-4444-8444-444444444444'
 
 describe('[COMP:crm/operations-contract] CRM operations contracts', () => {
+  it('bounds verification configuration and refuses authority fields nested in identity claims', () => {
+    const definition = { identityPolicy: 'trusted_verified_email', fields: [
+      { key: 'email', label: 'Email', type: 'email', required: true, mapping: { kind: 'base_field', field: 'email' } },
+    ], identityVerification: { keyId: 'backend', publicKey: 'A'.repeat(43), maxAgeSeconds: 600, acknowledged: true } }
+    expect(CrmIntakeDefinitionVersionInputSchema.safeParse(definition).success).toBe(true)
+    for (const change of [{ maxAgeSeconds: 0 }, { maxAgeSeconds: 86401 }, { maxAgeSeconds: undefined }, { acknowledged: false }, { privateKey: 'never_accept' }]) {
+      expect(CrmIntakeDefinitionVersionInputSchema.safeParse({ ...definition, identityVerification: { ...definition.identityVerification, ...change } }).success).toBe(false)
+    }
+    expect(CrmOperationsCommandSchema.safeParse({ kind: 'record_submission', definitionKey: 'fixture', idempotencyKey: 'fixture', fields: {}, externalIdentity: { provider: 'fixture', subject: 'subject', verified: true } }).success).toBe(false)
+  })
+  it('bounds locale maps and rejects client-owned wording evidence', () => {
+    const save = { kind: 'save_consent_purpose', purposeKey: 'updates', label: 'Updates', wordingVersion: '1', wording: 'Default' }
+    expect(CrmOperationsCommandSchema.safeParse({ ...save, localeWordings: { ja: '同意します' } }).success).toBe(true)
+    for (const localeWordings of [{ xx: 'Unknown' }, { en: '' }, { ja: 'x'.repeat(20_001) }]) {
+      expect(CrmOperationsCommandSchema.safeParse({ ...save, localeWordings }).success).toBe(false)
+    }
+    for (const extra of [{ wording: 'Untrusted' }, { wordingHash: 'a'.repeat(64) }, { wordingVersionId: USER_ID }, { locale: 'xx' }]) {
+      expect(CrmOperationsCommandSchema.safeParse({ kind: 'record_consent', contactId: USER_ID, purposeKey: 'updates', action: 'granted', source: 'manual', ...extra }).success).toBe(false)
+    }
+  })
+
+  it('allows exactly one enumerated locale binding on a consent mapping', () => {
+    const mapping = { fieldKey: 'agree', grantedValue: true, purposeKey: 'updates' }
+    const fields = [
+      { key: 'agree', label: 'Agree', type: 'boolean', mapping: { kind: 'submission_only' } },
+      { key: 'language', label: 'Language', type: 'text', required: true, options: ['en', 'ja'], mapping: { kind: 'submission_only' } },
+    ]
+    const parse = (consentMapping: object, localeField: object = fields[1]!) => CrmIntakeDefinitionVersionInputSchema.safeParse({ identityPolicy: 'new_or_review', fields: [fields[0], localeField], consentMappings: [{ ...mapping, ...consentMapping }] }).success
+    expect(parse({ locale: 'ja' })).toBe(true)
+    expect(parse({ localeFieldKey: 'language' })).toBe(true)
+    expect(parse({ locale: 'ja', localeFieldKey: 'language' })).toBe(false)
+    expect(parse({ localeFieldKey: 'missing' })).toBe(false)
+    for (const change of [{ required: false }, { options: [] }, { options: ['xx'] }, { type: 'string_array' }]) {
+      expect(parse({ localeFieldKey: 'language' }, { ...fields[1], ...change })).toBe(false)
+    }
+  })
+
   it('parses a server-built actor and authority context', () => {
     expect(CrmOperationsContextSchema.parse({
       workspaceId: WORKSPACE_ID,

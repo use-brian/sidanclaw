@@ -39,6 +39,9 @@ export {
 // paste handler (`apps/app-web` `markdown-paste.ts`, journey E of
 // docs/architecture/features/doc-conversion.md) can convert Markdown → blocks
 // without pulling the core barrel.
+// Offline creation validates the exact same seed as the draft API.
+export { pageSchema } from '@use-brian/core/dist/views/blocks.js'
+
 export { markdownToBlocks } from '@use-brian/core/dist/doc/markdown.js'
 
 // Page templates — re-exported from core's `dist/doc/templates.js` leaf, which

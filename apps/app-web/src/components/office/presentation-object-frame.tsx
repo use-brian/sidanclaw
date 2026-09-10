@@ -102,6 +102,9 @@ export function nudgePresentationGeometry(
 
 interface Interaction {
   pointerId: number;
+  pointerType: string;
+  /** Selected before this pointer landed: a still touch on it enters text edit. */
+  wasSelected: boolean;
   mode: TransformMode;
   startClientX: number;
   startClientY: number;
@@ -128,12 +131,15 @@ export function PresentationObjectFrame({
   onMovePreview,
   onMove,
   onSnapGuides,
+  editTextRequest = 0,
 }: {
   artifactId: string;
   object: PresentationObject;
   externalGeometry?: PresentationGeometry;
   selected: boolean;
   primary?: boolean;
+  /** Bumped by the editor's "Edit text" action (report B row 20): a change enters text edit on a selected text object. */
+  editTextRequest?: number;
   canChange: boolean;
   slideSize: SlideSize;
   otherObjects?: PresentationObject[];
@@ -162,6 +168,12 @@ export function PresentationObjectFrame({
     if (!selected || object.kind !== "text") setEditingText(false);
   }, [object.kind, selected]);
 
+  useEffect(() => {
+    if (editTextRequest > 0 && selected && object.kind === "text" && editable) setEditingText(true);
+    // Only a NEW request enters edit; selection / editability are read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editTextRequest]);
+
   const style: CSSProperties = {
     left: `${geometry.xPt / slideSize.widthPt * 100}%`,
     top: `${geometry.yPt / slideSize.heightPt * 100}%`,
@@ -188,6 +200,8 @@ export function PresentationObjectFrame({
     const startGeometry = draftGeometry ?? object.geometry;
     interaction.current = {
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      wasSelected: selected,
       mode,
       startClientX: event.clientX,
       startClientY: event.clientY,
@@ -237,6 +251,10 @@ export function PresentationObjectFrame({
     if (current.moved) {
       if (current.mode === "move" && onMove) onMove(object.id, current.draftGeometry);
       else onGeometry(object.id, current.draftGeometry);
+    } else if (current.mode === "move" && current.pointerType === "touch" && current.wasSelected && object.kind === "text" && editable) {
+      // A second still tap on a selected text object is the touch route into
+      // text edit (report B row 20): `dblclick` synthesis is not guaranteed.
+      setEditingText(true);
     }
     else setDraftGeometry(null);
     onSnapGuides?.([]);
@@ -312,7 +330,7 @@ export function PresentationObjectFrame({
           type="button"
           data-rotate-handle="true"
           aria-label={t.rotation}
-          className="absolute left-1/2 top-[-1.9rem] size-3 -translate-x-1/2 cursor-grab rounded-full border border-primary bg-background shadow-sm"
+          className="absolute left-1/2 top-[-1.9rem] size-3 -translate-x-1/2 cursor-grab rounded-full border border-primary bg-background shadow-sm before:absolute before:-inset-3 before:content-['']"
           onPointerDown={(event) => startTransform(event, "rotate")}
           onClick={(event) => event.stopPropagation()}
         />
@@ -321,7 +339,7 @@ export function PresentationObjectFrame({
           type="button"
           data-resize-handle={handle.id}
           aria-label={handleLabel(handle.dimensions)}
-          className={cn("absolute size-3 rounded-sm border border-primary bg-background shadow-sm", handle.className)}
+          className={cn("absolute size-3 rounded-sm border border-primary bg-background shadow-sm before:absolute before:-inset-3 before:content-['']", handle.className)}
           onPointerDown={(event) => startTransform(event, handle.id)}
           onClick={(event) => event.stopPropagation()}
         />)}
@@ -505,9 +523,9 @@ export function PresentationGeometryToolbar({
 }) {
   const t = useT().office;
   const fields = [["xPt", t.x], ["yPt", t.y], ["widthPt", t.width], ["heightPt", t.height], ["rotationDeg", t.rotation]] as const;
-  return <div data-properties-toolbar="true" role="toolbar" aria-label={t.properties} className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b bg-background px-3 py-1.5">
+  return <div data-properties-toolbar="true" role="toolbar" aria-label={t.properties} className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1.5 border-b bg-background px-3 py-1.5 max-md:shrink-0 max-md:flex-nowrap max-md:border-b-0">
     <strong className="shrink-0 text-xs font-semibold">{t.properties}</strong>
-    {fields.map(([key, label]) => <label key={key} className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">{label}<input type="number" disabled={disabled} value={object.geometry[key]} onChange={(event) => onProperty(["geometry", key], Number(event.target.value))} className="h-7 w-[4.5rem] rounded border bg-background px-2 text-xs text-foreground disabled:opacity-50" /></label>)}
+    {fields.map(([key, label]) => <label key={key} className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">{label}<input type="number" disabled={disabled} value={object.geometry[key]} onChange={(event) => onProperty(["geometry", key], Number(event.target.value))} className="h-10 w-[4.5rem] rounded border bg-background px-2 text-[16px] text-foreground disabled:opacity-50 md:h-7 md:text-xs" /></label>)}
     <button type="button" disabled={disabled} onClick={onDelete} className="ml-auto shrink-0 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-40">{t.deleteObject}</button>
   </div>;
 }

@@ -236,7 +236,7 @@ export function BlockImage({ block, workspaceId, readOnly, onChange }: Props) {
                   onChange?.({ caption: next });
                 }
               }}
-              className="w-full border-0 bg-transparent px-0 py-0 text-xs text-muted-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0"
+              className="w-full border-0 bg-transparent px-0 py-0 text-[16px] text-muted-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0 md:text-xs"
             />
           )}
         </figcaption>

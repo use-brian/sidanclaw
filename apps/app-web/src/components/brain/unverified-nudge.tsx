@@ -174,7 +174,7 @@ export function UnverifiedNudge({
                 type="button"
                 disabled={busy}
                 onClick={handleDelete}
-                className="text-xs px-3 py-1.5 rounded-md bg-red-500 text-white hover:opacity-90 disabled:opacity-50"
+                className="text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md bg-red-500 text-white hover:opacity-90 disabled:opacity-50"
               >
                 {t.brainNudge.deleteConfirmAction}
               </button>
@@ -198,11 +198,12 @@ export function UnverifiedNudge({
         {/* Action row */}
         {mode === "view" && (
           <div className="flex flex-wrap items-center gap-2">
+            {/* Confirm is the trust action: 44px on touch (C 70 / M3). */}
             <button
               type="button"
               disabled={busy}
               onClick={handleConfirm}
-              className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
+              className="text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md bg-action text-action-foreground hover:opacity-90 disabled:opacity-50"
             >
               {t.brainNudge.confirm}
             </button>
@@ -215,7 +216,7 @@ export function UnverifiedNudge({
                 setError(null);
                 setMode("confirm-delete");
               }}
-              className="text-xs px-3 py-1.5 rounded-md border border-border text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+              className="text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md border border-border text-red-500 hover:bg-red-500/10 disabled:opacity-50"
             >
               {t.brainNudge.delete}
             </button>

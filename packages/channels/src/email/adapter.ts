@@ -26,6 +26,7 @@
 import type { ChannelAdapter, IncomingFile, IncomingMessage, OutgoingMessage } from '../types.js'
 import { parseEmailAddress, parseEmailDisplayName } from './address.js'
 import { renderEmailBody } from './markdown.js'
+import { withinEmailChannelReply } from './reply-context.js'
 
 /**
  * The inbound `message.received` message payload shape the adapter consumes.
@@ -158,12 +159,12 @@ export function createEmailAdapter(options: EmailAdapterOptions): ChannelAdapter
       // the multipart/alternative pair here so the recipient gets a real
       // email, never literal `**bold**` markers.
       const { text, html } = renderEmailBody(sanitized)
-      const result = await options.send.reply({
+      const result = await withinEmailChannelReply(options.inboxAddress, options.replyToMessageId, () => options.send.reply({
         inReplyToMessageId: options.replyToMessageId,
         text,
         ...(html ? { html } : {}),
         ...(attachments.length > 0 ? { attachments } : {}),
-      })
+      }))
       return result.messageId
     },
 

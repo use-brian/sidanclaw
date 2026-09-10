@@ -70,6 +70,7 @@ import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 import { APP_ICON } from "@/components/doc/operator-app-bar";
 import { CustomAppsSection } from "@/components/studio/custom-apps-section";
+import { AssociationModuleControls } from "@/components/association/module-controls";
 import { listCustomHomeApps, type CustomHomeApp } from "@/lib/api/home-apps";
 import {
   HOME_APPS_MAX,
@@ -365,6 +366,7 @@ export default function StudioMiniAppsPage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <p className="text-sm text-muted-foreground">{copy.intro}</p>
+      <AssociationModuleControls workspaceId={workspaceId} />
 
       <p className="mt-4 text-xs font-medium text-muted-foreground tabular-nums">
         {format(copy.counter, {

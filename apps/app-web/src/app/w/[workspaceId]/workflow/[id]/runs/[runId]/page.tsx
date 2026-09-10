@@ -17,11 +17,20 @@
  * renders full-width inside the `/w/[workspaceId]` layout's `<main>` (its own
  * chrome, not the doc page shell).
  *
+ * Instant navigation (N1-N3, `[COMP:app-web/workflow-detail-cache]`): the
+ * run reads `workflowRunCacheKey(wid, runId)` and the workflow reads the
+ * SAME `workflowDetailCacheKey(wid, id)` slot the detail page fills, so
+ * detail -> run paints the workflow header on the first frame and only the
+ * run itself is fetched. Both fetch in parallel (N7). The spine marks
+ * `workflow-run:<wid>:` stale on `WORKFLOW_REFRESH_EVENT` (a `workflow_run`
+ * step / status signal), so the page carries no listener of its own; the 5s
+ * in-flight poll stays as the degraded-SSE fallback and is `refresh()`.
+ *
  * Spec: docs/architecture/features/workflow.md → Run history drill-down.
  * [COMP:app-web/workflow]
  */
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useEffect } from "react";
 import { BackButton } from "@/components/ui/back-button";
 import { useT } from "@/lib/i18n/client";
 import { format as fmt } from "@/lib/i18n";
@@ -33,10 +42,12 @@ import {
   type WorkflowRunDetail,
   type WorkflowStepRunDetail,
 } from "@/lib/api/workflow";
+import { useCachedResource } from "@/lib/surface-cache";
 import {
-  WORKFLOW_REFRESH_EVENT,
-  type WorkflowRefreshDetail,
-} from "@/lib/workflow-events";
+  workflowDetailCacheKey,
+  workflowRunCacheKey,
+} from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import { cn } from "@/lib/utils";
 import { RunIdCopyButton } from "@/components/workflow/run-id-copy-button";
 
@@ -48,67 +59,59 @@ export default function WorkflowRunDetailPage({
   const t = useT();
   const { workspaceId, id, runId } = use(params);
   const detailHref = `/w/${workspaceId}/workflow/${id}`;
-  const [run, setRun] = useState<WorkflowRunDetail | null | undefined>(
-    undefined,
+  // Two cache slots, fetched in parallel: the run, and the workflow row the
+  // detail page already holds.
+  const runRes = useCachedResource<WorkflowRunDetail | null>(
+    workflowRunCacheKey(workspaceId, runId),
+    () => getWorkflowRun(id, runId),
   );
-  const [workflow, setWorkflow] = useState<WorkflowFull | null | undefined>(
-    undefined,
+  const workflowRes = useCachedResource<WorkflowFull | null>(
+    workflowDetailCacheKey(workspaceId, id),
+    () => getWorkflowFull(id),
   );
-
-  const load = useCallback(async () => {
-    const [r, wf] = await Promise.all([
-      getWorkflowRun(id, runId),
-      getWorkflowFull(id),
-    ]);
-    setRun(r);
-    setWorkflow(wf);
-  }, [id, runId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const run = runRes.data;
+  const workflow = workflowRes.data;
+  const refreshRun = runRes.refresh;
 
   // Auto-refresh while the run is still in flight — these states change
   // server-side without user action, so polling every 5s keeps the page
-  // honest without overwhelming the API.
+  // honest without overwhelming the API. The spine's `workflow_run` signal
+  // marks the key stale between ticks, so this is the degraded-SSE fallback.
+  const runStatus = run?.status;
   useEffect(() => {
-    if (!run) return;
     if (
-      run.status !== "pending" &&
-      run.status !== "running" &&
-      run.status !== "awaiting_wait" &&
-      run.status !== "awaiting_input"
+      runStatus !== "pending" &&
+      runStatus !== "running" &&
+      runStatus !== "awaiting_wait" &&
+      runStatus !== "awaiting_input"
     ) {
       return;
     }
     const tid = window.setInterval(() => {
-      void load();
+      void refreshRun();
     }, 5000);
     return () => window.clearInterval(tid);
-  }, [run, load]);
+  }, [runStatus, refreshRun]);
 
-  // Server leg (realtime-sync): step/status transitions arrive as
-  // `workflow_run` signals — refetch immediately instead of waiting for the
-  // next 5s tick. The in-flight poll stays as the degraded-SSE fallback.
-  useEffect(() => {
-    const handler = (ev: Event) => {
-      const detail = (ev as CustomEvent<WorkflowRefreshDetail>).detail;
-      if (detail?.primitive === "workflow") return;
-      void load();
-    };
-    window.addEventListener(WORKFLOW_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(WORKFLOW_REFRESH_EVENT, handler);
-  }, [load]);
-
-  if (run === undefined || workflow === undefined) {
+  // A cold load that failed outright (no row, an error) reads as not found;
+  // an in-flight cold load paints the run-shaped frame (N4), with the
+  // workflow name already in place when its slot is warm.
+  const runFailed = run === undefined && runRes.error !== undefined;
+  const workflowFailed = workflow === undefined && workflowRes.error !== undefined;
+  if ((run === undefined || workflow === undefined) && !runFailed && !workflowFailed) {
     return (
-      <div className="w-full px-6 py-10 text-sm text-muted-foreground">
-        {t.workflowPage.builder.runDetail.loading}
-      </div>
+      <RunEntrySkeleton
+        detailHref={detailHref}
+        backLabel={t.workflowPage.builder.runDetail.backLink}
+        headingRun={t.workflowPage.builder.runDetail.headingRun}
+        workflowName={workflow?.name ?? null}
+        workflowDescription={workflow?.description ?? null}
+        stepTrailHeading={t.workflowPage.builder.runDetail.stepTrailHeading}
+      />
     );
   }
 
-  if (run === null || workflow === null) {
+  if (!run || !workflow) {
     return (
       <div className="w-full px-6 py-20 text-center flex flex-col gap-3">
         <div className="font-medium">
@@ -132,7 +135,7 @@ export default function WorkflowRunDetailPage({
     // overflow-auto output block) to zero height when the page overflows - the
     // page scrolls instead. pb-28 keeps the footer clear of the fixed chat dock.
     // (Same rationale as the workflow detail page.)
-    <div className="w-full h-full overflow-y-auto px-6 pt-6 pb-28 flex flex-col gap-6 [&>*]:shrink-0">
+    <div className="w-full h-full overflow-y-auto px-4 md:px-6 pt-4 md:pt-6 pb-28 flex flex-col gap-6 [&>*]:shrink-0">
       <BackButton
         href={detailHref}
         label={t.workflowPage.builder.runDetail.backLink}
@@ -241,6 +244,81 @@ export default function WorkflowRunDetailPage({
           data={run.vars}
           emptyLabel={t.workflowPage.builder.runDetail.sectionEmpty}
         />
+      </section>
+    </div>
+  );
+}
+
+// ── Cold-entry frame ─────────────────────────────────────────────────────
+
+/**
+ * The run page's own geometry in placeholder blocks (N4): Back, the "Run ·
+ * id" eyebrow, the workflow title (real when its slot is warm), the status
+ * pill, the four-cell meta grid and three step rows. Never a sentence.
+ */
+function RunEntrySkeleton({
+  detailHref,
+  backLabel,
+  headingRun,
+  workflowName,
+  workflowDescription,
+  stepTrailHeading,
+}: {
+  detailHref: string;
+  backLabel: string;
+  headingRun: string;
+  workflowName: string | null;
+  workflowDescription: string | null;
+  stepTrailHeading: string;
+}) {
+  return (
+    <div
+      className="w-full h-full overflow-y-auto px-4 md:px-6 pt-4 md:pt-6 pb-28 flex flex-col gap-6 [&>*]:shrink-0 animate-fade-in"
+      data-testid="workflow-run-entry"
+    >
+      <BackButton href={detailHref} label={backLabel} />
+      <header className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex flex-col gap-1 min-w-0">
+            <div className="flex items-center gap-1 text-xs uppercase tracking-wide text-muted-foreground">
+              <span>{headingRun} ·</span>
+              <Skeleton className="h-3 w-16" />
+            </div>
+            {workflowName ? (
+              <h1 className="text-xl font-semibold">{workflowName}</h1>
+            ) : (
+              <Skeleton className="h-6 w-56 max-w-full" />
+            )}
+            {workflowDescription ? (
+              <p className="text-sm text-muted-foreground">{workflowDescription}</p>
+            ) : null}
+          </div>
+          <Skeleton className="h-6 w-20 rounded" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-3 w-40 max-w-full" />
+          ))}
+        </div>
+      </header>
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold">{stepTrailHeading}</h2>
+        <ol className="flex flex-col gap-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <li
+              key={i}
+              className="border border-border rounded-md bg-card p-3 flex flex-col gap-2.5"
+            >
+              <div className="flex items-center gap-2">
+                <Skeleton className="h-4 w-7 rounded" />
+                <Skeleton className="h-3.5 w-24" />
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="ml-auto h-3 w-12" />
+              </div>
+              <Skeleton className="h-3 w-20" />
+            </li>
+          ))}
+        </ol>
       </section>
     </div>
   );

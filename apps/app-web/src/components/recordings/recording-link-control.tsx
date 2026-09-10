@@ -98,7 +98,10 @@ export function RecordingLinkControl({
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/20 px-3 py-2">
-      <span className="text-sm font-medium">{t.recordings.linkTitle}</span>
+      <div className="basis-full">
+        <span className="text-sm font-medium">{t.recordings.linkTitle}</span>
+        <p className="mt-1 text-xs text-muted-foreground">{t.recordings.pinTimestampHint}</p>
+      </div>
       {error ? (
         <span className="text-sm text-muted-foreground">{t.recordings.linkError}</span>
       ) : (

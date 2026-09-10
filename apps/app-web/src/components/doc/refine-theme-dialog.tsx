@@ -19,6 +19,7 @@ import { Dialog } from "@base-ui/react/dialog";
 
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 import { useCustomThemes } from "@/lib/custom-themes";
 import { DocThemeError, type DocTheme } from "@/lib/api/doc-themes";
 import { Button } from "../ui/button";
@@ -92,7 +93,7 @@ export function RefineThemeDialog({
             {t.settings.general.customThemeRefineDesc}
           </Dialog.Description>
           <textarea
-            autoFocus
+            autoFocus={!isPhoneViewport()}
             rows={2}
             value={value}
             placeholder={t.settings.general.customThemeRefinePlaceholder}
@@ -104,7 +105,7 @@ export function RefineThemeDialog({
                 void submit();
               }
             }}
-            className="mt-4 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+            className="mt-4 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[16px] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60 md:text-sm"
           />
           {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
           <div className="mt-6 flex justify-end gap-2">

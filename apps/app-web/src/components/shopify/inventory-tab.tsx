@@ -341,8 +341,10 @@ export function InventoryTab({ workspaceId }: { workspaceId: string }) {
               <span className="mr-1 text-xs font-medium text-muted-foreground">
                 {t.shopifyApp.sortBy}
               </span>
+              {/* 36px on a phone (M3); the compact 28px only from `md`. */}
               <Button
                 size="sm"
+                className="h-9 md:h-7"
                 variant={sort === "demand" ? "secondary" : "ghost"}
                 onClick={() => setSort("demand")}
               >
@@ -350,23 +352,27 @@ export function InventoryTab({ workspaceId }: { workspaceId: string }) {
               </Button>
               <Button
                 size="sm"
+                className="h-9 md:h-7"
                 variant={sort === "name" ? "secondary" : "ghost"}
                 onClick={() => setSort("name")}
               >
                 {t.shopifyApp.sortAtoZ}
               </Button>
               {packed.size ? (
-                <Button size="sm" variant="ghost" onClick={() => setPacked(new Set())}>
+                <Button size="sm" className="h-9 md:h-7" variant="ghost" onClick={() => setPacked(new Set())}>
                   {t.shopifyApp.clearTicks}
                 </Button>
               ) : null}
             </div>
           </div>
 
-          <div className="max-w-3xl overflow-hidden rounded-xl border border-border">
-            <table className="w-full text-sm">
+          {/* The numeric columns are fixed (~292px), so below their sum the
+              table scrolls inside this wrapper instead of clipping the
+              product column to a sliver (responsive contract M8). */}
+          <div className="max-w-3xl overflow-x-auto rounded-xl border border-border">
+            <table className="w-full min-w-[30rem] text-sm">
               <thead>
-                <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
                   <th className="w-9 px-2.5 py-1.5">
                     <span className="sr-only">{t.shopifyApp.packed}</span>
                   </th>
@@ -389,10 +395,17 @@ export function InventoryTab({ workspaceId }: { workspaceId: string }) {
                   const gap = shortfall(r.demand, cell);
                   const done = packed.has(key);
                   return (
+                    // The whole row ticks (responsive contract M3): packing
+                    // from a phone is this tab's own use case, and the 16px
+                    // checkbox was the row's only interactive element. The
+                    // checkbox keeps the keyboard path and stops its own click
+                    // from bubbling into a second toggle.
                     <tr
                       key={key}
+                      data-pack-row={key}
+                      onClick={() => togglePacked(key, !done)}
                       className={cn(
-                        "border-b border-border last:border-0",
+                        "cursor-pointer border-b border-border last:border-0 hover:bg-muted/30",
                         done
                           ? "opacity-45"
                           : gap
@@ -400,14 +413,17 @@ export function InventoryTab({ workspaceId }: { workspaceId: string }) {
                             : undefined,
                       )}
                     >
-                      <td className="px-2.5 py-2 align-top">
+                      <td
+                        className="px-2.5 py-3 align-top md:py-2"
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <Checkbox
                           checked={done}
                           onCheckedChange={(v) => togglePacked(key, v)}
                           aria-label={format(t.shopifyApp.packRow, { product: r.title })}
                         />
                       </td>
-                      <td className="px-2.5 py-2">
+                      <td className="px-2.5 py-3 md:py-2">
                         <span className={cn("block font-medium", done && "line-through")}>
                           {r.title}
                         </span>
@@ -417,14 +433,14 @@ export function InventoryTab({ workspaceId }: { workspaceId: string }) {
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-2.5 py-2 text-right align-top text-base font-semibold tabular-nums">
+                      <td className="px-2.5 py-3 text-right align-top text-base font-semibold tabular-nums md:py-2">
                         {r.demand}
                       </td>
                       {/* A variant we could not resolve shows a dash, never 0:
                           an unknown rendered as zero is how "we have none of
                           these" gets invented. A variant Shopify is not
                           tracking says so in words, for the same reason. */}
-                      <td className="px-2.5 py-2 text-right align-top tabular-nums">
+                      <td className="px-2.5 py-3 text-right align-top tabular-nums md:py-2">
                         {cell?.kind === "untracked" ? (
                           <span className="text-[12px] text-muted-foreground">
                             {t.shopifyApp.notTracked}
@@ -433,7 +449,7 @@ export function InventoryTab({ workspaceId }: { workspaceId: string }) {
                           (onHandOf(cell) ?? "-")
                         )}
                       </td>
-                      <td className="px-2.5 py-2 text-right align-top tabular-nums">
+                      <td className="px-2.5 py-3 text-right align-top tabular-nums md:py-2">
                         {gap ? gap : "-"}
                       </td>
                     </tr>

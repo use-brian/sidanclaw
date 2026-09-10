@@ -287,10 +287,10 @@ export function KbCaptureRules({
               </div>
               {canManage && (
                 <div className="flex shrink-0 items-center gap-1">
-                  <button type="button" onClick={() => startEdit(rule)} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label={format(copy.editAria, { name: rule.name })}>
+                  <button type="button" onClick={() => startEdit(rule)} className="inline-flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground sm:size-6" aria-label={format(copy.editAria, { name: rule.name })}>
                     <Pencil className="size-3.5" aria-hidden />
                   </button>
-                  <button type="button" onClick={() => void removeRule(rule)} className="rounded p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label={format(copy.deleteAria, { name: rule.name })}>
+                  <button type="button" onClick={() => void removeRule(rule)} className="inline-flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive sm:size-6" aria-label={format(copy.deleteAria, { name: rule.name })}>
                     <Trash2 className="size-3.5" aria-hidden />
                   </button>
                 </div>

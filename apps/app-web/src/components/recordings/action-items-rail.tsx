@@ -243,14 +243,19 @@ export function ActionItemsRail({
             }`}
           >
             {task.verified ? (
-              <input
-                type="checkbox"
-                checked={closed}
-                disabled={disabled}
-                onChange={() => void toggle(task)}
-                aria-label={task.title}
-                className="mt-0.5 shrink-0 cursor-pointer"
-              />
+              // The label is the touch target (M3): a bare native checkbox is
+              // ~14px, so the 44px label around it takes the tap on a phone
+              // and the box itself stays the desktop hit box.
+              <label className="flex min-h-11 shrink-0 cursor-pointer items-center px-1 md:mt-0.5 md:min-h-0 md:px-0">
+                <input
+                  type="checkbox"
+                  checked={closed}
+                  disabled={disabled}
+                  onChange={() => void toggle(task)}
+                  aria-label={task.title}
+                  className="shrink-0 cursor-pointer"
+                />
+              </label>
             ) : (
               <span
                 aria-hidden
@@ -279,7 +284,7 @@ export function ActionItemsRail({
                   <button
                     type="button"
                     onClick={() => seekTo(task.sourceStartMs as number)}
-                    className="shrink-0 tabular-nums text-xs text-muted-foreground hover:underline"
+                    className="shrink-0 py-2 tabular-nums text-xs text-muted-foreground hover:underline md:py-0"
                     aria-label={`${t.recordings.actionItemsSeek} ${formatStamp(task.sourceStartMs)}`}
                   >
                     @ {formatStamp(task.sourceStartMs)}
@@ -300,7 +305,7 @@ export function ActionItemsRail({
                   type="button"
                   disabled={disabled}
                   onClick={() => void confirm(task)}
-                  className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                  className="inline-flex h-9 items-center rounded border border-border px-3 text-xs hover:bg-muted disabled:opacity-50 md:h-6 md:px-2"
                 >
                   {t.recordings.actionItemsConfirm}
                 </button>
@@ -308,7 +313,7 @@ export function ActionItemsRail({
                   type="button"
                   disabled={disabled}
                   onClick={() => void dismiss(task)}
-                  className="rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+                  className="inline-flex h-9 items-center rounded px-3 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50 md:h-6 md:px-2"
                 >
                   {t.recordings.actionItemsDismiss}
                 </button>

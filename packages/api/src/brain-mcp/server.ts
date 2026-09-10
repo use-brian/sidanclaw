@@ -20,7 +20,7 @@ import { Router } from 'express'
 import { actionableInputSchema } from './actionable-input-schema.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import type { Tool, Embedder } from '@use-brian/core'
+import type { Tool, Embedder, AssociationTools } from '@use-brian/core'
 import type { BrainKeyStore } from '../db/brain-keys-store.js'
 import type { OAuthAuthorizationStore } from '../db/oauth-authorization-store.js'
 import type { BrainEpisodeIngestor } from '../ingest-port.js'
@@ -62,6 +62,7 @@ type Options = {
   memoryTools: BrainMemoryTools
   taskTools: BrainTaskTools
   crmTools: BrainCrmTools
+  associationTools?: AssociationTools
   retrievalTools: BrainRetrievalTools
   /**
    * Workspace filesystem tools. Optional — only the deployments that
@@ -195,7 +196,7 @@ export function brainMcpRoutes(opts: Options): Router {
     // agent write tools appear only when the bound primary assistant holds
     // the `configure` capability (resolved fresh per request so a revoked
     // grant takes effect immediately).
-    const agentActiveCapabilities = opts.agentTools
+    const agentActiveCapabilities = opts.agentTools || opts.associationTools || opts.crmTools
       ? await resolveAgentCapabilities(auth.workspaceId)
       : new Set<string>()
     const agentWritesEnabled =
@@ -252,6 +253,7 @@ export function brainMcpRoutes(opts: Options): Router {
       memoryTools: opts.memoryTools,
       taskTools: opts.taskTools,
       crmTools: opts.crmTools,
+      associationTools: opts.associationTools,
       retrievalTools: opts.retrievalTools,
       fileTools: opts.fileTools,
       brandTools: opts.brandTools,

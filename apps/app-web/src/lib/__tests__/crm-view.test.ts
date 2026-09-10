@@ -22,6 +22,8 @@ import {
   crmSectionCounts,
   crmUsesBoardPages,
   crmViewFromSearch,
+  duplicateContactNameKeys,
+  isDuplicateContactName,
   formatAmount,
   groupDealsByPipelineStage,
   groupRowsByCustomField,
@@ -521,5 +523,52 @@ describe("[COMP:app-web/crm-board] Deal board grouping", () => {
     expect(formatAmount(12_500, "EUR")).toBe("EUR 12.5k");
     expect(formatAmount(140_000, "JPY")).toBe("JPY 140k");
     expect(formatAmount(1_200_000)).toBe("USD 1.2M");
+  });
+});
+
+describe("[COMP:app-web/crm-view] duplicate-name flag", () => {
+  it("flags a name two contacts share, and leaves a unique name alone", () => {
+    const rows = [
+      contact({ id: "c1", name: "Cindy" }),
+      contact({ id: "c2", name: "Cindy" }),
+      contact({ id: "c3", name: "Ben Luk" }),
+    ];
+    const keys = duplicateContactNameKeys(rows);
+    expect(isDuplicateContactName("Cindy", keys)).toBe(true);
+    expect(isDuplicateContactName("Ben Luk", keys)).toBe(false);
+    expect(keys.size).toBe(1);
+  });
+
+  it("matches the way the server normalizes, so the flag agrees with the dialog", () => {
+    // findCrmDuplicateGroups case-folds, NFKD-normalizes and drops every
+    // non-alphanumeric character. A flag on a looser rule would mark pairs the
+    // review dialog then refuses to group, which reads as a broken flag.
+    const keys = duplicateContactNameKeys([
+      contact({ id: "c1", name: "Jordan Kim" }),
+      contact({ id: "c2", name: "  jordan-kim " }),
+    ]);
+    expect(keys.size).toBe(1);
+    expect(isDuplicateContactName("JORDAN KIM", keys)).toBe(true);
+  });
+
+  it("never flags a contact whose name is blank", () => {
+    // Two nameless rows are not evidence of anything; flagging them would send
+    // the user to a dialog that shows nothing to act on.
+    const keys = duplicateContactNameKeys([
+      contact({ id: "c1", name: "" }),
+      contact({ id: "c2", name: "   " }),
+    ]);
+    expect(keys.size).toBe(0);
+    expect(isDuplicateContactName("", keys)).toBe(false);
+  });
+
+  it("flags every member of a group larger than two", () => {
+    const keys = duplicateContactNameKeys([
+      contact({ id: "c1", name: "Cindy" }),
+      contact({ id: "c2", name: "Cindy" }),
+      contact({ id: "c3", name: "cindy" }),
+    ]);
+    expect(keys.size).toBe(1);
+    expect(isDuplicateContactName("Cindy", keys)).toBe(true);
   });
 });

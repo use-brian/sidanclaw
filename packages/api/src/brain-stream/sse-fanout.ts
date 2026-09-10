@@ -117,6 +117,23 @@ export type BrainPrimitive =
    * heartbeat touch.
    */
   | 'session'
+  /**
+   * A GOAL row changed — created, confirmed / armed, amended, narrowed,
+   * status-transitioned, completion-stamped or abandoned (the goals board,
+   * the Triage panel and the goal detail page —
+   * docs/architecture/features/goals.md). Those panels used to depend on a
+   * local `refetchTick` that only the acting tab could bump, so a draft the
+   * triage judge minted, or a goal an assistant confirmed from chat, never
+   * reached an open board until it was re-opened. Emission is store-seam only
+   * (`db/goals.ts` — `createGoal`, `updateGoalSystem`, `setGoalStatusSystem`,
+   * `transitionRunningGoalStatusSystem`, `stampGoalCompletionSystem`,
+   * `narrowGoalContextSystem`, `abandonGoalsForHostTaskSystem`): goal
+   * lifecycle is human / iteration-paced and bounded, the same reasoning as
+   * `session`. Never per tick claim (`tryClaimGoalForTick` flips
+   * `active -> running` on every acting-loop iteration) and never for the
+   * `until:event` park markers. `rowId` is the goal id, nothing else travels.
+   */
+  | 'goal'
 
 /** Alias reflecting the widened, workspace-wide scope. */
 export type WorkspacePrimitive = BrainPrimitive

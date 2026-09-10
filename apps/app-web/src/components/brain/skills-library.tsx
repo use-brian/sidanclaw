@@ -342,6 +342,8 @@ function SkillRow({
           <Button
             size="xs"
             variant="outline"
+            // 44px on touch (C 70 / M3): the inline trust action.
+            className="h-11 sm:h-6 px-3 sm:px-2"
             disabled={confirming || readOnly}
             onClick={onConfirm}
             aria-label={skillsCopy.confirm}

@@ -76,7 +76,7 @@
   display: grid;
   grid-template-columns: minmax(18rem, 0.9fr) minmax(23rem, 1.1fr);
   width: min(61rem, 100%);
-  min-height: min(39rem, calc(100vh - 4rem));
+  min-height: min(39rem, calc(100dvh - 4rem));
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--primary) 27%, var(--border));
   border-radius: 2rem;

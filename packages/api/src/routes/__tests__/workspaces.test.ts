@@ -44,6 +44,7 @@ import {
   setWorkspaceTranscriptionPrefs,
 } from '../../db/workspace-store.js'
 import { flushWorkspaceData, WorkspaceFlushNotOwnerError } from '../../db/workspace-flush.js'
+import { CrmOperationsError } from '@use-brian/core'
 
 const mockQuery = vi.mocked(query)
 const mockRls = vi.mocked(queryWithRLS)
@@ -346,6 +347,16 @@ describe('[COMP:api/workspaces-route] requireWorkspaceRole gate', () => {
     vi.mocked(flushWorkspaceData).mockRejectedValueOnce(new WorkspaceFlushNotOwnerError())
     const res = await request(app('u-1')).delete('/api/workspaces/ws-1/data')
     expect(res.status).toBe(403)
+  })
+
+  it('DELETE /:workspaceId/data exposes a suppression-policy blocker as 409', async () => {
+    workspaceStore.getRole.mockResolvedValueOnce('owner')
+    vi.mocked(flushWorkspaceData).mockRejectedValueOnce(new CrmOperationsError('conflict',
+      'Address suppression requires owner review.', { reason: 'suppression_policy_unconfigured' }))
+    const res = await request(app('u-1')).delete('/api/workspaces/ws-1/data')
+    expect(res.status).toBe(409)
+    expect(res.body).toEqual({ error: 'conflict',message: 'Address suppression requires owner review.',
+      details: { reason: 'suppression_policy_unconfigured' } })
   })
 
   it('POST /:workspaceId/members 404s an email with no matching user', async () => {

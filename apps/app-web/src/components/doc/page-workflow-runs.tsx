@@ -50,17 +50,12 @@ function isInFlight(runs: PageWorkflowRunSummary[]): boolean {
   return runs.some((r) => NON_TERMINAL.has(r.status));
 }
 
-export function PageWorkflowRuns({
-  pageId,
-  workspaceId,
-}: {
-  pageId: string;
-  workspaceId: string;
-}) {
-  const dict = useT();
-  const t = dict.docPage.workflowRuns;
-  const statusLabel = dict.workflowPage.builder.runStatus;
-  const locale = useLocale();
+/**
+ * The runs a page triggered: post-paint fetch, an in-flight poll, and the
+ * realtime `workflow_run` signal. Shared by the header chip and the `...`
+ * menu section that replaces it below `md` (report B row 32).
+ */
+function usePageWorkflowRuns(pageId: string, workspaceId: string) {
   const [runs, setRuns] = useState<PageWorkflowRunSummary[]>([]);
 
   const load = useCallback(async () => {
@@ -100,6 +95,25 @@ export function PageWorkflowRuns({
     return () => window.removeEventListener(WORKFLOW_REFRESH_EVENT, handler);
   }, [workspaceId, load]);
 
+  return runs;
+}
+
+export function PageWorkflowRuns({
+  pageId,
+  workspaceId,
+  className,
+}: {
+  pageId: string;
+  workspaceId: string;
+  /** Layout hook for the host (the page header hides the chip below `md`). */
+  className?: string;
+}) {
+  const dict = useT();
+  const t = dict.docPage.workflowRuns;
+  const statusLabel = dict.workflowPage.builder.runStatus;
+  const locale = useLocale();
+  const runs = usePageWorkflowRuns(pageId, workspaceId);
+
   if (runs.length === 0) return null;
 
   return (
@@ -110,7 +124,10 @@ export function PageWorkflowRuns({
             type="button"
             aria-label={t.badgeAria}
             title={t.badgeAria}
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted",
+              className,
+            )}
           >
             <Workflow className="size-4" aria-hidden />
             <span className="hidden sm:inline">{t.badge}</span>
@@ -120,7 +137,7 @@ export function PageWorkflowRuns({
           </button>
         }
       />
-      <DropdownMenuContent className="w-80 max-w-[90vw]">
+      <DropdownMenuContent className="w-80 max-w-[calc(100vw-1rem)]">
         <div className="px-2.5 py-2">
           <p className="text-sm font-semibold text-foreground">{t.title}</p>
           <p className="mt-1 text-xs text-muted-foreground">{t.hint}</p>
@@ -135,6 +152,41 @@ export function PageWorkflowRuns({
         />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * The same runs as a section of the page header's `...` menu (the phone home
+ * of the chip). Mounts with the menu, so the fetch happens on open; renders
+ * nothing when the page triggered no run.
+ */
+export function PageWorkflowRunsMenuSection({
+  pageId,
+  workspaceId,
+}: {
+  pageId: string;
+  workspaceId: string;
+}) {
+  const dict = useT();
+  const t = dict.docPage.workflowRuns;
+  const statusLabel = dict.workflowPage.builder.runStatus;
+  const locale = useLocale();
+  const runs = usePageWorkflowRuns(pageId, workspaceId);
+
+  if (runs.length === 0) return null;
+
+  return (
+    <div data-workflow-runs-menu-section>
+      <p className="px-2.5 pb-0.5 pt-2 text-xs font-semibold text-foreground">{t.title}</p>
+      <WorkflowRunsList
+        runs={runs}
+        workspaceId={workspaceId}
+        t={t}
+        statusLabel={statusLabel}
+        locale={locale}
+      />
+      <DropdownMenuSeparator />
+    </div>
   );
 }
 

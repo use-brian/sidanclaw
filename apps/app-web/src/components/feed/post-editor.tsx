@@ -27,6 +27,7 @@ import {
   Heart,
   Link2,
   MessageCircle,
+  MessageSquareText,
   Pencil,
   Plus,
   Repeat2,
@@ -46,6 +47,9 @@ import { BrandCheck } from "@/components/feed/brand-check";
 import { PostMediaTray } from "@/components/feed/post-media-tray";
 import type { PostMedia } from "@/lib/feed-media";
 import { TuningChatPanel } from "@/components/feed/tuning-chat-panel";
+import { PlanMobileSheet } from "@/components/feed/plan-mobile-sheet";
+import { useLgViewport } from "@/components/feed/use-lg-viewport";
+import { Skeleton } from "@/components/skeleton";
 import {
   PeekResizeHandle,
   usePeekResize,
@@ -55,20 +59,17 @@ import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { webAppUrl } from "@/lib/primary-auth";
 import {
   approveFeedDraft,
-  createFeedDraftSession,
   deleteFeedDraftSession,
   fetchFeedDraftSessions,
   fetchFeedSavedDrafts,
   markFeedReadyPostPosted,
   rejectFeedDraft,
   saveFeedSessionDraft,
-  updateFeedDraftSessionTitle,
   type FeedDraftSessionSummary,
   type FeedSavedDraft,
 } from "@/lib/api/feed";
 import {
   extractMessageText,
-  fetchSessionMessages,
 } from "@/lib/api/sessions";
 import { feedPath, feedPostPath, type FeedPlatform } from "@/lib/feed-nav";
 import {
@@ -88,6 +89,15 @@ import {
   type ProposedDraft,
 } from "@/lib/feed-post-versions";
 import { useGlobalDockRecorder } from "@/lib/recorder/dock-recorder-bridge";
+
+import { useIsOffline } from "@/lib/offline/use-offline-sync";
+import { feedCachedJson } from "@/lib/offline/feed-cache";
+import {
+  FEED_LOCAL_CHANGED, blankFeedContent, createLocalFeedPost, loadFeedWorkingCopy,
+  patchFeedWorkingCopy, readLocalFeedPost, forkLocalFeedPost,
+  readFeedNewPostForm, writeFeedNewPostForm,
+  type FeedWorkingContent, type LocalFeedPost,
+} from "@/lib/offline/feed-offline";
 
 const PROPOSE_DRAFTS_TOOL = "proposeDrafts";
 
@@ -227,33 +237,39 @@ function NewPost({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formats = postFormatsForPlatform(platform);
+  const { canDraft } = useFeedWorkspace();
+  const [formReady, setFormReady] = useState(false);
+  const formRef = useRef(blankFeedContent());
+  useEffect(() => {
+    let cancelled = false;
+    void readFeedNewPostForm(assistantId, platform).then((form) => {
+      if (cancelled) return;
+      if (form) {
+        formRef.current = form;
+        setTitle(form.title); setBrief(form.privateBrief); setPostFormat(form.postFormat);
+      }
+      setFormReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [assistantId, platform]);
+  function saveForm(patch: Partial<FeedWorkingContent>) {
+    formRef.current = { ...formRef.current, ...patch };
+    void writeFeedNewPostForm(assistantId, platform, formRef.current)
+      .catch(() => setError(te.localSaveFailed));
+  }
 
   async function create() {
     setBusy(true);
     setError(null);
     try {
-      const trimmed = title.trim();
-      const result = await createFeedDraftSession(assistantId, {
-        platform,
-        ...(trimmed ? { title: trimmed } : {}),
-        ...(
-          brief.trim() || postFormat !== "post"
-            ? {
-                seed: {
-                  kind: "freeform" as const,
-                  format: postFormat,
-                  ...(brief.trim() ? { brief: brief.trim() } : {}),
-                },
-              }
-            : {}
-        ),
+      if (!canDraft) return;
+      const post = await createLocalFeedPost(assistantId, platform, {
+        ...blankFeedContent(), title: title.trim(), privateBrief: brief, postFormat,
       });
-      if (!result.ok) {
-        setError(result.error ?? te.createFailed);
-        return;
-      }
-      notifyFeedPostsChanged();
-      router.push(feedPostPath(workspaceId, platform, result.session.id));
+      await writeFeedNewPostForm(assistantId, platform, blankFeedContent()).catch(() => {});
+      router.push(feedPostPath(workspaceId, platform, post.session.id));
+    } catch {
+      setError(te.localSaveFailed);
     } finally {
       setBusy(false);
     }
@@ -291,18 +307,20 @@ function NewPost({
               <input
                 id="feed-post-title"
                 type="text"
+                maxLength={200}
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => { setTitle(e.target.value); saveForm({ title: e.target.value }); }}
                 placeholder={te.newPostTitlePlaceholder}
-                disabled={busy}
-                className="h-10 w-full rounded-xl border border-border/70 bg-background px-3.5 text-sm shadow-xs disabled:opacity-50"
+                disabled={busy || !formReady || !canDraft}
+                className="h-10 w-full rounded-xl border border-border/70 bg-background px-3.5 text-[16px] md:text-sm shadow-xs disabled:opacity-50"
               />
             </div>
 
             <FormatPicker
               platform={platform}
               value={postFormat}
-              onChange={setPostFormat}
+              disabled={busy || !formReady || !canDraft}
+              onChange={(next) => { setPostFormat(next); saveForm({ postFormat: next }); }}
             />
 
             <div className="space-y-2">
@@ -317,11 +335,11 @@ function NewPost({
               <textarea
                 id="feed-post-brief"
                 value={brief}
-                onChange={(e) => setBrief(e.target.value)}
+                onChange={(e) => { setBrief(e.target.value); saveForm({ privateBrief: e.target.value }); }}
                 placeholder={te.newPostBriefPlaceholder}
-                disabled={busy}
+                disabled={busy || !formReady || !canDraft}
                 rows={6}
-                className="w-full resize-y rounded-xl border border-border/70 bg-background px-3.5 py-3 text-sm leading-relaxed shadow-xs disabled:opacity-50"
+                className="w-full resize-y rounded-xl border border-border/70 bg-background px-3.5 py-3 text-[16px] md:text-sm leading-relaxed shadow-xs disabled:opacity-50"
               />
             </div>
 
@@ -332,7 +350,7 @@ function NewPost({
             <Button
               type="button"
               onClick={() => void create()}
-              disabled={busy}
+              disabled={busy || !formReady || !canDraft}
               className="bg-foreground text-background !shadow-none [background-image:none] hover:bg-foreground/90 hover:!shadow-none"
             >
               {busy ? te.creating : te.createPost}
@@ -385,6 +403,11 @@ function PostPane({
   const te = t.postEditor;
   const router = useRouter();
   const dockRecorder = useGlobalDockRecorder();
+  // Below `lg` the refine chat is a FAB -> bottom sheet instead of the
+  // docked rail (responsive contract M5); mount-gated so exactly one panel
+  // subscribes to the post's session.
+  const isLg = useLgViewport();
+  const [refineOpen, setRefineOpen] = useState(false);
   // User-adjustable refine-rail width — the shared peek-resize behavior
   // (drag the left edge, double-click to reset, persisted per key).
   const {
@@ -413,6 +436,26 @@ function PostPane({
     description: "",
   });
   const compositionLoadedRef = useRef(false);
+  const offline = useIsOffline();
+  const [localPost, setLocalPost] = useState<LocalFeedPost | null>(null);
+  const [localSaveError, setLocalSaveError] = useState(false);
+  const [localSaving, setLocalSaving] = useState(0);
+  const persist = useCallback(async (patch: Partial<FeedWorkingContent>) => {
+    setLocalSaving(n => n + 1);
+    try {
+      const next = await patchFeedWorkingCopy(assistantId, sessionId, patch);
+      setLocalPost(next); setLocalSaveError(false); return true;
+    } catch { setLocalSaveError(true); return false; }
+    finally { setLocalSaving(n => n - 1); }
+  }, [assistantId, sessionId]);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => { void readLocalFeedPost(assistantId, sessionId).then(post => {
+      if (!cancelled) setLocalPost(post);
+    }); };
+    window.addEventListener(FEED_LOCAL_CHANGED, refresh);
+    return () => { cancelled = true; window.removeEventListener(FEED_LOCAL_CHANGED, refresh); };
+  }, [assistantId, sessionId]);
   const richCopyRef = useRef<HTMLDivElement>(null);
   const cancelTitleBlurRef = useRef(false);
 
@@ -427,7 +470,8 @@ function PostPane({
         () => [] as FeedDraftSessionSummary[],
       ),
       fetchFeedSavedDrafts(assistantId, sessionId),
-      fetchSessionMessages(sessionId),
+      readLocalFeedPost(assistantId, sessionId).then(post => post?.newSession ? [] :
+        feedCachedJson<Array<{ role: string; content: unknown }>>(`/api/sessions/${sessionId}/messages`).catch(() => [])),
     ]);
     const found = sessions.find((s) => s.id === sessionId) ?? null;
     if (!found) setError(te.loadFailed);
@@ -457,6 +501,28 @@ function PostPane({
       }
       if (supported === "article" && savedComposition?.article) {
         setArticle(savedComposition.article);
+      }
+      if (found) {
+        try {
+          const copy = await loadFeedWorkingCopy(assistantId, found, {
+            title: displayPostTitle(found.title), privateBrief: seedIntent?.brief ?? "",
+            text: savedComposition?.postedText ?? savedComposition?.draftText ?? replayProposals(rows).at(-1)?.text ?? "",
+            postFormat: supported, threadSegments: savedComposition?.threadSegments ?? ["", ""],
+            article: savedComposition?.article ?? blankFeedContent().article, media: savedComposition?.media ?? [],
+          });
+          setLocalPost(copy);
+          // Saved review/posted versions retain their exact reviewed content.
+          const resolved = postQueueStatus(found);
+          if (resolved !== "ready" && resolved !== "posted") {
+            const content = copy.content;
+            const authored = content.textEdited === true;
+            setOwnText(authored ? content.text : null);
+            setSelectedId(authored ? "mine" : null);
+            setPostFormat(content.postFormat); setPrivateBrief(content.privateBrief);
+            setThreadSegments(content.threadSegments); setArticle(content.article); setMedia(content.media);
+            setSession({ ...found, title: `[${platform}] ${content.title || "New draft"}` });
+          }
+        } catch { setLocalSaveError(true); }
       }
       compositionLoadedRef.current = true;
     }
@@ -489,14 +555,19 @@ function PostPane({
       }),
     [proposals, ownText, committed],
   );
-  const selected = resolveSelectedVersion(versions, selectedId);
+  // Empty text is an authored working copy too. The version picker omits
+  // empty chips, but clearing a caption must not resurrect a proposal.
+  const selected: ReturnType<typeof resolveSelectedVersion> = selectedId === "mine" && ownText !== null
+    ? { id: "mine", origin: "operator" as const, text: ownText }
+    : resolveSelectedVersion(versions, selectedId);
   const status: PostQueueStatus = session
     ? postQueueStatus(session)
     : "drafting";
 
   // A committed post is read-only: editing something already approved or
   // posted would let the copy drift away from what was actually reviewed.
-  const readOnly = status === "ready" || status === "posted";
+  const readOnly = status === "ready" || status === "posted" || !workspace.canDraft;
+  const remoteBlocked = offline || !localPost || localPost.dirty || localSaveError || localSaving > 0;
   // D32. Media lives beside the caption, not inside formatData: saveDraft
   // rewrites formatData wholesale from postFormat, so a Post<->Thread switch
   // would silently erase it.
@@ -512,43 +583,33 @@ function PostPane({
     }
   }, [postFormat, selected?.text, threadSegments]);
 
-  /** Idle autosave from the caption editor. Writes the operator's fork. */
-  const saveCaption = useCallback(
-    async (text: string) => {
-      const result = await saveFeedSessionDraft(assistantId, sessionId, {
-        text,
-        platform,
-        postFormat,
-        media,
-        ...(postFormat === "thread" ? { threadSegments } : {}),
-        ...(postFormat === "article" ? { article } : {}),
-      });
-      if (result.ok) {
-        notifyFeedPostsChanged();
-        void load();
-        return true;
-      }
-      setError(result.error ?? te.actionFailed);
-      return false;
-    },
-    [assistantId, sessionId, platform, postFormat, media, threadSegments, article, load, te.actionFailed],
-  );
-
   async function commitVersion() {
-    const text = postFormat === "thread"
-      ? threadSegments.map((part) => part.trim()).filter(Boolean).join("\n\n")
-      : selected?.text ?? "";
+    if (remoteBlocked || readOnly) return;
+    const text = postFormat === "thread" ? threadSegments.join("\n\n") : selected?.text ?? "";
     if (!text) return;
     setBusy(true);
     try {
-      const ok = await saveCaption(text);
-      if (ok) setOwnText(null);
-    } finally {
-      setBusy(false);
-    }
+      const result = await saveFeedSessionDraft(assistantId, sessionId, {
+        text, platform, postFormat, media,
+        ...(postFormat === "thread" ? { threadSegments } : {}),
+        ...(postFormat === "article" ? { article } : {}),
+      });
+      if (!result.ok) { setError(result.error ?? te.actionFailed); return; }
+      notifyFeedPostsChanged(); await load();
+    } catch { setError(te.actionFailed); }
+    finally { setBusy(false); }
+  }
+
+  async function saveAsNewPost() {
+    if (!localPost || !workspace.canDraft) return;
+    try {
+      const copy = await forkLocalFeedPost(localPost);
+      router.push(feedPostPath(workspaceId, platform, copy.session.id));
+    } catch { setLocalSaveError(true); }
   }
 
   async function act(kind: "approve" | "reject" | "posted") {
+    if (remoteBlocked) return;
     const target = drafts.find((d) =>
       kind === "posted" ? d.status === "ready" : d.status === "pending",
     );
@@ -578,7 +639,7 @@ function PostPane({
             onChange={(e) => {
               permalink = e.target.value;
             }}
-            className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus:outline-none"
+            className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm focus:outline-none"
           />
         ),
       });
@@ -613,6 +674,7 @@ function PostPane({
   }
 
   async function removePost() {
+    if (remoteBlocked) return;
     const ok = await confirmDialog({
       title: te.deleteTitle,
       description: te.deleteBody,
@@ -651,17 +713,9 @@ function PostPane({
     setTitleSaving(true);
     setError(null);
     try {
-      const result = await updateFeedDraftSessionTitle(
-        assistantId,
-        sessionId,
-        title,
-      );
-      if (!result.ok) {
-        setError(result.error ?? te.actionFailed);
-        return;
-      }
-      setSession((current) => current ? { ...current, title: result.title } : current);
-      setTitleDraft(displayPostTitle(result.title));
+      if (!await persist({ title })) return;
+      setSession((current) => current ? { ...current, title: `[${platform}] ${title}` } : current);
+      setTitleDraft(title);
       setTitleDirty(false);
       notifyFeedPostsChanged();
     } finally {
@@ -756,9 +810,23 @@ function PostPane({
   );
 
   if (loading) {
+    // The editor's silhouette (header row, status strip, the caption card)
+    // rather than a sentence (instant-navigation N4); the composition read is
+    // the one wait this surface still pays, and it should look like a frame.
     return (
-      <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-        {te.loading}
+      <div aria-hidden data-post-editor-skeleton className="animate-fade-in p-4 sm:p-6 xl:p-8">
+        <div className="space-y-6">
+          <div className="flex items-center gap-3 border-b border-border/60 pb-4">
+            <Skeleton className="size-8 rounded-xl" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <Skeleton className="h-8 w-28 rounded-lg" />
+          </div>
+          <Skeleton className="h-11 w-full rounded-xl" />
+          <Skeleton className="h-52 w-full rounded-xl" />
+        </div>
       </div>
     );
   }
@@ -790,7 +858,7 @@ function PostPane({
                         type="text"
                         value={titleDirty ? titleDraft : displayPostTitle(session.title)}
                         maxLength={200}
-                        disabled={titleSaving}
+                        disabled={titleSaving || readOnly}
                         aria-label={te.editTitle}
                         title={te.editTitle}
                         onFocus={() => {
@@ -799,6 +867,7 @@ function PostPane({
                         onChange={(event) => {
                           setTitleDraft(event.target.value);
                           setTitleDirty(true);
+                          void persist({ title: event.target.value });
                         }}
                         onBlur={() => {
                           if (cancelTitleBlurRef.current) {
@@ -816,10 +885,11 @@ function PostPane({
                             cancelTitleBlurRef.current = true;
                             setTitleDraft(displayPostTitle(session.title));
                             setTitleDirty(false);
+                            void persist({ title: displayPostTitle(session.title) });
                             event.currentTarget.blur();
                           }
                         }}
-                        className="h-7 min-w-0 w-full truncate rounded-md border border-transparent bg-transparent px-1 text-[15px] font-semibold outline-none transition-colors hover:border-border/70 focus:border-border focus:bg-background disabled:opacity-60"
+                        className="h-9 md:h-7 min-w-0 w-full truncate rounded-md border border-transparent bg-transparent px-1 text-[16px] md:text-[15px] font-semibold outline-none transition-colors hover:border-border/70 focus:border-border focus:bg-background disabled:opacity-60"
                       />
                       <Pencil className="size-3 shrink-0 text-muted-foreground/70" aria-hidden />
                     </div>
@@ -836,7 +906,7 @@ function PostPane({
               <div
                 role="group"
                 aria-label={te.viewModeAria}
-                className="inline-flex h-8 items-center rounded-lg border border-border/70 bg-muted/35 p-0.5"
+                className="inline-flex h-10 md:h-8 items-center rounded-lg border border-border/70 bg-muted/35 p-0.5"
               >
                 {(["edit", "preview"] as const).map((mode) => (
                   <button
@@ -845,7 +915,7 @@ function PostPane({
                     onClick={() => setViewMode(mode)}
                     aria-pressed={viewMode === mode}
                     className={cn(
-                      "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+                      "h-9 md:h-7 rounded-md px-3 md:px-2.5 text-[11px] font-medium transition-colors",
                       viewMode === mode
                         ? "bg-background text-foreground shadow-xs"
                         : "text-muted-foreground hover:text-foreground",
@@ -862,7 +932,7 @@ function PostPane({
                     size="sm"
                     type="button"
                     onClick={() => void commitVersion()}
-                    disabled={busy || !compositionValid}
+                    disabled={busy || remoteBlocked || !compositionValid}
                     className="bg-foreground text-background !shadow-none [background-image:none] hover:bg-foreground/90 hover:!shadow-none"
                   >
                     {te.useThisVersion}
@@ -874,7 +944,7 @@ function PostPane({
                         size="sm"
                         type="button"
                         onClick={() => void commitVersion()}
-                        disabled={busy || !compositionValid}
+                        disabled={busy || remoteBlocked || !compositionValid}
                         className="bg-foreground text-background !shadow-none [background-image:none] hover:bg-foreground/90 hover:!shadow-none"
                       >
                         {te.saveChanges}
@@ -884,14 +954,14 @@ function PostPane({
                       size="sm"
                       type="button"
                       onClick={() => void act("approve")}
-                      disabled={busy || compositionDirty}
+                      disabled={busy || remoteBlocked || compositionDirty}
                       title={compositionDirty ? te.saveBeforeApprove : undefined}
                       className="bg-foreground text-background !shadow-none [background-image:none] hover:bg-foreground/90 hover:!shadow-none"
                     >
                       <Check className="size-3.5" aria-hidden />
                       {te.approve}
                     </Button>
-                    <Button size="sm" variant="outline" type="button" onClick={() => void act("reject")} disabled={busy}>
+                    <Button size="sm" variant="outline" type="button" onClick={() => void act("reject")} disabled={busy || remoteBlocked}>
                       <X className="size-3.5" aria-hidden />
                       {te.reject}
                     </Button>
@@ -901,7 +971,7 @@ function PostPane({
                     size="sm"
                     type="button"
                     onClick={() => void act("posted")}
-                    disabled={busy}
+                    disabled={busy || remoteBlocked}
                     className="bg-foreground text-background !shadow-none [background-image:none] hover:bg-foreground/90 hover:!shadow-none"
                   >
                     {te.markPosted}
@@ -911,11 +981,22 @@ function PostPane({
                   {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
                   {copied ? te.copied : te.copyCaption}
                 </Button>
-                <Button variant="outline" size="icon" type="button" onClick={() => void removePost()} disabled={busy} aria-label={te.delete} title={te.delete} className="size-8 text-muted-foreground hover:text-destructive">
+                <Button variant="outline" size="icon" type="button" onClick={() => void removePost()} disabled={busy || remoteBlocked} aria-label={te.delete} title={te.delete} className="size-9 md:size-8 text-muted-foreground hover:text-destructive">
                   <Trash2 className="size-3.5" aria-hidden />
                 </Button>
               </div>
             </header>
+
+            <div role="status" className="rounded-xl border border-border/60 bg-muted/25 p-3 text-sm">
+              {localSaveError ? te.localSaveFailed : localSaving ? te.saving :
+                localPost?.error === "conflict" ? te.syncConflict : localPost?.error ? te.syncBlocked :
+                localPost?.dirty ? te.savedLocally : te.synced}
+              {(localPost?.error || (readOnly && localPost?.dirty)) && workspace.canDraft ? (
+                <Button type="button" variant="outline" className="ml-3" onClick={() => void saveAsNewPost()}>
+                  {te.saveAsNewPost}
+                </Button>
+              ) : null}
+            </div>
 
             {error ? (
               <div role="alert" className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
@@ -950,8 +1031,10 @@ function PostPane({
                       value={postFormat}
                       onChange={(next) => {
                         setPostFormat(next);
+                        void persist({ postFormat: next });
                         if (next === "thread" && threadSegments.every((part) => !part)) {
                           setThreadSegments([selected?.text ?? "", ""]);
+                          void persist({ threadSegments: [selected?.text ?? "", ""] });
                         }
                       }}
                       compact
@@ -970,10 +1053,10 @@ function PostPane({
                         <button
                           key={version.id}
                           type="button"
-                          onClick={() => setSelectedId(version.id)}
+                          onClick={() => { setSelectedId(version.id); if (!readOnly) void persist({ text: version.text }); }}
                           aria-pressed={active}
                           className={cn(
-                            "inline-flex h-7 items-center rounded-full border px-2.5 text-[11px] font-medium transition-colors",
+                            "inline-flex h-9 md:h-7 items-center rounded-full border px-3 md:px-2.5 text-[11px] font-medium transition-colors",
                             active
                               ? "border-transparent bg-foreground text-background"
                               : "border-border bg-background text-muted-foreground hover:bg-muted",
@@ -992,7 +1075,7 @@ function PostPane({
                   <ThreadComposer
                     segments={threadSegments}
                     readOnly={readOnly}
-                    onChange={setThreadSegments}
+                    onChange={(next) => { setThreadSegments(next); void persist({ threadSegments: next }); }}
                   />
                 ) : (
                   <div className="rounded-xl border border-border/60 bg-card p-5 shadow-xs transition focus-within:border-ring [&_:focus-visible]:shadow-none">
@@ -1003,9 +1086,11 @@ function PostPane({
                       onChange={(next) => {
                         setOwnText(next);
                         setSelectedId("mine");
+                        void persist({ text: next });
                       }}
-                      onSave={saveCaption}
-                      deferSave={postFormat === "article"}
+                      onSave={async () => true}
+                      deferSave
+                      saveHint={te.autosaveHint}
                     />
                   </div>
                 )}
@@ -1014,7 +1099,7 @@ function PostPane({
                   <ArticleFields
                     value={article}
                     readOnly={readOnly}
-                    onChange={setArticle}
+                    onChange={(next) => { setArticle(next); void persist({ article: next }); }}
                   />
                 ) : null}
 
@@ -1043,26 +1128,10 @@ function PostPane({
                   platform={platform}
                   media={media}
                   imageBrief={selected?.imageBrief ?? null}
-                  readOnly={readOnly}
+                  readOnly={readOnly || offline}
                   onChange={(next) => {
                     setMedia(next);
-                    // Media is a deliberate act, so it persists immediately
-                    // rather than waiting for the caption's idle autosave.
-                    void saveFeedSessionDraft(assistantId, sessionId, {
-                      text: selected?.text ?? "",
-                      platform,
-                      postFormat,
-                      media: next,
-                      ...(postFormat === "thread" ? { threadSegments } : {}),
-                      ...(postFormat === "article" ? { article } : {}),
-                    }).then((r) => {
-                      if (r.ok) {
-                        notifyFeedPostsChanged();
-                        void load();
-                      } else {
-                        setError(r.error ?? te.actionFailed);
-                      }
-                    });
+                    void persist({ media: next });
                   }}
                 />
                 </>
@@ -1099,34 +1168,73 @@ function PostPane({
         </div>
       </main>
 
-      <aside className="relative h-[min(680px,85dvh)] min-h-[520px] border-t border-border/60 lg:h-auto lg:min-h-0 lg:border-l lg:border-t-0">
-        <div className="hidden lg:block">
-          <PeekResizeHandle resizing={railResizing} {...railHandleProps} />
-        </div>
-        <TuningChatPanel
-          docked
-          assistantId={assistantId}
-          assistantName={assistantName}
-          iconSeed={assistantIconSeed}
-          workspaceId={workspaceId}
-          sessionId={sessionId}
-          title={te.chatTitle}
-          composerPlaceholder={te.chatPlaceholder}
-          headline={te.chatHeadline}
-          emptyTitle={te.chatEmptyTitle}
-          emptyBody={te.chatEmptyBody}
-          emptySuggestionsLabel={te.chatTry}
-          suggestions={[
-            te.chatSuggestion1,
-            te.chatSuggestion2,
-            te.chatSuggestion3,
-          ]}
-          onTurnComplete={() => void load()}
-          renderPlanGate={planGate}
-          dockRecorder={dockRecorder ?? undefined}
-          ownsDockRecorderTarget
-        />
-      </aside>
+      {/* The refine chat, hosted ONCE: the resizable rail at `lg+`, and below
+          it a FAB -> bottom sheet (responsive contract M5, the
+          `MobileChatDrawer` shape) instead of a 520-680px block under the
+          whole editor with its composer beneath the keyboard. `keepMounted`
+          keeps a streaming turn alive while the sheet is closed; the `isLg`
+          gate keeps exactly one panel subscribed to the post's session. */}
+      {(() => {
+        const refinePanel =
+          offline || localPost?.newSession ? (
+            <p className="p-5 text-sm text-muted-foreground">{te.refineNeedsConnection}</p>
+          ) : (
+            <TuningChatPanel
+              docked
+              assistantId={assistantId}
+              assistantName={assistantName}
+              iconSeed={assistantIconSeed}
+              workspaceId={workspaceId}
+              sessionId={sessionId}
+              title={te.chatTitle}
+              composerPlaceholder={te.chatPlaceholder}
+              headline={te.chatHeadline}
+              emptyTitle={te.chatEmptyTitle}
+              emptyBody={te.chatEmptyBody}
+              emptySuggestionsLabel={te.chatTry}
+              suggestions={[
+                te.chatSuggestion1,
+                te.chatSuggestion2,
+                te.chatSuggestion3,
+              ]}
+              onTurnComplete={() => void load()}
+              renderPlanGate={planGate}
+              dockRecorder={dockRecorder ?? undefined}
+              ownsDockRecorderTarget
+            />
+          );
+        return isLg ? (
+          <aside className="relative hidden border-border/60 lg:block lg:h-auto lg:min-h-0 lg:border-l">
+            <PeekResizeHandle resizing={railResizing} {...railHandleProps} />
+            {refinePanel}
+          </aside>
+        ) : (
+          <div className="lg:hidden" data-post-refine-mobile-host>
+            <button
+              type="button"
+              onClick={() => setRefineOpen(true)}
+              aria-label={te.refineOpenAria}
+              aria-expanded={refineOpen}
+              className={cn(
+                "fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 z-30",
+                "inline-flex h-14 w-14 items-center justify-center rounded-full bg-action text-action-foreground shadow-lg",
+                "transition-[opacity,transform] duration-150 ease-out",
+                refineOpen ? "pointer-events-none scale-90 opacity-0" : "scale-100 opacity-100",
+              )}
+            >
+              <MessageSquareText className="size-5" aria-hidden />
+            </button>
+            <PlanMobileSheet
+              open={refineOpen}
+              keepMounted
+              title={te.chatTitle}
+              onClose={() => setRefineOpen(false)}
+            >
+              <div className="absolute inset-0">{refinePanel}</div>
+            </PlanMobileSheet>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1136,11 +1244,13 @@ function FormatPicker({
   value,
   onChange,
   compact = false,
+  disabled = false,
 }: {
   platform: FeedPlatform;
   value: FeedPostFormat;
   onChange: (next: FeedPostFormat) => void;
   compact?: boolean;
+  disabled?: boolean;
 }) {
   const te = useT().feedPage.postEditor;
   const formats = postFormatsForPlatform(platform);
@@ -1170,10 +1280,11 @@ function FormatPicker({
               key={option}
               type="button"
               onClick={() => onChange(option)}
+              disabled={disabled}
               aria-pressed={active}
               className={cn(
                 "rounded-xl border text-left transition-colors",
-                compact ? "h-7 px-2.5 text-[11px]" : "p-3.5",
+                compact ? "h-9 md:h-7 px-3 md:px-2.5 text-[11px]" : "p-3.5",
                 active
                   ? "border-foreground bg-foreground text-background"
                   : "border-border/70 bg-background text-foreground hover:bg-muted/50",
@@ -1240,7 +1351,7 @@ function ThreadComposer({
               }}
               rows={4}
               placeholder={te.captionPlaceholder}
-              className="w-full resize-y bg-transparent text-[15px] leading-relaxed placeholder:text-muted-foreground/50 focus-visible:shadow-none"
+              className="w-full resize-y bg-transparent text-[16px] md:text-[15px] leading-relaxed placeholder:text-muted-foreground/50 focus-visible:shadow-none"
             />
           </div>
         );
@@ -1277,7 +1388,7 @@ function ArticleFields({
             readOnly={readOnly}
             onChange={(event) => onChange({ ...value, sourceUrl: event.target.value })}
             placeholder={te.articleSourcePlaceholder}
-            className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-sm"
+            className="h-9 w-full rounded-lg border border-border/70 bg-background pl-9 pr-3 text-[16px] md:text-sm"
           />
         </div>
         <span className="block text-[11px] leading-relaxed text-muted-foreground">
@@ -1292,7 +1403,7 @@ function ArticleFields({
           readOnly={readOnly}
           onChange={(event) => onChange({ ...value, title: event.target.value })}
           placeholder={te.articleTitlePlaceholder}
-          className="h-9 w-full rounded-lg border border-border/70 bg-background px-3 text-sm"
+          className="h-9 w-full rounded-lg border border-border/70 bg-background px-3 text-[16px] md:text-sm"
         />
       </label>
       <label className="block space-y-1.5">
@@ -1303,7 +1414,7 @@ function ArticleFields({
           onChange={(event) => onChange({ ...value, description: event.target.value })}
           placeholder={te.articleDescriptionPlaceholder}
           rows={3}
-          className="w-full resize-y rounded-lg border border-border/70 bg-background px-3 py-2 text-sm leading-relaxed"
+          className="w-full resize-y rounded-lg border border-border/70 bg-background px-3 py-2 text-[16px] md:text-sm leading-relaxed"
         />
       </label>
     </div>

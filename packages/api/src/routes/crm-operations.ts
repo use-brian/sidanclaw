@@ -7,18 +7,36 @@
 import { Router, type Request, type Response } from 'express'
 import { z } from 'zod'
 import {
+  AssociationPlanInputSchema,
+  AssociationEventInputSchema,
+  CrmConfigCommandSchema,
   CreateCrmIntakeCredentialCommandSchema,
   CrmDeliveryChannelSchema,
   GrantCrmEntitlementCommandSchema,
   CrmOperationsError,
+  CrmIntegrationScopeError,
   CrmOperationsStableKeySchema,
   CrmOperationsUuidSchema,
+  CrmWordingLocaleSchema,
+  CrmPageQuerySchema,
   RecordCrmConsentCommandSchema,
   RecordCrmParticipationCommandSchema,
   RecordCrmSuppressionCommandSchema,
   SaveCrmIntakeDefinitionCommandSchema,
   SaveCrmConsentPurposeCommandSchema,
   SaveCrmSegmentCommandSchema,
+  SaveCrmPrivacyPolicyCommandSchema,
+  PreviewCrmImportFileCleanupCommandSchema,
+  ExecuteCrmImportFileCleanupCommandSchema,
+  PreviewCrmRetentionCommandSchema,
+  ExecuteCrmRetentionCommandSchema,
+  PreviewCrmContactErasureCommandSchema,
+  EraseCrmContactWithPreviewCommandSchema,
+  ReleaseCrmAddressSuppressionCommandSchema,
+  SaveCrmManagedMailboxPolicyCommandSchema,
+  SaveCrmMailboxIntegrationGrantCommandSchema,
+  SendCrmMessageCommandSchema,
+  type CrmDeliveryServicePort,
   UpdateCrmSubmissionCommandSchema,
   UpdateCrmEntitlementCommandSchema,
   UpdateCrmParticipationCommandSchema,
@@ -39,6 +57,14 @@ import {
   listCrmOperationsAudit,
   pruneCrmOperationsRetention,
 } from '../crm-operations/privacy.js'
+import { sendCrmPrivacyExport } from '../crm-operations/privacy-export.js'
+import { readCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { createCrmImportFileCleanupService } from '../crm-operations/import-file-cleanup-service.js'
+import { listCrmRetentionRuns } from '../crm-operations/retention-service.js'
+import { listCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
+import { readCrmManagedMailboxPolicy, readCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
+import { query } from '../db/client.js'
+import { CrmPipelinesQuerySchema, CrmRecordFieldsQuerySchema } from '../db/crm-config-catalog.js'
 
 const SaveDefinitionBody = SaveCrmIntakeDefinitionCommandSchema.omit({ kind: true }).strict()
 const CreateCredentialBody = CreateCrmIntakeCredentialCommandSchema.omit({ kind: true }).strict()
@@ -55,6 +81,7 @@ const UpdateSubmissionBody = z.object({
 const SavePurposeBody = SaveCrmConsentPurposeCommandSchema.omit({ kind: true }).strict()
 const ConsentBody = z.object({
   purposeKey: CrmOperationsStableKeySchema,
+  locale: CrmWordingLocaleSchema.optional(),
   action: z.enum(['granted', 'withdrawn']),
   source: CrmOperationsStableKeySchema,
   occurredAt: z.string().datetime({ offset: true }).optional(),
@@ -81,43 +108,46 @@ const SuppressionBody = z.object({
   (value) => (value.provider === undefined) === (value.providerEventId === undefined),
   'provider and providerEventId must be supplied together',
 )
-const SubmissionQuery = z.object({
+export const SubmissionQuery = CrmPageQuerySchema.extend({
   status: z.enum(['new', 'in_progress', 'resolved', 'spam']).optional(),
   definitionKey: CrmOperationsStableKeySchema.optional(),
   ownerUserId: CrmOperationsUuidSchema.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const SendabilityQuery = z.object({
+export const SendabilityQuery = z.object({
   channel: CrmDeliveryChannelSchema,
   purposeKey: CrmOperationsStableKeySchema,
 }).strict()
 const SaveSegmentCreateBody = SaveCrmSegmentCommandSchema.omit({ kind: true, segmentId: true }).strict()
 const SaveSegmentUpdateBody = SaveCrmSegmentCommandSchema.omit({ kind: true, segmentId: true }).strict()
-const SegmentListQuery = z.object({
+export const SegmentListQuery = CrmPageQuerySchema.extend({
   entityKind: z.enum(['person', 'company', 'deal']).default('person'),
   includeArchived: z.enum(['true', 'false']).optional(),
 }).strict()
-const SegmentPreviewQuery = z.object({
+const SegmentPreviewQuery = CrmPageQuerySchema.extend({
+  snapshotCursor: z.string().min(1).max(4096).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   snapshotLimit: z.coerce.number().int().min(1).max(10_000).default(1_000),
 }).strict()
 const EntitlementStatus = z.enum(['pending', 'active', 'expired', 'cancelled'])
 const ParticipationStatus = z.enum(['registered', 'attended', 'cancelled', 'no_show'])
-const EntitlementPlansQuery = z.object({
+export const EntitlementPlansQuery = CrmPageQuerySchema.extend({
   published: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const EntitlementsQuery = z.object({
+export const EntitlementsQuery = CrmPageQuerySchema.extend({
   contactId: CrmOperationsUuidSchema.optional(),
   planId: CrmOperationsUuidSchema.optional(),
   status: EntitlementStatus.optional(),
+  activeOnly: z.enum(['true', 'false']).transform((value) => value === 'true').optional(),
+  effectiveAt: z.string().datetime({ offset: true }).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const EventsQuery = z.object({
+export const EventsQuery = CrmPageQuerySchema.extend({
   status: z.enum(['draft', 'published', 'cancelled', 'completed']).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 }).strict()
-const ParticipationQuery = z.object({
+export const ParticipationQuery = CrmPageQuerySchema.extend({
   contactId: CrmOperationsUuidSchema.optional(),
   eventId: CrmOperationsUuidSchema.optional(),
   status: ParticipationStatus.optional(),
@@ -134,6 +164,8 @@ const GrantEntitlementBody = z.object({
   renewalMode: z.enum(['none', 'manual', 'auto']).default('none'),
   provider: CrmOperationsStableKeySchema.optional(),
   providerEntitlementId: z.string().trim().min(1).max(500).optional(),
+  providerPeriodId: z.string().trim().min(1).max(500).optional(),
+  predecessorId: CrmOperationsUuidSchema.optional(),
 }).strict().refine(
   (value) => (value.provider === undefined) === (value.providerEntitlementId === undefined),
   'provider and providerEntitlementId must be supplied together',
@@ -148,15 +180,9 @@ const UpdateEntitlementBody = z.object({
 )
 const RecordParticipationBody = RecordCrmParticipationCommandSchema.omit({ kind: true }).strict()
 const UpdateParticipationBody = UpdateCrmParticipationCommandSchema.omit({ kind: true, participationId: true }).strict()
-const PipelineListQuery = z.object({
-  entityKind: z.literal('deal').default('deal'),
-  includeArchived: z.enum(['true', 'false']).optional(),
-}).strict()
 const SetPipelineStageBody = SetDealPipelineStageCommandSchema
   .omit({ kind: true, dealId: true }).strict()
-const OperationsLogQuery = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-}).strict()
+const OperationsLogQuery = CrmPageQuerySchema
 const RetentionBody = z.object({
   before: z.string().datetime({ offset: true }),
   confirmed: z.literal(true),
@@ -167,9 +193,18 @@ type Options = {
   service: CrmOperationsServicePort
   readStore: DbCrmOperationsReadStore
   importService?: CrmProductionImportService
+  deliveries?: CrmDeliveryServicePort
 }
 
 function writeError(res: Response, error: unknown): void {
+  if (error instanceof CrmIntegrationScopeError) {
+    res.status(403).json({ error: error.code, message: error.message })
+    return
+  }
+  if (error instanceof z.ZodError) {
+    res.status(400).json({ error: 'invalid_input', issues: error.issues })
+    return
+  }
   if (error instanceof CrmOperationsError) {
     const status = error.code === 'not_found' ? 404
       : error.code === 'not_authorized' ? 403
@@ -208,11 +243,21 @@ export function crmOperationsRoutes(options: Options): Router {
     }
   }
 
+  router.post('/:workspaceId/operations/commands', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    try {
+      const command = CrmConfigCommandSchema.parse(req.body)
+      const output = await options.service.execute(ctx, command)
+      res.status(output.created ? 201 : 200).json(output)
+    } catch (error) { writeError(res, error) }
+  })
+
   router.get('/:workspaceId/operations/intake-definitions', async (req, res) => {
     const ctx = await context(req, res)
     if (!ctx) return
     try {
-      res.json({ definitions: await options.readStore.listDefinitions(ctx.workspaceId) })
+      res.json(await options.readStore.listDefinitions(ctx.workspaceId, CrmPageQuerySchema.parse(req.query)))
     } catch (error) {
       writeError(res, error)
     }
@@ -242,7 +287,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ credentials: await options.readStore.listCredentials(ctx.workspaceId) })
+      res.json(await options.readStore.listCredentials(ctx.workspaceId, CrmPageQuerySchema.parse(req.query)))
     } catch (error) {
       writeError(res, error)
     }
@@ -285,7 +330,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ submissions: await options.readStore.listSubmissions(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listSubmissions(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -324,9 +369,8 @@ export function crmOperationsRoutes(options: Options): Router {
     const ctx = await context(req, res)
     if (!ctx) return
     try {
-      res.json({ purposes: await options.readStore.listConsentPurposes(
-        ctx.workspaceId, req.query.includeArchived === 'true',
-      ) })
+      const filters = CrmPageQuerySchema.extend({ includeArchived: z.enum(['true', 'false']).optional() }).parse(req.query)
+      res.json(await options.readStore.listConsentPurposes(ctx.workspaceId, filters.includeArchived === 'true', filters))
     } catch (error) { writeError(res, error) }
   })
 
@@ -414,6 +458,7 @@ export function crmOperationsRoutes(options: Options): Router {
     }
     try {
       res.json(await options.readStore.listSegments(ctx.workspaceId, {
+        ...parsed.data,
         entityKind: parsed.data.entityKind,
         includeArchived: parsed.data.includeArchived === 'true',
       }))
@@ -503,6 +548,17 @@ export function crmOperationsRoutes(options: Options): Router {
     } catch (error) { writeError(res, error) }
   })
 
+  router.post('/:workspaceId/operations/entitlement-plans', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    const body = AssociationPlanInputSchema.safeParse(req.body)
+    if (!body.success) { res.status(400).json({ error: 'invalid_input', issues: body.error.issues }); return }
+    try {
+      const output = await options.service.execute(ctx, { kind: 'save_entitlement_plan', ...body.data })
+      res.status(output.created ? 201 : 200).json(output)
+    } catch (error) { writeError(res, error) }
+  })
+
   router.get('/:workspaceId/operations/entitlement-plans', async (req, res) => {
     const ctx = await context(req, res)
     if (!ctx) return
@@ -512,7 +568,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ plans: await options.readStore.listEntitlementPlans(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listEntitlementPlans(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -525,7 +581,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ entitlements: await options.readStore.listEntitlements(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listEntitlements(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -561,6 +617,17 @@ export function crmOperationsRoutes(options: Options): Router {
     } catch (error) { writeError(res, error) }
   })
 
+  router.post('/:workspaceId/operations/events', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    const body = AssociationEventInputSchema.safeParse(req.body)
+    if (!body.success) { res.status(400).json({ error: 'invalid_input', issues: body.error.issues }); return }
+    try {
+      const output = await options.service.execute(ctx, { kind: 'save_event', ...body.data })
+      res.status(output.created ? 201 : 200).json(output)
+    } catch (error) { writeError(res, error) }
+  })
+
   router.get('/:workspaceId/operations/events', async (req, res) => {
     const ctx = await context(req, res)
     if (!ctx) return
@@ -569,7 +636,7 @@ export function crmOperationsRoutes(options: Options): Router {
       res.status(400).json({ error: 'invalid_input', issues: filters.error.issues })
       return
     }
-    try { res.json({ events: await options.readStore.listEvents(ctx.workspaceId, filters.data) }) }
+    try { res.json(await options.readStore.listEvents(ctx.workspaceId, filters.data)) }
     catch (error) { writeError(res, error) }
   })
 
@@ -582,7 +649,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ participation: await options.readStore.listParticipation(ctx.workspaceId, filters.data) })
+      res.json(await options.readStore.listParticipation(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -618,19 +685,31 @@ export function crmOperationsRoutes(options: Options): Router {
     } catch (error) { writeError(res, error) }
   })
 
-  router.get('/:workspaceId/operations/pipelines', async (req, res) => {
+  router.get('/:workspaceId/operations/record-fields', async (req, res) => {
     const ctx = await context(req, res)
     if (!ctx) return
-    const filters = PipelineListQuery.safeParse(req.query)
+    const filters = CrmRecordFieldsQuerySchema.safeParse(req.query)
     if (!filters.success) {
       res.status(400).json({ error: 'invalid_input', issues: filters.error.issues })
       return
     }
     try {
-      res.json({ pipelines: await options.readStore.listPipelines(ctx.workspaceId, {
-        entityKind: filters.data.entityKind,
-        includeArchived: filters.data.includeArchived === 'true',
-      }) })
+      res.json(await options.readStore.listRecordFields(ctx.workspaceId, filters.data))
+    } catch (error) { writeError(res, error) }
+  })
+
+  router.get('/:workspaceId/operations/pipelines', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    const filters = CrmPipelinesQuerySchema.safeParse(req.query)
+    if (!filters.success) {
+      res.status(400).json({ error: 'invalid_input', issues: filters.error.issues })
+      return
+    }
+    try {
+      res.json(await options.readStore.listPipelines(ctx.workspaceId, {
+        ...filters.data, includeArchived: filters.data.includeArchived === 'true',
+      }))
     } catch (error) { writeError(res, error) }
   })
 
@@ -697,7 +776,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ jobs: await options.importService.list(ctx.workspaceId) })
+      res.json(await options.importService.list(ctx, CrmPageQuerySchema.parse(req.query)))
     } catch (error) { writeError(res, error) }
   })
 
@@ -714,7 +793,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      const job = await options.importService.get(ctx.workspaceId, jobId.data)
+      const job = await options.importService.get(ctx, jobId.data)
       if (!job) {
         res.status(404).json({ error: 'not_found' })
         return
@@ -772,7 +851,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      const csv = await options.importService.errorsCsv(ctx.workspaceId, jobId.data)
+      const csv = await options.importService.errorsCsv(ctx, jobId.data)
       if (csv === null) {
         res.status(404).json({ error: 'not_found' })
         return
@@ -791,7 +870,7 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ entries: await listCrmOperationsAudit(ctx.workspaceId, filters.data.limit) })
+      res.json(await listCrmOperationsAudit(ctx.workspaceId, filters.data))
     } catch (error) { writeError(res, error) }
   })
 
@@ -804,7 +883,93 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.json({ events: await listCrmEventDelivery(ctx.workspaceId, filters.data.limit) })
+      res.json(await listCrmEventDelivery(ctx.workspaceId, filters.data))
+    } catch (error) { writeError(res, error) }
+  })
+
+  router.get('/:workspaceId/operations/privacy-policy', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
+    try { res.json(await readCrmPrivacyPolicy(ctx.workspaceId)) } catch (error) { writeError(res, error) }
+  })
+
+  router.get('/:workspaceId/operations/address-suppression', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    if (!ctx.authority.canConfigure) { res.status(403).json({ error: 'not_authorized' }); return }
+    try { res.json(await listCrmAddressSuppression({ query },ctx.workspaceId,CrmPageQuerySchema.parse(req.query))) }
+    catch (error) { writeError(res,error) }
+  })
+  router.post('/:workspaceId/operations/deliveries', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    try {
+      const raw=z.record(z.unknown()).parse(req.body)
+      if(Object.hasOwn(raw,'kind')) throw new CrmOperationsError('invalid_input','Use only delivery business fields.')
+      const command=SendCrmMessageCommandSchema.parse({...raw,kind:'send_message'})
+      const result=await options.service.execute(ctx,command)
+      res.status(result.created?201:200).json(result)
+    } catch(error) {writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/deliveries/:deliveryId', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    try {
+      if(!options.deliveries) {res.status(503).json({error:'delivery_unavailable'});return}
+      const receipt=await options.deliveries.get(ctx,CrmOperationsUuidSchema.parse(req.params.deliveryId))
+      if(!receipt) {res.status(404).json({error:'not_found'});return}
+      res.set('Cache-Control','no-store').json({receipt})
+    } catch(error) {writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/mailbox-policies/:connectorInstanceId/integration-grants/:credentialId', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    if(!ctx.authority.canConfigure) {res.status(403).json({error:'not_authorized'});return}
+    try {res.set('Cache-Control','no-store').json({grant:await readCrmMailboxIntegrationGrant(ctx.workspaceId,
+      CrmOperationsUuidSchema.parse(req.params.connectorInstanceId),CrmOperationsUuidSchema.parse(req.params.credentialId))})}
+    catch(error) {writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/mailbox-policies/:connectorInstanceId/integration-grants/:credentialId', async (req,res) => {
+    const ctx=await context(req,res)
+    if(!ctx) return
+    try {
+      const command=SaveCrmMailboxIntegrationGrantCommandSchema.parse({...req.body,kind:'save_mailbox_integration_grant',
+        connectorInstanceId:req.params.connectorInstanceId,credentialId:req.params.credentialId})
+      res.json(await options.service.execute(ctx,command))
+    } catch(error) {writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/mailbox-policies/:connectorInstanceId', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    if (!ctx.authority.canConfigure) { res.status(403).json({ error:'not_authorized' }); return }
+    try { res.json({ policy:await readCrmManagedMailboxPolicy(ctx.workspaceId,z.string().uuid().parse(req.params.connectorInstanceId)) }) }
+    catch (error) { writeError(res,error) }
+  })
+  router.post('/:workspaceId/operations/mailbox-policies/:connectorInstanceId', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    try {
+      const command = SaveCrmManagedMailboxPolicyCommandSchema.parse({ ...req.body,kind:'save_managed_mailbox_policy',connectorInstanceId:req.params.connectorInstanceId })
+      res.json(await options.service.execute(ctx,command))
+    } catch (error) { writeError(res,error) }
+  })
+  router.post('/:workspaceId/operations/address-suppression/:tombstoneId/release', async (req,res) => {
+    const ctx = await context(req,res)
+    if (!ctx) return
+    try {
+      const command = ReleaseCrmAddressSuppressionCommandSchema.parse({ ...req.body,kind: 'release_address_suppression',tombstoneId: req.params.tombstoneId })
+      res.json(await options.service.execute(ctx,command))
+    } catch (error) { writeError(res,error) }
+  })
+
+  router.post('/:workspaceId/operations/privacy-policy', async (req, res) => {
+    const ctx = await context(req, res)
+    if (!ctx) return
+    try {
+      const body = SaveCrmPrivacyPolicyCommandSchema.omit({ kind: true }).parse(req.body)
+      const output = await options.service.execute(ctx, { kind: 'save_privacy_policy', ...body })
+      res.status(output.created ? 201 : 200).json(output)
     } catch (error) { writeError(res, error) }
   })
 
@@ -816,9 +981,85 @@ export function crmOperationsRoutes(options: Options): Router {
       return
     }
     try {
-      res.setHeader('Content-Disposition', `attachment; filename="crm-operations-${ctx.workspaceId}.json"`)
+      const query=z.object({format:z.enum(['crm-operations-privacy-v1','crm-privacy-v2']).default('crm-operations-privacy-v1')}).strict().parse(req.query)
+      if(query.format==='crm-privacy-v2') {await sendCrmPrivacyExport(res,ctx);return}
+      res.setHeader('Content-Disposition','attachment; filename="crm-operations-'+ctx.workspaceId+'.json"')
       res.json(await exportCrmOperationsPrivacy(ctx.workspaceId))
     } catch (error) { writeError(res, error) }
+  })
+  router.get('/:workspaceId/operations/contacts/:contactId/privacy-export',async(req,res)=>{
+    const ctx=await context(req,res)
+    if(!ctx)return
+    try {
+      z.object({format:z.literal('crm-privacy-v2').optional()}).strict().parse(req.query)
+      const contactId=CrmOperationsUuidSchema.parse(req.params.contactId)
+      await sendCrmPrivacyExport(res,ctx,{contactId})
+    } catch(error) {writeError(res,error)}
+  })
+
+  router.post('/:workspaceId/operations/privacy/erasure-preview',async(req,res)=>{
+    const ctx=await context(req,res)
+    if(!ctx)return
+    try {
+      const body=PreviewCrmContactErasureCommandSchema.omit({kind:true}).strict().parse(req.body)
+      const preview=await options.service.execute(ctx,{kind:'preview_contact_erasure',...body})
+      res.setHeader('Cache-Control','no-store')
+      res.json(preview.record)
+    }catch(error){writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/privacy/erase',async(req,res)=>{
+    const ctx=await context(req,res)
+    if(!ctx)return
+    try {
+      const body=EraseCrmContactWithPreviewCommandSchema.omit({kind:true}).strict().parse(req.body)
+      const erased=await options.service.execute(ctx,{kind:'erase_contact_with_preview',...body})
+      res.setHeader('Cache-Control','no-store')
+      res.json({...erased.record,duplicate:erased.duplicate})
+    }catch(error){writeError(res,error)}
+  })
+
+  router.post('/:workspaceId/operations/privacy/file-cleanup-preview',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=PreviewCrmImportFileCleanupCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'preview_import_file_cleanup',...body})
+      res.setHeader('Cache-Control','no-store');res.json(result.record)
+    }catch(error){writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/privacy/file-cleanup-execute',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=ExecuteCrmImportFileCleanupCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'execute_import_file_cleanup',...body})
+      res.setHeader('Cache-Control','no-store');res.json({...result.record,duplicate:result.duplicate})
+    }catch(error){writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/privacy/file-cleanups/:id',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {res.setHeader('Cache-Control','no-store');res.json(await createCrmImportFileCleanupService().read(ctx,z.string().uuid().parse(req.params.id)))}
+    catch(error){writeError(res,error)}
+  })
+
+  router.post('/:workspaceId/operations/retention/dry-run',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=PreviewCrmRetentionCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'preview_retention',...body})
+      res.setHeader('Cache-Control','no-store');res.json(result.record)
+    }catch(error){writeError(res,error)}
+  })
+  router.post('/:workspaceId/operations/retention/execute',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {
+      const body=ExecuteCrmRetentionCommandSchema.omit({kind:true}).parse(req.body)
+      const result=await options.service.execute(ctx,{kind:'execute_retention',...body})
+      res.setHeader('Cache-Control','no-store');res.json({...result.record,duplicate:result.duplicate})
+    }catch(error){writeError(res,error)}
+  })
+  router.get('/:workspaceId/operations/retention/runs',async(req,res)=>{
+    const ctx=await context(req,res);if(!ctx)return
+    try {res.setHeader('Cache-Control','no-store');res.json(await listCrmRetentionRuns(ctx,CrmPageQuerySchema.parse(req.query)))}
+    catch(error){writeError(res,error)}
   })
 
   router.post('/:workspaceId/operations/retention', async (req, res) => {

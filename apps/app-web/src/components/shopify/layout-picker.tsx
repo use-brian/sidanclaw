@@ -194,7 +194,7 @@ export function LayoutPicker({
                   disabled={dead}
                   aria-pressed={on}
                   title={dead ? t.shopifyApp.sectionNoneLeft : format(t.shopifyApp.sectionRemaining, { count: remaining })}
-                  className={`rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
+                  className={`rounded-full border px-2.5 py-2 text-[12px] transition-colors md:py-1 ${
                     on
                       ? "border-primary bg-primary/5 font-medium"
                       : dead
@@ -293,7 +293,7 @@ export function LayoutPicker({
             value={link}
             onChange={(e) => setLink(e.target.value)}
             placeholder={t.shopifyApp.pasteLinkPlaceholder}
-            className="h-9 min-w-[280px] flex-1 rounded-lg border border-border bg-background px-3 text-sm"
+            className="h-9 w-full flex-1 rounded-lg border border-border bg-background px-3 text-[16px] sm:w-auto sm:min-w-[280px] md:text-sm"
           />
           <Button
             type="button"
@@ -399,7 +399,7 @@ function ShapeCard({
               value={active}
               onValueChange={onChoose}
               items={shape.templates.map((x) => ({ value: x.suffix ?? "", label: x.suffix ?? "" }))}
-              className="h-7 flex-1 text-[11.5px]"
+              className="h-9 flex-1 text-[11.5px] md:h-7"
               popupClassName="w-72"
               aria-label={t.shopifyApp.willUse}
             />

@@ -18,6 +18,7 @@
  * [COMP:api/mailbox-imap-client]
  */
 
+import { withCrmMailAdmission, type CrmMailContext, type CrmMailIntent } from '../crm-operations/delivery-policy.js'
 import { createTransport } from 'nodemailer'
 import MailComposer from 'nodemailer/lib/mail-composer/index.js'
 import { renderEmailBody } from '@use-brian/channels'
@@ -100,18 +101,29 @@ export async function composeMailboxMessage(params: {
 export async function sendComposedMessage(
   settings: MailboxAccountSettings,
   composed: ComposedMailboxMessage,
+  context?: CrmMailContext,
+  intent: CrmMailIntent = {},
 ): Promise<void> {
-  const transport = createTransport({
-    host: settings.smtpHost,
-    port: settings.smtpPort,
-    secure: settings.smtpPort === 465,
-    auth: { user: settings.email, pass: settings.appPassword },
-  })
-  try {
-    await transport.sendMail({ envelope: composed.envelope, raw: composed.raw })
-  } finally {
-    transport.close()
+  const frozen = {
+    raw: Buffer.from(composed.raw),
+    envelope: { from: composed.envelope.from, to: [...composed.envelope.to] },
   }
+  const account = { ...settings }
+  return withCrmMailAdmission(context, 'imap', { ...intent, to: frozen.envelope.to }, async () => {
+    const transport = createTransport({
+      host: account.smtpHost,
+      port: account.smtpPort,
+      secure: account.smtpPort === 465,
+      auth: { user: account.email, pass: account.appPassword },
+    })
+    try {
+      const accepted = await transport.sendMail(frozen)
+      // SMTP may accept only a subset. Never report the whole envelope as sent.
+      if (Array.isArray(accepted.rejected) && accepted.rejected.length) throw new Error('SMTP recipient acceptance was partial')
+    } finally {
+      transport.close()
+    }
+  })
 }
 
 /** Connect-time SMTP verification (login + EHLO), used by the connect route. */

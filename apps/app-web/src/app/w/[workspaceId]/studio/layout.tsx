@@ -82,7 +82,7 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
                       href={href}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "block whitespace-nowrap px-3 py-2 rounded-lg text-[14px] transition-colors",
+                        "block whitespace-nowrap px-3 py-2.5 rounded-lg text-[14px] transition-colors",
                         active
                           ? "bg-muted text-foreground font-medium"
                           : "text-muted-foreground hover:text-foreground hover:bg-muted/50",

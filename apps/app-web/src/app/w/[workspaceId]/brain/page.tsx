@@ -65,6 +65,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ArrowDownToLine, Plus, Sparkles } from "lucide-react";
 import { useWorkspaces } from "@/contexts/workspace-context";
+import { isPhoneViewport } from "@/lib/viewport";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import { useT, format } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
@@ -88,6 +95,7 @@ import { ChunkSentinel } from "@/components/chrome/chunk-sentinel";
 import { useCachedResource } from "@/lib/surface-cache";
 import { brainGraphCacheKey } from "@/lib/surface-prefetch";
 import { parseBrainDeepLink } from "@/lib/brain-deep-link";
+import { parseAuditDeepLink, type AuditTurn } from "@/lib/turn-audit";
 import {
   listWorkspaceSkills,
   type WorkspaceSkillSummary,
@@ -118,6 +126,7 @@ import { suggestedSkillCount } from "@/lib/skills-view";
 import { FilterStrip } from "@/components/brain/filter-strip";
 import { EmptyState, PristineBrainNudge } from "@/components/brain/empty-state";
 import { ReviewAllClear, ReviewPanel } from "@/components/brain/review-panel";
+import { AuditPanel } from "@/components/brain/audit-panel";
 import { BrainTopbar, BrainTopbarPager } from "@/components/brain/brain-topbar";
 import { BrainDetailDrawer } from "@/components/brain/detail-drawer";
 import { BrainGraphView } from "@/components/brain/graph-view";
@@ -138,6 +147,8 @@ import {
 } from "@/contexts/brain-surface-context";
 import { Button } from "@/components/ui/button";
 import { useIsOffline } from "@/lib/offline/use-offline-sync";
+import { usePrimaryAssistant } from "@/contexts/primary-assistant";
+import { SuggestedFileDrop } from "@/components/doc/suggested-file-drop";
 import {
   deleteBrainContentCache,
   isArrayValue,
@@ -150,6 +161,14 @@ import {
   type BrainContentCacheScope,
 } from "@/lib/offline/brain-content-cache";
 
+/**
+ * Once per full page load: the first Brain mount on a phone lands on the List
+ * view (C 14); a later mount in the same load keeps whatever the user chose.
+ * Module-level on purpose - the page remounts per navigation, the provider
+ * holding `viewMode` does not, and the seed must not override a choice.
+ */
+let phoneViewSeeded = false;
+
 function BrainPageInner() {
   const { activeId } = useWorkspaces();
   const { me } = useWorkspaceContext();
@@ -157,6 +176,7 @@ function BrainPageInner() {
   const searchParams = useSearchParams();
   const t = useT();
   const offline = useIsOffline();
+  const { assistantId: primaryAssistantId } = usePrimaryAssistant();
   // The Brain controls live in the sidebar (`BrainSidebarPanel`); this page
   // reads + reacts to their shared state. The mobile inline strip below also
   // binds to these setters. `pendingOnly` is derived (section === 'reviews').
@@ -172,6 +192,10 @@ function BrainPageInner() {
     closeSkillCreator,
     selectedReviewKey,
     setSelectedReviewKey,
+    auditSessionId,
+    auditTurnId,
+    setAuditTurnId,
+    openAudit,
     primitives,
     togglePrimitive,
     reviewFilters,
@@ -209,13 +233,42 @@ function BrainPageInner() {
     if (seededRef.current) return;
     seededRef.current = true;
     if (searchParams.get("pending") === "true") setSection("reviews");
+    // Phones land on the List view (C 14 / M9): at the initial fit a leaf
+    // node is a 6-18px disc, the only affordance for opening an entity from
+    // the graph, so taps land on whitespace. Once per full page load (the
+    // module flag), so a phone user's own switch back to Graph survives a
+    // navigation away and back; an explicit `?view=graph` deep link wins.
+    const phoneDefault = !phoneViewSeeded && isPhoneViewport();
+    phoneViewSeeded = true;
     if (searchParams.get("view") === "graph") {
       setSection("entries");
       setViewMode("graph");
+    } else if (phoneDefault) {
+      setViewMode("grouped");
     }
     if (searchParams.get("view") === "skills") setSection("skills");
     if (searchParams.get("view") === "blueprints") setSection("blueprints");
   }, [searchParams, setSection, setViewMode]);
+
+  // Audit deep link — `?audit=<sessionId>[&turn=<messageId>]` (the chat
+  // surface's "Audit this turn" lands here). Keyed on the pair, not once:
+  // a second link from another turn while already on Brain must re-seed.
+  const auditLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    const link = parseAuditDeepLink(new URLSearchParams(searchParams.toString()));
+    if (!link) return;
+    const key = `${link.sessionId}:${link.turnId ?? ""}`;
+    if (auditLinkRef.current === key) return;
+    auditLinkRef.current = key;
+    openAudit(link.sessionId, link.turnId);
+  }, [searchParams, openAudit]);
+
+  // The audited session's turn list, reported by `AuditPanel` so the topbar
+  // pager can step through it. Cleared when the session changes.
+  const [auditTurns, setAuditTurns] = useState<AuditTurn[]>([]);
+  useEffect(() => {
+    setAuditTurns([]);
+  }, [auditSessionId]);
 
   // Any search / filter / pending engagement flips off the pristine nudge, and
   // stays off even after the user clears back to empty.
@@ -379,6 +432,10 @@ function BrainPageInner() {
   // chunk as the user scrolls toward the end, instead of the old single
   // `limit: 100` shot that capped the surface at 100 rows with no way to reach
   // the rest ([COMP:app-web/brain-entries]).
+  // Only the LIST view reads the entries pages. The graph (the default
+  // landing) is a separate, cached projection, so the paged list fetch is
+  // deferred until the user actually switches to List — the pristine check
+  // below reads the facets (which primitives have any row) instead.
   const entries = useBrainEntries({
     workspaceId: activeId ?? null,
     viewerId: me.id || null,
@@ -386,7 +443,7 @@ function BrainPageInner() {
     search,
     viewpointAssistantId,
     refreshTick,
-    enabled: section === "entries",
+    enabled: section === "entries" && viewMode === "grouped",
   });
   const rows = entries.rows;
   // Row keys from the most recent chunk — only these animate in. Recomputed
@@ -408,7 +465,12 @@ function BrainPageInner() {
   // these (`taskStatus` defaults to active), so there's no overlap.
   const tasksInScope = primitives.length === 0 || primitives.includes("tasks");
   useEffect(() => {
-    if (!activeId || section !== "entries" || !tasksInScope) {
+    if (
+      !activeId ||
+      section !== "entries" ||
+      viewMode !== "grouped" ||
+      !tasksInScope
+    ) {
       setCompletedTasks(null);
       return;
     }
@@ -469,6 +531,7 @@ function BrainPageInner() {
   }, [
     activeId,
     section,
+    viewMode,
     tasksInScope,
     search,
     viewpointAssistantId,
@@ -618,12 +681,12 @@ function BrainPageInner() {
     };
   }, [activeId, refreshTick, cacheScope]);
 
-  // Workspace blueprints (fillable templates) — fetched on every brain refresh,
-  // the same contract as skills, so a create/delete from the library converges.
-  // The list API returns every page template; the library filters to those with
-  // an `extraction` spec.
+  // Workspace blueprints (fillable templates) — fetched while the Blueprints
+  // section is open (nothing else reads them) and on every brain refresh, so
+  // a create/delete from the library converges. The list API returns every
+  // page template; the library filters to those with an `extraction` spec.
   useEffect(() => {
-    if (!activeId) return;
+    if (!activeId || section !== "blueprints") return;
     let cancelled = false;
     void (async () => {
       let hasCached = false;
@@ -660,7 +723,7 @@ function BrainPageInner() {
     return () => {
       cancelled = true;
     };
-  }, [activeId, refreshTick, cacheScope]);
+  }, [activeId, section, refreshTick, cacheScope]);
 
   // Skill row clicks (library + sidebar quick-list) open the FULL editor page
   // (brain-skill-management-ux.md §3.1); only the graph-node click path keeps
@@ -772,12 +835,19 @@ function BrainPageInner() {
   // before it arrives.
   const graphLoading = graph === null;
   const graphHasNodes = (graph?.nodes.length ?? 0) > 0;
+  // "The list has nothing": in List view that is the loaded page itself; in
+  // Graph view (where the paged list is never fetched) it is the facets —
+  // no primitive has a single row. Facets fail OPEN (all present) on error,
+  // so a failed presence check can never conjure the pristine nudge.
+  const listEmpty =
+    viewMode === "grouped"
+      ? !loading && rows.length === 0
+      : facets !== null && !Object.values(facets).some(Boolean);
   // The pristine nudge counts skills too — a workspace whose only brain
   // content is a skill isn't pristine.
   const showNoData =
-    !loading &&
+    listEmpty &&
     !graphLoading &&
-    rows.length === 0 &&
     !graphHasNodes &&
     (skills?.length ?? 0) === 0 &&
     !search &&
@@ -811,7 +881,9 @@ function BrainPageInner() {
           aria-pressed={viewMode === "graph"}
           onClick={() => setViewMode("graph")}
           className={cn(
-            "rounded px-2.5 py-0.5 transition-colors",
+            // `h-9 sm:h-7`-class targets (C 69): the toggle is a primary
+            // phone control inside the 44px bar.
+            "inline-flex items-center rounded px-2.5 py-2 transition-colors sm:py-0.5",
             viewMode === "graph"
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
@@ -825,7 +897,7 @@ function BrainPageInner() {
           aria-pressed={viewMode === "grouped"}
           onClick={() => setViewMode("grouped")}
           className={cn(
-            "rounded px-2.5 py-0.5 transition-colors",
+            "inline-flex items-center rounded px-2.5 py-2 transition-colors sm:py-0.5",
             viewMode === "grouped"
               ? "bg-background text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
@@ -849,6 +921,26 @@ function BrainPageInner() {
           if (next) setSelectedReviewKey(reviewItemKey(next));
         }}
       />
+    ) : section === "audit" && auditTurns.length > 0 ? (
+      /* Turn pager — steps the audited conversation one assistant turn at
+         a time (the same pager the Reviews queue uses). */
+      (() => {
+        const idx = auditTurns.findIndex((turn) => turn.id === auditTurnId);
+        return (
+          <BrainTopbarPager
+            current={(idx < 0 ? auditTurns.length - 1 : idx) + 1}
+            total={auditTurns.length}
+            onPrev={() => {
+              const prev = auditTurns[(idx < 0 ? auditTurns.length - 1 : idx) - 1];
+              if (prev) setAuditTurnId(prev.id);
+            }}
+            onNext={() => {
+              const next = auditTurns[(idx < 0 ? auditTurns.length - 1 : idx) + 1];
+              if (next) setAuditTurnId(next.id);
+            }}
+          />
+        );
+      })()
     ) : null;
 
   const topbarRight =
@@ -908,11 +1000,15 @@ function BrainPageInner() {
             {format(topbarCopy.suggestedCount, { count: suggestedCount })}
           </button>
         )}
+        {/* From `sm`: the three quiet actions inline. Below `sm` they collapse
+            into ONE "+" menu (C 13 / M8): the bar was ~450-540px wide on a
+            390px phone and "+ New skill" sat off the right edge with nothing
+            signalling it existed. */}
         <button
           type="button"
           disabled={offline}
           onClick={() => setGroupsOpen(true)}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-sm:hidden"
         >
           <Sparkles className="size-3.5" aria-hidden />
           {t.brainPage.skillGroups.cta}
@@ -921,7 +1017,7 @@ function BrainPageInner() {
           type="button"
           disabled={offline}
           onClick={() => setImportOpen(true)}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-sm:hidden"
         >
           <ArrowDownToLine className="size-3.5" aria-hidden />
           {t.brainPage.skillImport.importCta}
@@ -930,11 +1026,46 @@ function BrainPageInner() {
           type="button"
           disabled={offline}
           onClick={openSkillCreator}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 max-sm:hidden"
         >
           <Plus className="size-3.5" aria-hidden />
           {t.brainPage.skills.newSkill}
         </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <button
+                type="button"
+                disabled={offline}
+                aria-label={topbarCopy.skillActionsAria}
+                title={topbarCopy.skillActionsAria}
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 sm:hidden"
+              >
+                <Plus className="size-4" aria-hidden />
+              </button>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="min-h-11"
+              onClick={() => setGroupsOpen(true)}
+            >
+              <Sparkles aria-hidden />
+              {t.brainPage.skillGroups.cta}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="min-h-11"
+              onClick={() => setImportOpen(true)}
+            >
+              <ArrowDownToLine aria-hidden />
+              {t.brainPage.skillImport.importCta}
+            </DropdownMenuItem>
+            <DropdownMenuItem className="min-h-11" onClick={openSkillCreator}>
+              <Plus aria-hidden />
+              {t.brainPage.skills.newSkill}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </>
     ) : section === "blueprints" ? (
       <>
@@ -997,14 +1128,16 @@ function BrainPageInner() {
       <div className="md:hidden flex flex-col gap-2 border-b border-border bg-muted/20 px-3 py-2.5">
         {/* Three-way section segmented control — Entries / Skills / Reviews. */}
         <div className="inline-flex w-full rounded-md border border-border bg-muted/30 p-0.5 text-[12px]">
-          {(["entries", "skills", "blueprints", "reviews"] as BrainSection[]).map((s) => (
+          {(["entries", "skills", "blueprints", "reviews", "audit"] as BrainSection[]).map((s) => (
             <button
               key={s}
               type="button"
               aria-pressed={section === s}
               onClick={() => setSection(s)}
               className={cn(
-                "flex-1 rounded px-2 py-1 transition-colors",
+                // `py-2.5 sm:py-1` (C 69): the segments a phone user touches
+                // most were ~26px tall.
+                "flex-1 rounded px-2 py-2.5 transition-colors sm:py-1",
                 section === s
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
@@ -1030,6 +1163,14 @@ function BrainPageInner() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col">
+        {section === "entries" && activeId && !offline ? (
+          <div className="px-3 sm:px-5">
+            <SuggestedFileDrop
+              workspaceId={activeId}
+              assistantId={primaryAssistantId}
+            />
+          </div>
+        ) : null}
         {section === "reviews" ? (
           /* Reviews master-detail — the sidebar lists the queue; this pane
              shows the selected item with verify / delete / more-options and
@@ -1054,6 +1195,28 @@ function BrainPageInner() {
               onActed={handleReviewActed}
               onMoreOptions={() => setSelected(currentReview.row)}
               readOnly={offline}
+            />
+          ) : null
+        ) : section === "audit" ? (
+          /* Audit — the chat-history audit browser (features/chat-audit.md):
+             the sidebar picked a conversation; the panel steps through its
+             turns with the tool trace and lights the retrieved entries on
+             the SAME cached graph the entries view renders. */
+          activeId ? (
+            <AuditPanel
+              workspaceId={activeId}
+              sessionId={auditSessionId}
+              turnId={auditTurnId}
+              onSelectTurn={setAuditTurnId}
+              onTurnsLoaded={setAuditTurns}
+              graph={graph}
+              viewpointAssistantId={viewpointAssistantId}
+              cacheScope={cacheScope}
+              onOpenRow={openRow}
+              onSelectSkillNode={(skillRowId) => {
+                const match = skills?.find((s) => s.rowId === skillRowId);
+                if (match) setSelectedSkill(match);
+              }}
             />
           ) : null
         ) : section === "skills" ? (
@@ -1132,6 +1295,7 @@ function BrainPageInner() {
             loading={graph === null}
             focusQuery={search}
             filterKinds={graphFilterKinds}
+            selectedId={selected?.id ?? selectedSkill?.rowId ?? null}
             onSelect={openRow}
             onSelectSkillNode={(skillRowId) => {
               const match = skills?.find((s) => s.rowId === skillRowId);

@@ -79,6 +79,13 @@ import {
   type LiveRunView,
   type StepLiveState,
 } from "@/lib/workflow-live-run";
+import {
+  nodeBlocksPanning,
+  nodeDragThreshold,
+  nodePointerIntent,
+  type NodePointerIntent,
+} from "@/lib/workflow-board-gesture";
+import { useCoarsePointer } from "@/lib/viewport";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -380,6 +387,8 @@ type NodeDrag = {
   y: number;
   /** Becomes true after the movement threshold — suppresses the click. */
   moved: boolean;
+  /** Movement threshold for THIS press (3px mouse, 10px finger). */
+  threshold: number;
   /** Wire the node currently hovers close enough to splice into on drop. */
   insertEdgeKey: string | null;
 };
@@ -415,6 +424,21 @@ export function WorkflowBoard({
   const t = useT();
   const canEdit = (editable ?? true) && !!onDefinitionChange;
   const boardRef = useRef<HTMLDivElement | null>(null);
+
+  // Touch policy (responsive contract M9, `lib/workflow-board-gesture.ts`):
+  // on a coarse pointer a tap selects and a drag scrolls the board; node
+  // moves need the explicit "Edit layout" toggle. A mouse keeps the direct
+  // drag. `lastIntent` remembers what the most recent press armed so the
+  // tap's `click` selects only when the press did NOT (a mouse press selects
+  // on pointerup and must not double-fire on click).
+  const coarse = useCoarsePointer();
+  const [layoutEditing, setLayoutEditing] = useState(false);
+  const lastIntent = useRef<NodePointerIntent>("drag");
+  const blocksPanning = nodeBlocksPanning({
+    canEdit,
+    coarsePointer: coarse,
+    layoutEditing,
+  });
 
   const [nodeDrag, setNodeDrag] = useState<NodeDrag | null>(null);
   const [wireDrag, setWireDrag] = useState<WireDrag | null>(null);
@@ -494,6 +518,16 @@ export function WorkflowBoard({
     key: string,
   ) => {
     if (!canEdit || e.button !== 0) return;
+    const intent = nodePointerIntent({
+      canEdit,
+      pointerType: e.pointerType,
+      coarsePointer: coarse,
+      layoutEditing,
+    });
+    lastIntent.current = intent;
+    // A finger without "Edit layout": no capture, no drag state. The browser
+    // owns the gesture (a scroll), and a plain tap reaches `onClick`.
+    if (intent === "select") return;
     // Ports handle their own pointerdown (stopPropagation).
     const pos = displayPositions[key];
     if (!pos) return;
@@ -508,6 +542,7 @@ export function WorkflowBoard({
       x: pos.x,
       y: pos.y,
       moved: false,
+      threshold: nodeDragThreshold(e.pointerType),
       insertEdgeKey: null,
     });
   };
@@ -519,8 +554,8 @@ export function WorkflowBoard({
     const y = Math.max(0, p.y - nodeDrag.dy);
     const moved =
       nodeDrag.moved ||
-      Math.abs(x - nodeDrag.ox) > 3 ||
-      Math.abs(y - nodeDrag.oy) > 3;
+      Math.abs(x - nodeDrag.ox) > nodeDrag.threshold ||
+      Math.abs(y - nodeDrag.oy) > nodeDrag.threshold;
     const insertEdgeKey = moved
       ? (edgeInsertionCandidate(
           definition,
@@ -680,7 +715,9 @@ export function WorkflowBoard({
         onPointerMove={onPortPointerMove}
         onPointerUp={onPortPointerUp}
         className={cn(
-          "absolute z-20 flex h-4 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center",
+          // 44px hit area on a phone around the same 10px dot (M3); the wire
+          // drag stays available on touch as the port's own gesture.
+          "absolute z-20 flex size-11 sm:size-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center",
           "cursor-crosshair touch-none",
         )}
         style={{ left: anchor.x, top: anchor.y }}
@@ -700,10 +737,42 @@ export function WorkflowBoard({
   };
 
   return (
-    <div
-      className="rounded-xl border border-border overflow-auto bg-muted/20 relative"
-      style={{ maxHeight: "68vh" }}
-    >
+    <div className="flex flex-col gap-2">
+      {/* "Edit layout" (touch only): flips a finger from scroll to node move
+          (responsive contract M9). A row above the scroll container, so it
+          never overlaps a node and never scrolls out of reach. */}
+      {canEdit && coarse && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setLayoutEditing((v) => !v)}
+            aria-pressed={layoutEditing}
+            title={t.workflowPage.board.editLayoutHint}
+            className={cn(
+              "inline-flex h-11 items-center gap-1.5 rounded-full border px-3 text-xs font-medium",
+              layoutEditing
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border bg-card text-muted-foreground",
+            )}
+          >
+            <svg
+              width={12}
+              height={12}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <path d="M5 9l-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20" />
+            </svg>
+            {t.workflowPage.board.editLayout}
+          </button>
+        </div>
+      )}
+    <div className="rounded-xl border border-border overflow-auto bg-muted/20 relative max-h-[68dvh]">
       <div
         ref={boardRef}
         className={cn("relative", nodeDrag?.moved && "select-none")}
@@ -911,7 +980,7 @@ export function WorkflowBoard({
                 onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => onRemoveEdge(selectedEdge)}
                 className={cn(
-                  "absolute z-30 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center",
+                  "absolute z-30 flex size-9 sm:size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center",
                   "rounded-full border border-red-500/60 bg-card text-red-600 dark:text-red-400 shadow-sm",
                   "hover:bg-red-500 hover:text-white transition-colors",
                 )}
@@ -974,8 +1043,11 @@ export function WorkflowBoard({
                 onPointerMove={onNodePointerMove}
                 onPointerUp={() => onNodePointerUp(node.key)}
                 onClick={() => {
-                  // Read-only boards never enter the drag path — plain click.
-                  if (canEdit) return;
+                  // A press that armed a drag already selected on pointerup
+                  // (sub-threshold release); read-only boards and a finger
+                  // without "Edit layout" never enter the drag path, so their
+                  // tap selects here.
+                  if (canEdit && lastIntent.current === "drag") return;
                   if (node.key === TRIGGER_KEY) onSelectTrigger?.();
                   else onSelectStep?.(node.key);
                 }}
@@ -999,7 +1071,7 @@ export function WorkflowBoard({
                 className={cn(
                   "absolute flex items-start gap-2.5 rounded-xl border bg-card p-3 text-left shadow-sm transition",
                   "hover:shadow-md hover:border-primary/50",
-                  canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+                  blocksPanning ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                   orphan && "border-dashed opacity-75 hover:opacity-100",
                   nodeDrag?.key === node.key && nodeDrag.moved && "z-30 shadow-lg opacity-100",
                   dropTarget
@@ -1015,7 +1087,9 @@ export function WorkflowBoard({
                   top: pos.y,
                   width: NODE_W,
                   height: NODE_H,
-                  ...(canEdit ? { touchAction: "none" as const } : {}),
+                  // Only while a drag can start: a finger without "Edit
+                  // layout" must scroll the board from a node (M9).
+                  ...(blocksPanning ? { touchAction: "none" as const } : {}),
                 }}
               >
                 <span
@@ -1090,18 +1164,24 @@ export function WorkflowBoard({
                     removeStepByKey(node.key);
                   }}
                   className={cn(
-                    "absolute z-30 flex h-5 w-5 items-center justify-center rounded-full",
+                    // 36px on a phone, 20px with a mouse; centred on the same
+                    // corner point at both sizes via the translate.
+                    "absolute z-30 flex size-9 sm:size-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full",
                     "border border-red-500/60 bg-card text-red-600 dark:text-red-400 shadow-sm",
                     "hover:bg-red-500 hover:text-white transition",
-                    // Hidden means non-interactive too: an opacity-0 button
-                    // still takes clicks, which would leave an invisible
+                    // Touch reveal (M2): always reachable below `md` (dimmed
+                    // until the node is selected); on a hover-capable screen
+                    // hidden means non-interactive too, since an opacity-0
+                    // button still takes clicks and would leave an invisible
                     // delete target on every node corner.
-                    "opacity-0 pointer-events-none",
-                    "group-hover:opacity-100 group-hover:pointer-events-auto",
-                    "group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
-                    selected && "opacity-100 pointer-events-auto",
+                    "pointer-events-auto md:pointer-events-none md:opacity-0",
+                    "md:group-hover:opacity-100 md:group-hover:pointer-events-auto",
+                    "md:group-focus-within:opacity-100 md:group-focus-within:pointer-events-auto",
+                    selected
+                      ? "opacity-100 md:opacity-100 md:pointer-events-auto"
+                      : "opacity-70",
                   )}
-                  style={{ left: pos.x - 8, top: pos.y - 8 }}
+                  style={{ left: pos.x + 2, top: pos.y + 2 }}
                 >
                   <svg
                     width={10}
@@ -1201,6 +1281,7 @@ export function WorkflowBoard({
           </span>
         </div>
       )}
+    </div>
     </div>
   );
 }

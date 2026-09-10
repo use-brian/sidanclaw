@@ -13,9 +13,12 @@ import {
   CrmOperationsCommandSchema,
   CrmOperationsContextSchema,
   CrmOperationsError,
+  CrmLocaleWordingsSchema,
+  CrmWordingLocaleSchema,
   CrmSegmentPredicateSchema,
   actorAuditIdentity,
   assertCrmOperationsAuthority,
+  isCrmConfigCommand,
   canonicalCrmRequest,
   crmOperationsSha256,
   validateCrmSegmentCatalog,
@@ -25,6 +28,10 @@ import {
   type CrmOperationsCommandResult,
   type CrmOperationsContext,
   type CrmOperationsServicePort,
+  type CrmDeliveryServicePort,
+  type CrmPrivacyServicePort,
+  type CrmRetentionServicePort,
+  type CrmImportFileCleanupPort,
 } from '@use-brian/core'
 import type {
   AuditIdentity,
@@ -34,11 +41,19 @@ import type {
   CrmOperationsTransaction,
   StoredIntakeDefinition,
 } from '../db/crm-operations-store.js'
+import {createCrmPrivacyService} from './privacy-previews.js'
+import {createCrmImportFileCleanupService} from './import-file-cleanup-service.js'
+import {createCrmRetentionService} from './retention-service.js'
 import { hashSecret } from '../db/api-key-store.js'
+import { assertIntakeVerificationConfiguration, verifyIntakeIdentity } from './identity-verification.js'
 
 type ServiceClock = () => Date
 
 export type CrmOperationsServiceOptions = {
+  deliveries?: CrmDeliveryServicePort
+  privacy?:CrmPrivacyServicePort
+  fileCleanup?:CrmImportFileCleanupPort
+  retention?:CrmRetentionServicePort
   now?: ServiceClock
   randomCredentialId?: () => string
   randomSecret?: () => string
@@ -59,6 +74,8 @@ function actorScope(actor: CrmOperationsActor): string {
     case 'assistant': return `assistant:${actor.assistantId}:${actor.sessionId}`
     case 'workflow': return `workflow:${actor.workflowId}:${actor.runId}`
     case 'brain_key': return `brain_key:${actor.credentialId}`
+    case 'integration_key': return `integration_key:${actor.credentialId}`
+    case 'system_job': return `system_job:${actor.job}:${actor.runId}`
     case 'oauth_token': return `oauth_token:${actor.credentialId}`
     case 'intake_key': return `intake_key:${actor.credentialId}`
     case 'home_app': return `home_app:${actor.credentialId}`
@@ -246,19 +263,15 @@ async function executeSubmission(
   if (!definition || !definition.active) {
     throw new CrmOperationsError('not_found', 'The intake definition is unavailable.')
   }
+  let scope = actorScope(context.actor)
   if (context.actor.kind === 'intake_key') {
-    if (context.actor.definitionId !== definition.id
-      || !await tx.intakeCredentialMayUse(context.actor.credentialId, definition.id)) {
+    const replayScopeId = context.actor.definitionId === definition.id
+      ? await tx.intakeCredentialReplayScope(context.actor.credentialId, definition.id) : null
+    if (!replayScopeId) {
       throw new CrmOperationsError('credential_revoked', 'The intake credential cannot use this definition.')
     }
+    scope = `intake_key:${replayScopeId}`
   }
-  const payloadBytes = Buffer.byteLength(canonicalCrmRequest(command.fields), 'utf8')
-  if (payloadBytes > definition.maxPayloadBytes) {
-    throw new CrmOperationsError('payload_too_large', 'Submission exceeds the definition payload limit.', {
-      maxPayloadBytes: definition.maxPayloadBytes,
-    })
-  }
-  const mapped = validateAndMapFields(definition, command.fields)
   const submittedAt = command.submittedAt ?? now.toISOString()
   const requestHash = crmOperationsSha256({
     definitionKey: command.definitionKey,
@@ -267,7 +280,7 @@ async function executeSubmission(
     submittedAt: command.submittedAt ?? null,
   })
   const claim = await tx.claimIdempotency({
-    actorScope: actorScope(context.actor),
+    actorScope: scope,
     credentialId: context.actor.kind === 'intake_key' ? context.actor.credentialId : null,
     definitionId: definition.id,
     idempotencyKey: command.idempotencyKey,
@@ -283,6 +296,19 @@ async function executeSubmission(
       followUpTaskId: claim.followUpTaskId,
     }, { duplicate: true })
   }
+
+  if (claim.kind === 'retired') {
+    return result(command.kind, { outcome: 'submission_retired' }, { duplicate: true })
+  }
+
+  const payloadBytes = Buffer.byteLength(canonicalCrmRequest(command.fields), 'utf8')
+  if (payloadBytes > definition.maxPayloadBytes) {
+    throw new CrmOperationsError('payload_too_large', 'Submission exceeds the definition payload limit.', {
+      maxPayloadBytes: definition.maxPayloadBytes,
+    })
+  }
+  const mapped = validateAndMapFields(definition, command.fields)
+  const identityVerificationEvidence = verifyIntakeIdentity(context, definition, command, requestHash, now)
 
   let resolvedContactId: string | null = null
   if (definition.identityPolicy === 'external_subject') {
@@ -321,10 +347,11 @@ async function executeSubmission(
   const submission = await tx.createSubmission({
     definition,
     contactId: resolvedContactId,
-    sourceSubmissionId: command.idempotencyKey,
+    sourceSubmissionId: `crm:${claim.claimId}`,
     requestHash,
     fields: command.fields,
     submittedAt,
+    identityVerificationEvidence,
   })
   const submissionId = recordId(submission, 'submission')
 
@@ -343,6 +370,8 @@ async function executeSubmission(
     const consent = await tx.appendConsent({
       contactId: resolvedContactId,
       purpose,
+      purposeKey: mapping.purposeKey,
+      locale: mapping.locale ?? (mapping.localeFieldKey ? CrmWordingLocaleSchema.parse(command.fields[mapping.localeFieldKey]) : undefined),
       action,
       source: 'intake',
       occurredAt: submittedAt,
@@ -429,15 +458,91 @@ export function createCrmOperationsService(
       const context = CrmOperationsContextSchema.parse(rawContext)
       const command = CrmOperationsCommandSchema.parse(rawCommand)
       assertCrmOperationsAuthority(context, command)
+      if(command.kind==='preview_import_file_cleanup') {
+        const preview=await (options.fileCleanup ?? createCrmImportFileCleanupService()).preview(context,command)
+        return result(command.kind,{...preview},{created:true})
+      }
+      if(command.kind==='execute_import_file_cleanup') {
+        const executed=await (options.fileCleanup ?? createCrmImportFileCleanupService()).execute(context,command)
+        return result(command.kind,executed.receipt,{created:!executed.duplicate,duplicate:executed.duplicate})
+      }
+      if(command.kind==='preview_retention') {
+        const preview=await (options.retention ?? createCrmRetentionService()).preview(context,command)
+        return result(command.kind,{...preview},{created:true})
+      }
+      if(command.kind==='execute_retention') {
+        const executed=await (options.retention ?? createCrmRetentionService()).execute(context,command)
+        return result(command.kind,executed.receipt,{created:!executed.duplicate,duplicate:executed.duplicate})
+      }
+      if(command.kind==='send_message') {
+        if(!options.deliveries) throw new CrmOperationsError('conflict','CRM delivery is unavailable.',{reason:'delivery_unavailable'})
+        const sent=await options.deliveries.send(context,command)
+        return result(command.kind,{...sent.receipt},{created:!sent.duplicate,duplicate:sent.duplicate})
+      }
+      if(command.kind==='preview_contact_erasure') {
+        const preview=await (options.privacy ?? createCrmPrivacyService()).preview(context,command)
+        return result(command.kind,{...preview},{created:true})
+      }
+      if(command.kind==='erase_contact_with_preview') {
+        const erased=await (options.privacy ?? createCrmPrivacyService()).erase(context,command)
+        return result(command.kind,erased.receipt,{created:!erased.duplicate,duplicate:erased.duplicate})
+      }
       const now = clock()
       const occurredAt = now.toISOString()
       const identity = actorAuditIdentity(context.actor)
 
       return store.transaction(context, async (tx) => {
+        if (context.authority.integration && !isCrmConfigCommand(command)) await tx.authorizeIntegration(command)
+        if (isCrmConfigCommand(command)) {
+          const saved = await tx.configureCatalog(command)
+          if (saved.changed) await audit(tx, context.actor, {
+            action: `crm.${saved.subjectKind}.${saved.created ? 'created' : 'updated'}`,
+            subjectKind: saved.subjectKind, subjectId: recordId(saved.record, saved.subjectKind),
+          })
+          return result(command.kind, saved.record, { created: saved.created, duplicate: !saved.changed })
+        }
+        if (command.kind === 'release_address_suppression') {
+          const saved = await tx.releaseAddressSuppression(command)
+          if (saved.changed) await audit(tx, context.actor, { action: 'crm.address_suppression.released',subjectKind: 'address_suppression',
+            subjectId: recordId(saved.record,'suppression'),details: { evidenceKind: command.evidenceKind,evidenceId: command.evidenceId } })
+          return result(command.kind,saved.record,{ duplicate: !saved.changed })
+        }
+        if (command.kind === 'save_managed_mailbox_policy') {
+          const saved = await tx.saveManagedMailboxPolicy(command)
+          if (saved.changed) await audit(tx,context.actor,{ action:'crm.mailbox_policy.approved',subjectKind:'mailbox_policy',
+            subjectId:recordId(saved.record,'mailbox policy'),details:{ version:saved.record.version,managed:saved.record.managed } })
+          return result(command.kind,saved.record,{ duplicate:!saved.changed })
+        }
+        if(command.kind==='save_mailbox_integration_grant') {
+          const saved=await tx.saveMailboxIntegrationGrant(command)
+          if(saved.changed) await audit(tx,context.actor,{action:'crm.mailbox_integration_grant.approved',subjectKind:'mailbox_integration_grant',
+            subjectId:recordId(saved.record,'mailbox grant'),details:{version:saved.record.version,enabled:saved.record.enabled}})
+          return result(command.kind,saved.record,{duplicate:!saved.changed})
+        }
+        if (command.kind === 'save_privacy_policy') {
+          const saved = await tx.savePrivacyPolicy(command)
+          if (saved.created) await audit(tx, context.actor, {
+            action: 'crm.privacy_policy.approved', subjectKind: 'privacy_policy',
+            subjectId: recordId(saved.record, 'privacy policy'),
+            details: { version: saved.record.version, intakeReplayConfigured: saved.record.policy.intakeReplay !== null },
+          })
+          return result(command.kind, saved.record, { created: saved.created })
+        }
+        if (command.kind === 'save_entitlement_plan' || command.kind === 'save_event') {
+          const saved = command.kind === 'save_entitlement_plan'
+            ? await tx.saveEntitlementPlan(command) : await tx.saveEvent(command)
+          const subjectKind = command.kind === 'save_entitlement_plan' ? 'entitlement_plan' : 'event'
+          await audit(tx, context.actor, {
+            action: `crm.${subjectKind}.${saved.created ? 'created' : 'updated'}`,
+            subjectKind, subjectId: recordId(saved.record, subjectKind),
+          })
+          return result(command.kind, saved.record, { created: saved.created })
+        }
         if (command.kind === 'record_submission') {
           return executeSubmission(tx, context, command, now)
         }
         if (command.kind === 'save_intake_definition') {
+          assertIntakeVerificationConfiguration(context, command.definition)
           const snapshot = command.definition
           const saved = await tx.saveIntakeDefinition({
             ...command,
@@ -456,9 +561,10 @@ export function createCrmOperationsService(
           const credentialId = makeCredentialId()
           const secret = makeSecret()
           const oneTimeSecret = `sk_intake_${credentialId}_${secret}`
-          const prefix = oneTimeSecret.slice(0, 14)
+          const prefix = `sk_intake_${credentialId}`
           const record = await tx.createIntakeCredential({
             credentialId,
+            rotateFromCredentialId: command.rotateFromCredentialId,
             label: command.label,
             definitionIds: command.definitionIds,
             secretPrefix: prefix,
@@ -467,7 +573,7 @@ export function createCrmOperationsService(
           })
           await audit(tx, context.actor, {
             action: 'crm.intake_credential.created', subjectKind: 'intake_credential', subjectId: credentialId,
-            details: { definitionIds: command.definitionIds },
+            details: { definitionIds: command.definitionIds, ...(command.rotateFromCredentialId ? { rotatedFromCredentialId: command.rotateFromCredentialId } : {}) },
           })
           return result(command.kind, record, { created: true, oneTimeSecret })
         }
@@ -480,8 +586,21 @@ export function createCrmOperationsService(
           return result(command.kind, record)
         }
         if (command.kind === 'save_consent_purpose') {
+          const previous = command.purposeId ? await tx.getConsentPurpose(command.purposeKey) : null
+          if (command.purposeId && previous?.id !== command.purposeId) {
+            throw new CrmOperationsError('not_found', 'Consent purpose was not found for this stable key.')
+          }
+          const defaultLocale = command.defaultLocale === undefined ? (previous?.defaultLocale as string | null) ?? null : command.defaultLocale
+          const localeWordings = CrmLocaleWordingsSchema.parse(command.localeWordings ?? previous?.localeWordings ?? {})
+          if (defaultLocale && localeWordings[defaultLocale as keyof typeof localeWordings] !== undefined
+            && localeWordings[defaultLocale as keyof typeof localeWordings] !== command.wording) {
+            invalidInput('The default locale translation must equal the default wording.')
+          }
           const saved = await tx.saveConsentPurpose({
             ...command,
+            defaultLocale,
+            localeWordings,
+            localeWordingHashes: Object.fromEntries(Object.entries(localeWordings).map(([locale, text]) => [locale, crmOperationsSha256(text)])),
             wordingHash: crmOperationsSha256(command.wording),
             createdByUserId: actorUserId(context.actor),
           })
@@ -507,10 +626,10 @@ export function createCrmOperationsService(
         }
         if (command.kind === 'record_consent') {
           const purpose = await tx.getConsentPurpose(command.purposeKey)
-          if (!purpose || purpose.archivedAt) throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', { purposeKey: command.purposeKey })
           const saved = await tx.appendConsent({
             ...command,
             purpose,
+            requestedOccurredAt: command.occurredAt,
             occurredAt: command.occurredAt ?? occurredAt,
             actor: identity,
           })
@@ -526,7 +645,7 @@ export function createCrmOperationsService(
           return result(command.kind, saved.record, { created: true, emittedEventIds: [eventId] })
         }
         if (command.kind === 'record_suppression') {
-          const saved = await tx.appendSuppression({ ...command, occurredAt: command.occurredAt ?? occurredAt, actor: identity })
+          const saved = await tx.appendSuppression({ ...command, requestedOccurredAt: command.occurredAt, occurredAt: command.occurredAt ?? occurredAt, actor: identity })
           const id = recordId(saved.record, 'suppression event')
           if (!saved.created) return result(command.kind, saved.record, { duplicate: true })
           await audit(tx, context.actor, { action: 'crm.suppression.changed', subjectKind: 'contact', subjectId: command.contactId, details: { eventId: id, channel: command.channel, action: command.action } })
@@ -572,6 +691,15 @@ export function createCrmOperationsService(
             payload: { entitlementId: id, contactId: command.contactId, planId: command.planId, status: command.status, actorKind: context.actor.kind, occurredAt }, occurredAt,
           })
           return result(command.kind, saved.record, { created: true, emittedEventIds: [eventId] })
+        }
+        if(command.kind==='expire_due_entitlement') {
+          const record=await tx.expireDueEntitlement(command.entitlementId)
+          if(!record)return result(command.kind,{id:command.entitlementId,changed:false},{duplicate:true})
+          await audit(tx,context.actor,{action:'crm.entitlement.changed',subjectKind:'entitlement',subjectId:command.entitlementId,details:{status:'expired'}})
+          const eventId=await emit(tx,context,{eventType:'crm.entitlement.changed',eventKey:`crm.entitlement.changed:${command.entitlementId}:expired`,
+            subjectKind:'entitlement',subjectId:command.entitlementId,payload:{entitlementId:command.entitlementId,contactId:record.contactId,
+              planId:record.planId,status:'expired',actorKind:context.actor.kind,occurredAt},occurredAt})
+          return result(command.kind,{...record,changed:true},{emittedEventIds:[eventId]})
         }
         if (command.kind === 'update_entitlement') {
           const record = await tx.updateEntitlement(command.entitlementId, command)

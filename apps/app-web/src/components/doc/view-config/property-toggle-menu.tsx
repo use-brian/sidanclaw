@@ -22,11 +22,7 @@
  * after a client-side open — the closed-state SSR test never renders it.
  */
 
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { useState } from "react";
 import {
   DndContext,
   type DragEndEvent,
@@ -45,6 +41,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Columns, Eye, EyeOff, GripVertical } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import type { A2UIColumn } from "@use-brian/views-renderer";
@@ -69,7 +66,6 @@ export function PropertyToggleMenu({
 }: PropertyToggleMenuProps) {
   const t = useT().docPage.viewToolbar;
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
 
   // Mouse drag (4px activation so a plain click on the grip doesn't start
   // a drag) + keyboard reorder (arrow keys move a focused grip) — the same
@@ -78,34 +74,7 @@ export function PropertyToggleMenu({
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-
-  // Outside click → close
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    if (typeof document !== "undefined") {
-      document.addEventListener("mousedown", onDocClick);
-      return () => document.removeEventListener("mousedown", onDocClick);
-    }
-    return undefined;
-  }, [open]);
-
-  // Esc → close
-  useEffect(() => {
-    if (!open) return;
-    function onKey(e: globalThis.KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    if (typeof document !== "undefined") {
-      document.addEventListener("keydown", onKey);
-      return () => document.removeEventListener("keydown", onKey);
-    }
-    return undefined;
-  }, [open]);
+  // Outside-press and Escape are the Popover primitive's (`onOpenChange`).
 
   const visibleSet = new Set(visibleProperties);
   const orderedColumns = order
@@ -141,34 +110,40 @@ export function PropertyToggleMenu({
     onChange([], [...order]);
   };
 
+  // The popover is the project `Popover` primitive (base-ui Positioner) so it
+  // flips and clamps inside a 360px viewport (responsive contract M5; report
+  // B row 35). The `<DndContext>` still mounts only once opened (portal).
   return (
-    <div className={"relative " + (className ?? "")} ref={ref}>
-      <button
-        type="button"
-        data-action="open-properties"
-        aria-label={t.propertiesButtonAria}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-      >
-        <Columns className="h-3.5 w-3.5" aria-hidden />
-        <span>{t.propertiesButton}</span>
-      </button>
-
-      {open ? (
-        <div
+    <div className={"relative " + (className ?? "")}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          render={
+            <button
+              type="button"
+              data-action="open-properties"
+              aria-label={t.propertiesButtonAria}
+              aria-haspopup="dialog"
+              aria-expanded={open}
+              className="inline-flex h-9 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground md:h-7"
+            >
+              <Columns className="h-3.5 w-3.5" aria-hidden />
+              <span>{t.propertiesButton}</span>
+            </button>
+          }
+        />
+        <PopoverContent
+          align="end"
           role="dialog"
           aria-label={t.propertiesButton}
           data-popover="properties"
-          className="absolute right-0 top-full z-40 mt-1 w-72 rounded-md border border-border bg-popover p-2 text-sm shadow-lg"
+          className="w-[min(18rem,calc(100vw-1rem))] gap-0 p-2 text-sm"
         >
           <div className="flex items-center justify-between gap-1 border-b border-border pb-1.5">
             <button
               type="button"
               data-action="show-all"
               onClick={handleShowAll}
-              className="h-6 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="h-9 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground md:h-6"
             >
               {t.propertiesShowAll}
             </button>
@@ -176,7 +151,7 @@ export function PropertyToggleMenu({
               type="button"
               data-action="hide-all"
               onClick={handleHideAll}
-              className="h-6 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="h-9 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground md:h-6"
             >
               {t.propertiesHideAll}
             </button>
@@ -206,8 +181,8 @@ export function PropertyToggleMenu({
               </ul>
             </SortableContext>
           </DndContext>
-        </div>
-      ) : null}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -260,7 +235,7 @@ function SortablePropertyRow({
         ref={setActivatorNodeRef}
         data-action="reorder"
         aria-label={dragLabel}
-        className="flex h-5 w-5 flex-shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground/60 hover:bg-border hover:text-foreground active:cursor-grabbing"
+        className="flex size-9 flex-shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground/60 hover:bg-border hover:text-foreground active:cursor-grabbing md:size-5"
         {...attributes}
         {...listeners}
       >
@@ -273,7 +248,7 @@ function SortablePropertyRow({
         aria-label={toggleLabel}
         aria-pressed={visible}
         onClick={onToggle}
-        className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-border hover:text-foreground"
+        className="flex size-9 flex-shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-border hover:text-foreground md:size-6"
       >
         {visible ? (
           <Eye className="h-3.5 w-3.5" aria-hidden />

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { I18nProvider } from "@/lib/i18n/client";
@@ -12,13 +12,25 @@ vi.mock("@/lib/auth-fetch", () => ({
 vi.mock("@/lib/desktop-auth-source", () => ({
   usesGatewayCredentials: vi.fn(() => false),
 }));
+const recordingHarness = vi.hoisted(() => ({
+  run: vi.fn(),
+  dismiss: vi.fn(),
+}));
+vi.mock("@/lib/recordings/use-recording-upload", () => ({
+  useRecordingUpload: () => ({
+    run: recordingHarness.run,
+    dismiss: recordingHarness.dismiss,
+    status: "idle",
+    uploadProgress: 0,
+  }),
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { SuggestedFileDrop } from "../suggested-file-drop";
 
 /**
- * Staging rules for the Home "Add files to your brain" block. Both cases are
+ * Staging rules for the shared "Add files to your brain" block. Both cases are
  * failures a user could not previously see: an oversized file died at the edge
  * with `TypeError: Failed to fetch` (2026-08-29, a 62.7 MB .docx), and the
  * sixth file of a drop was discarded by a `.slice()` with no chip at all.
@@ -28,6 +40,11 @@ import { SuggestedFileDrop } from "../suggested-file-drop";
 describe("[COMP:app-web/home-file-drop] SuggestedFileDrop staging", () => {
   let root: Root | null = null;
   let host: HTMLDivElement | null = null;
+
+  beforeEach(() => {
+    recordingHarness.run.mockReset();
+    recordingHarness.dismiss.mockReset();
+  });
 
   afterEach(() => {
     act(() => root?.unmount());
@@ -43,14 +60,14 @@ describe("[COMP:app-web/home-file-drop] SuggestedFileDrop staging", () => {
     return file;
   };
 
-  function mountWith(files: File[]): HTMLElement {
+  function mountWith(files: File[], assistantId?: string): HTMLElement {
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
     act(() => {
       root!.render(
         <I18nProvider locale="en" dict={en}>
-          <SuggestedFileDrop workspaceId="ws-1" />
+          <SuggestedFileDrop workspaceId="ws-1" assistantId={assistantId} />
         </I18nProvider>,
       );
     });
@@ -83,5 +100,33 @@ describe("[COMP:app-web/home-file-drop] SuggestedFileDrop staging", () => {
       expect(dom.textContent).toContain(`file-${i}.md`);
     }
     expect(dom.textContent).toContain("Only 5 files at a time");
+  });
+
+  it("routes a large video through recording intake and keeps it off the document size cap", async () => {
+    const video = new File([new Uint8Array(1)], "planning.mov", { type: "" });
+    Object.defineProperty(video, "size", { value: 65_790_453 });
+    recordingHarness.run.mockResolvedValue({
+      outcome: "queued",
+      recording: {
+        recordingId: "recording-1",
+        status: "queued",
+        jobId: "job-1",
+      },
+      message: "Queued",
+    });
+
+    const dom = mountWith([video], "assistant-1");
+    expect(dom.textContent).toContain("planning.mov");
+    expect(dom.textContent).not.toContain("30.0 MB");
+
+    const add = [...dom.querySelectorAll("button")].find(
+      (button) => button.textContent === "Add to brain",
+    );
+    await act(async () => {
+      add?.click();
+    });
+
+    expect(recordingHarness.run).toHaveBeenCalledWith(video);
+    expect(dom.textContent).toContain("Queued for transcription");
   });
 });

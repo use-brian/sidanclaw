@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "sourceLabel": "Fictional community assurance fixture",
+  "recordFields": [
+    { "ref": "interests", "value": { "entityKind": "person", "fieldKey": "interests", "label": "Interests", "fieldType": "multi_select", "options": ["Learning", "Volunteering"] } }
+  ],
+  "pipelines": [
+    { "ref": "membership_pipeline", "value": { "name": "Membership applications", "isDefault": true } }
+  ],
+  "pipelineStages": [
+    { "ref": "membership_review", "pipelineRef": "membership_pipeline", "value": { "name": "Review", "category": "open", "probability": 25 } },
+    { "ref": "membership_accepted", "pipelineRef": "membership_pipeline", "value": { "name": "Accepted", "category": "won", "probability": 100 } }
+  ],
+  "consentPurposes": [
+    { "ref": "community_news", "value": { "purposeKey": "community_news", "label": "Community news", "requiresConsent": true, "applicableChannels": ["email"], "wordingVersion": "1", "wording": "I agree to receive fictional community news by email.", "defaultLocale": "en", "localeWordings": { "en": "I agree to receive fictional community news by email." } } }
+  ],
+  "entitlementPlans": [
+    { "ref": "community_plan", "value": { "key": "community", "name": "Community membership", "currency": "USD", "feeMinor": 0, "billingPeriod": "manual", "published": false } }
+  ],
+  "events": [
+    { "ref": "community_orientation", "value": { "slug": "community-orientation", "title": "Community orientation", "startsAt": "2099-06-01T10:00:00Z", "endsAt": "2099-06-01T11:00:00Z", "timezone": "UTC", "mode": "venue", "venue": "Fictional community room", "capacity": 25, "status": "draft" } }
+  ],
+  "intakeDefinitions": [
+    { "ref": "community_application", "sensitiveFieldKeys": ["private_note"], "value": { "definitionKey": "community_application", "label": "Community application", "definition": {
+      "identityPolicy": "new_or_review",
+      "fields": [
+        { "key": "name", "label": "Name", "type": "text", "required": true, "mapping": { "kind": "base_field", "field": "name" } },
+        { "key": "email", "label": "Email", "type": "email", "required": true, "mapping": { "kind": "base_field", "field": "email" } },
+        { "key": "interests", "label": "Interests", "type": "string_array", "options": ["Learning", "Volunteering"], "mapping": { "kind": "custom_field", "fieldKey": "interests" } },
+        { "key": "private_note", "label": "Private application note", "type": "text", "mapping": { "kind": "submission_only" } },
+        { "key": "news", "label": "Receive news", "type": "boolean", "required": true, "mapping": { "kind": "submission_only" } }
+      ],
+      "consentMappings": [{ "fieldKey": "news", "grantedValue": true, "purposeKey": "community_news", "locale": "en" }]
+    } } }
+  ],
+  "segments": [
+    { "ref": "named_contacts", "value": { "segmentKey": "named_contacts", "name": "Named contacts", "entityKind": "person", "predicate": { "type": "group", "combinator": "and", "items": [{ "type": "rule", "family": "base", "field": "name", "operator": "is_not_empty" }] } } }
+  ]
+}

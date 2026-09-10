@@ -159,7 +159,7 @@ export function GuestComments({
             onChange={(e) => setName(e.target.value)}
             placeholder={t.namePlaceholder}
             maxLength={80}
-            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
           />
         ) : null}
         <textarea
@@ -167,14 +167,14 @@ export function GuestComments({
           onChange={(e) => setDraft(e.target.value)}
           placeholder={t.placeholder}
           rows={3}
-          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-sm"
+          className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
         />
         <div className="flex justify-end">
           <button
             type="button"
             onClick={() => void post()}
             disabled={posting || !canPost}
-            className="rounded-md bg-action px-3 py-1.5 text-sm font-medium text-action-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex h-11 items-center rounded-md bg-action px-4 text-sm font-medium text-action-foreground transition-opacity hover:opacity-90 disabled:opacity-50 md:h-8 md:px-3"
           >
             {posting ? t.posting : t.post}
           </button>

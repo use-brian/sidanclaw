@@ -8,16 +8,21 @@
 
 import { z } from 'zod'
 import { buildTool, type Tool, type ToolContext } from '../tools/types.js'
+import { missingToolCapability } from '../tools/capability-gate.js'
+import { AssociationPlanInputSchema, AssociationEventInputSchema } from '../association/domain.js'
 import {
   CrmDeliveryChannelSchema,
   type SendabilityVerdict,
 } from './sendability.js'
 import { CrmSegmentPredicateSchema } from './segments.js'
+import type { CrmPage, CrmPageQuery } from './pagination.js'
 import {
   CrmExternalIdentityClaimSchema,
   CrmOperationsError,
   CrmOperationsStableKeySchema,
   CrmOperationsUuidSchema,
+  SendCrmMessageInputSchema, SendCrmMessageCommandSchema, type CrmDeliveryServicePort,
+  CrmWordingLocaleSchema,
   RecordCrmSubmissionCommandSchema,
   type CrmOperationsActor,
   type CrmOperationsCommand,
@@ -26,15 +31,15 @@ import {
 } from './operations-types.js'
 
 export type CrmOperationsReadPort = {
-  listIntakeDefinitions(workspaceId: string): Promise<Array<Record<string, unknown>>>
-  listSubmissions(workspaceId: string, filters?: {
+  listIntakeDefinitions(workspaceId: string, filters?: CrmPageQuery): Promise<CrmPage<'definitions'>>
+  listSubmissions(workspaceId: string, filters?: CrmPageQuery & {
     status?: 'new' | 'in_progress' | 'resolved' | 'spam'
     definitionKey?: string
     ownerUserId?: string
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
+  }): Promise<CrmPage<'submissions'>>
   getSubmission(workspaceId: string, submissionId: string): Promise<Record<string, unknown> | null>
-  listConsentPurposes(workspaceId: string, includeArchived?: boolean): Promise<Array<Record<string, unknown>>>
+  listConsentPurposes(workspaceId: string, includeArchived?: boolean, page?: CrmPageQuery): Promise<CrmPage<'purposes'>>
   getConsent(workspaceId: string, contactId: string): Promise<{
     purposes: Array<Record<string, unknown>>
     events: Array<Record<string, unknown>>
@@ -46,47 +51,48 @@ export type CrmOperationsReadPort = {
     channel: z.infer<typeof CrmDeliveryChannelSchema>,
     purposeKey: string,
   ): Promise<SendabilityVerdict>
-  listSegments(workspaceId: string, filters?: {
+  listSegments(workspaceId: string, filters?: CrmPageQuery & {
     entityKind?: 'person' | 'company' | 'deal'
     includeArchived?: boolean
-  }): Promise<{
-    segments: Array<Record<string, unknown>>
-    catalog: Array<Record<string, unknown>>
-  }>
+  }): Promise<CrmPage<'segments'> & { catalog: Array<Record<string, unknown>> }>
   getSegment(workspaceId: string, segmentId: string): Promise<Record<string, unknown> | null>
-  previewSegment(workspaceId: string, segmentId: string, options?: {
-    limit?: number
+  previewSegment(workspaceId: string, segmentId: string, options?: CrmPageQuery & {
     snapshotLimit?: number
+    snapshotCursor?: string
   }): Promise<{
     rows: Array<Record<string, unknown>>
     count: number
     snapshotIds: string[]
+    nextCursor: string | null
+    snapshotNextCursor: string | null
   }>
-  listEntitlementPlans(workspaceId: string, filters?: {
+  listEntitlementPlans(workspaceId: string, filters?: CrmPageQuery & {
     published?: boolean
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listEntitlements(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'plans'>>
+  listEntitlements(workspaceId: string, filters?: CrmPageQuery & {
+    activeOnly?: boolean
+    effectiveAt?: string
     contactId?: string
     planId?: string
     status?: 'pending' | 'active' | 'expired' | 'cancelled'
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listEvents(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'entitlements'>>
+  listEvents(workspaceId: string, filters?: CrmPageQuery & {
     status?: 'draft' | 'published' | 'cancelled' | 'completed'
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listParticipation(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'events'>>
+  listParticipation(workspaceId: string, filters?: CrmPageQuery & {
     contactId?: string
     eventId?: string
     status?: 'registered' | 'attended' | 'cancelled' | 'no_show'
     sourceKind?: 'commerce' | 'manual' | 'form' | 'workflow' | 'import'
     limit?: number
-  }): Promise<Array<Record<string, unknown>>>
-  listPipelines(workspaceId: string, filters?: {
+  }): Promise<CrmPage<'participation'>>
+  listPipelines(workspaceId: string, filters?: CrmPageQuery & {
     entityKind?: 'deal'
     includeArchived?: boolean
-  }): Promise<Array<Record<string, unknown>>>
+  }): Promise<CrmPage<'pipelines'>>
 }
 
 export type CrmOperationsTools = {
@@ -114,9 +120,24 @@ export type CrmOperationsTools = {
   recordCrmParticipation: Tool
   updateCrmParticipation: Tool
   setDealPipelineStage: Tool
+  saveCrmEntitlementPlan: Tool
+  saveCrmEvent: Tool
+  sendCrmMessage: Tool
+  getCrmDelivery: Tool
+}
+
+const PageInput = {
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(4096).optional(),
+  created_after: z.string().datetime({ offset: true }).optional(),
+  created_before: z.string().datetime({ offset: true }).optional(),
+}
+function pageFilters(input: { limit?: number; cursor?: string; created_after?: string; created_before?: string }): CrmPageQuery {
+  return { limit: input.limit, cursor: input.cursor, createdAfter: input.created_after, createdBefore: input.created_before }
 }
 
 const SubmissionFiltersSchema = z.object({
+  ...PageInput,
   status: z.enum(['new', 'in_progress', 'resolved', 'spam']).optional(),
   definition_key: CrmOperationsStableKeySchema.optional(),
   owner_user_id: CrmOperationsUuidSchema.optional(),
@@ -138,6 +159,7 @@ const UpdateSubmissionInputSchema = z.object({
 const RecordConsentInputSchema = z.object({
   contact_id: CrmOperationsUuidSchema,
   purpose_key: CrmOperationsStableKeySchema,
+  locale: CrmWordingLocaleSchema.optional(),
   action: z.enum(['granted', 'withdrawn']),
   source: CrmOperationsStableKeySchema,
   occurred_at: z.string().datetime({ offset: true }).optional(),
@@ -191,6 +213,8 @@ const GrantEntitlementInputSchema = z.object({
   renewal_mode: z.enum(['none', 'manual', 'auto']).default('none'),
   provider: CrmOperationsStableKeySchema.optional(),
   provider_entitlement_id: z.string().trim().min(1).max(500).optional(),
+  provider_period_id: z.string().trim().min(1).max(500).optional(),
+  predecessor_id: CrmOperationsUuidSchema.optional(),
 }).strict().refine(
   (value) => (value.provider === undefined) === (value.provider_entitlement_id === undefined),
   'provider and provider_entitlement_id must be supplied together',
@@ -255,7 +279,8 @@ function actorFor(context: ToolContext): CrmOperationsActor {
   }
 }
 
-function operationsContext(context: ToolContext): CrmOperationsContext | null {
+/** Preserve the calling principal when adapting native tools to CRM/Association. */
+export function crmOperationsToolContext(context: ToolContext): CrmOperationsContext | null {
   const workspace = workspaceId(context)
   if (!workspace) return null
   return {
@@ -287,20 +312,70 @@ function failure(error: unknown) {
 export function createCrmOperationsTools(options: {
   reads: CrmOperationsReadPort
   service: CrmOperationsServicePort
+  deliveries?: CrmDeliveryServicePort
 }): CrmOperationsTools {
-  const read = <T>(run: (workspaceId: string) => Promise<T>) => async (_input: unknown, context: ToolContext) => {
-    const workspace = workspaceId(context)
-    if (!workspace) return workspaceError()
-    try {
-      return { data: await run(workspace) }
-    } catch (error) {
-      return failure(error)
-    }
+  function configure<Input extends z.ZodType>(name: string, description: string, inputSchema: Input,
+    toCommand: (input: z.infer<Input>) => CrmOperationsCommand): Tool<Input> {
+    const tool: Tool<Input> = buildTool({
+      name, description, inputSchema, requiresCapability: 'configure',
+      homeAppToolSet: { app: 'crm', set: 'write' },
+      async execute(input, context) {
+        const missing = missingToolCapability(tool, context.activeCapabilities)
+        if (missing) return { isError: true, data: { error: 'not_authorized', requiredCapability: missing } }
+        const serviceContext = crmOperationsToolContext(context)
+        if (!serviceContext) return workspaceError()
+        try {
+          return { data: await options.service.execute({ ...serviceContext,
+            authority: { ...serviceContext.authority, canConfigure: true },
+          }, toCommand(inputSchema.parse(input))) }
+        } catch (error) {
+          if (error instanceof CrmOperationsError) return failure(error)
+          return { isError: true, data: { error: error instanceof z.ZodError ? 'invalid_input' : 'internal', message: 'CRM configuration could not complete.' } }
+        }
+      },
+    })
+    return tool
   }
+  const saveCrmEntitlementPlan = configure('saveCrmEntitlementPlan',
+    'Save a generic CRM entitlement plan by stable key. Read the plan catalog first. Requires explicit configuration and CRM write grants; no Association module is required. This does not grant membership or assert payment.',
+    z.object({ plan: AssociationPlanInputSchema }).strict(), input => ({ kind: 'save_entitlement_plan', ...input.plan }))
+  const saveCrmEvent = configure('saveCrmEvent',
+    'Save a generic CRM event by stable slug using the declared timezone and registration windows. Read the event catalog first. Requires explicit configuration and CRM write grants; no Association module is required. This does not create a ticket or registration.',
+    z.object({ event: AssociationEventInputSchema }).strict(), input => ({ kind: 'save_event', ...input.event }))
+  function delivery<Input extends z.ZodType>(name:string,description:string,inputSchema:Input,read:boolean):Tool<Input> {
+    const tool:Tool<Input>=buildTool({name,description,inputSchema,requiresCapability:'crm',
+      homeAppToolSet:{app:'crm',set:read?'read':'write'},isReadOnly:read,requiresConfirmation:!read,
+      async execute(input,context) {
+        const missing=missingToolCapability(tool,context.activeCapabilities)
+        if(missing) return {isError:true,data:{error:'not_authorized',requiredCapability:missing}}
+        const caller=crmOperationsToolContext(context)
+        if(!caller) return workspaceError()
+        caller.authority.nativeDelivery={assistantId:context.assistantId,compartments:context.compartments ?? null,projectIds:context.projectIds ?? null}
+        try {
+          const parsed=inputSchema.parse(input)
+          if(read) {
+            if(!options.deliveries) throw new CrmOperationsError('conflict','CRM delivery is unavailable.',{reason:'delivery_unavailable'})
+            return {data:{receipt:await options.deliveries.get(caller,parsed.deliveryId)}}
+          }
+          return {data:await options.service.execute(caller,SendCrmMessageCommandSchema.parse({...parsed,kind:'send_message'}))}
+        } catch(error) {
+          if(error instanceof CrmOperationsError) return failure(error)
+          return {isError:true,data:{error:error instanceof z.ZodError?'invalid_input':'internal',message:'CRM delivery could not complete. Inspect the original delivery identity before another attempt.'}}
+        }
+      },
+    })
+    return tool
+  }
+  const sendCrmMessage=delivery('sendCrmMessage',
+    'Send one managed CRM email with a stable deliveryId and exact connectorInstanceId. Requires CRM write and the current mailbox send grant. All To/Cc/Bcc recipients are checked for this purpose immediately before dispatch. Inspect uncertain results with getCrmDelivery using the SAME deliveryId; never invent a new identity to retry. Sent means provider acceptance, not confirmed recipient delivery.',
+    SendCrmMessageInputSchema,false)
+  const getCrmDelivery=delivery('getCrmDelivery',
+    'Inspect a durable CRM delivery receipt by its original deliveryId, including provider acceptance, blocked or uncertain outcomes. This never resends a message and does not expose message content.',
+    z.object({deliveryId:CrmOperationsUuidSchema}).strict(),true)
   const write = <T extends CrmOperationsCommand>(
     command: (input: Record<string, unknown>) => T,
   ) => async (input: Record<string, unknown>, context: ToolContext) => {
-    const serviceContext = operationsContext(context)
+    const serviceContext = crmOperationsToolContext(context)
     if (!serviceContext) return workspaceError()
     try {
       return { data: await options.service.execute(serviceContext, command(input)) }
@@ -311,20 +386,25 @@ export function createCrmOperationsTools(options: {
 
   const listCrmIntakeDefinitions = buildTool({
     name: 'listCrmIntakeDefinitions', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List the active and archived CRM intake definitions in this workspace, including stable definition keys, versions, field catalogs, identity policy, routing, and payload limits. Use a returned definition_key rather than guessing one.',
-    inputSchema: z.object({}).strict(),
-    execute: read((workspace) => options.reads.listIntakeDefinitions(workspace)),
+    description: 'List the active and archived CRM intake definitions in this workspace, including stable definition keys, versions, field catalogs, identity policy, routing, and payload limits. Use a returned definition_key rather than guessing one. Follow nextCursor with the same filters until it is null.',
+    inputSchema: z.object(PageInput).strict(),
+    async execute(input, context) {
+      const workspace = workspaceId(context)
+      if (!workspace) return workspaceError()
+      try { return { data: await options.reads.listIntakeDefinitions(workspace, pageFilters(input)) } }
+      catch (error) { return failure(error) }
+    },
   })
   const listCrmSubmissions = buildTool({
     name: 'listCrmSubmissions', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List CRM intake submissions with bounded status, definition, owner, and limit filters. Returns stable submission and contact ids. Use getCrmSubmission for the complete captured fields and notes.',
+    description: 'List CRM intake submissions with bounded status, definition, owner, and limit filters. Returns stable submission and contact ids. Use getCrmSubmission for the complete captured fields and notes. Follow nextCursor with the same filters until it is null.',
     inputSchema: SubmissionFiltersSchema,
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listSubmissions(workspace, {
-          status: input.status,
+          ...pageFilters(input), status: input.status,
           definitionKey: input.definition_key,
           ownerUserId: input.owner_user_id,
           limit: input.limit,
@@ -347,12 +427,12 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmConsentPurposes = buildTool({
     name: 'listCrmConsentPurposes', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate the workspace consent-purpose catalog, including stable purpose keys, applicable channels, consent requirement, wording version, and archive state. Use a returned purpose_key for consent and sendability calls.',
-    inputSchema: z.object({ include_archived: z.boolean().default(false) }).strict(),
+    description: 'Enumerate the workspace consent-purpose catalog, including stable purpose keys, applicable channels, consent requirement, wording version, and archive state. Use a returned purpose_key for consent and sendability calls. Follow nextCursor with the same filters until it is null.',
+    inputSchema: z.object({ ...PageInput, include_archived: z.boolean().default(false) }).strict(),
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
-      try { return { data: await options.reads.listConsentPurposes(workspace, input.include_archived) } }
+      try { return { data: await options.reads.listConsentPurposes(workspace, input.include_archived, pageFilters(input)) } }
       catch (error) { return failure(error) }
     },
   })
@@ -384,8 +464,9 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmSegments = buildTool({
     name: 'listCrmSegments', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List workspace-shared dynamic CRM segments and their bounded predicates. Optionally filter by entity kind. Returns stable segment ids and keys; use previewCrmSegment to evaluate current membership.',
+    description: 'List workspace-shared dynamic CRM segments and their bounded predicates. Optionally filter by entity kind. Returns stable segment ids and keys; use previewCrmSegment to evaluate current membership. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       entity_kind: z.enum(['person', 'company', 'deal']).default('person'),
       include_archived: z.boolean().default(false),
     }).strict(),
@@ -394,6 +475,7 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listSegments(workspace, {
+          ...pageFilters(input),
           entityKind: input.entity_kind,
           includeArchived: input.include_archived,
         }) }
@@ -402,9 +484,11 @@ export function createCrmOperationsTools(options: {
   })
   const previewCrmSegment = buildTool({
     name: 'previewCrmSegment', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Evaluate one saved CRM segment at read time. Returns a bounded row preview, the complete count, and a bounded stable-id snapshot suitable for workflow input or export. Unknown catalog fields fail closed with valid choices.',
+    description: 'Evaluate one saved CRM segment at read time. Returns a row preview, complete current count and stable-id page. Continue rows with nextCursor/cursor and IDs with snapshotNextCursor/snapshot_cursor until null; keep the same segment and filters. A dynamic snapshot is not continuing send permission. Unknown catalog fields fail closed with valid choices.',
     inputSchema: z.object({
+      ...PageInput,
       segment_id: CrmOperationsUuidSchema,
+      snapshot_cursor: z.string().min(1).max(4096).optional(),
       limit: z.number().int().min(1).max(100).default(25),
       snapshot_limit: z.number().int().min(1).max(10_000).default(1_000),
     }).strict(),
@@ -413,33 +497,38 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.previewSegment(workspace, input.segment_id, {
-          limit: input.limit,
+          ...pageFilters(input),
           snapshotLimit: input.snapshot_limit,
+          snapshotCursor: input.snapshot_cursor,
         }) }
       } catch (error) { return failure(error) }
     },
   })
   const listCrmEntitlementPlans = buildTool({
     name: 'listCrmEntitlementPlans', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate CRM entitlement plans with stable plan ids and keys, lifecycle dates, publication state, and any provider or fee metadata. Use returned ids for entitlement grants instead of guessing labels.',
+    description: 'Enumerate CRM entitlement plans with stable plan ids and keys, lifecycle dates, publication state, and any provider or fee metadata. Use returned ids for entitlement grants instead of guessing labels. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       published: z.boolean().optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }).strict(),
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
-      try { return { data: await options.reads.listEntitlementPlans(workspace, input) } }
+      try { return { data: await options.reads.listEntitlementPlans(workspace, { ...pageFilters(input), published: input.published }) } }
       catch (error) { return failure(error) }
     },
   })
   const listCrmEntitlements = buildTool({
     name: 'listCrmEntitlements', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List canonical CRM entitlements with bounded contact, plan, and lifecycle-status filters. Results reuse Association membership ids and include stable plan keys.',
+    description: 'List canonical CRM entitlements with bounded contact, plan, and lifecycle-status filters. Results reuse Association membership ids and include stable plan keys, raw status, isEffective and effectiveAt. Use active_only for effective access at an optional effective_at instant; status active alone does not grant access. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       contact_id: CrmOperationsUuidSchema.optional(),
       plan_id: CrmOperationsUuidSchema.optional(),
       status: EntitlementStatusSchema.optional(),
+      active_only: z.boolean().optional(),
+      effective_at: z.string().datetime({ offset: true }).optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }).strict(),
     async execute(input, context) {
@@ -447,30 +536,34 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listEntitlements(workspace, {
+          ...pageFilters(input),
           contactId: input.contact_id, planId: input.plan_id,
           status: input.status, limit: input.limit,
+          activeOnly: input.active_only, effectiveAt: input.effective_at,
         }) }
       } catch (error) { return failure(error) }
     },
   })
   const listCrmEvents = buildTool({
     name: 'listCrmEvents', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate CRM events over the existing Association event catalog, including stable event ids and slugs, schedule, status, capacity, and whether ticket commerce is configured.',
+    description: 'Enumerate CRM events over the existing Association event catalog, including stable event ids and slugs, schedule, status, capacity, and whether ticket commerce is configured. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       status: z.enum(['draft', 'published', 'cancelled', 'completed']).optional(),
       limit: z.number().int().min(1).max(100).default(50),
     }).strict(),
     async execute(input, context) {
       const workspace = workspaceId(context)
       if (!workspace) return workspaceError()
-      try { return { data: await options.reads.listEvents(workspace, input) } }
+      try { return { data: await options.reads.listEvents(workspace, { ...pageFilters(input), status: input.status }) } }
       catch (error) { return failure(error) }
     },
   })
   const listCrmParticipation = buildTool({
     name: 'listCrmParticipation', requiresCapability: 'crm', isReadOnly: true,
-    description: 'List canonical event participation with bounded contact, event, status, and source filters. Commerce-created registrations are mapped to generic lifecycle statuses and marked commerce_managed.',
+    description: 'List canonical event participation with bounded contact, event, status, and source filters. Commerce-created registrations are mapped to generic lifecycle statuses and marked commerce_managed. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       contact_id: CrmOperationsUuidSchema.optional(),
       event_id: CrmOperationsUuidSchema.optional(),
       status: ParticipationStatusSchema.optional(),
@@ -482,6 +575,7 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listParticipation(workspace, {
+          ...pageFilters(input),
           contactId: input.contact_id, eventId: input.event_id,
           status: input.status, sourceKind: input.source_kind, limit: input.limit,
         }) }
@@ -490,8 +584,9 @@ export function createCrmOperationsTools(options: {
   })
   const listCrmPipelines = buildTool({
     name: 'listCrmPipelines', requiresCapability: 'crm', isReadOnly: true,
-    description: 'Enumerate the live deal pipeline catalog for this workspace, including stable pipeline and stage ids, keys, labels, categories, order, probability, required fields, and archive state. Call this before moving a deal and never guess a stage from prose.',
+    description: 'Enumerate the live deal pipeline catalog for this workspace, including stable pipeline and stage ids, keys, labels, categories, order, probability, required fields, and archive state. Call this before moving a deal and never guess a stage from prose. Follow nextCursor with the same filters until it is null.',
     inputSchema: z.object({
+      ...PageInput,
       entity_kind: z.literal('deal').default('deal'),
       include_archived: z.boolean().default(false),
     }).strict(),
@@ -500,6 +595,8 @@ export function createCrmOperationsTools(options: {
       if (!workspace) return workspaceError()
       try {
         return { data: await options.reads.listPipelines(workspace, {
+          ...pageFilters(input),
+          ...pageFilters(input),
           entityKind: input.entity_kind,
           includeArchived: input.include_archived,
         }) }
@@ -508,7 +605,7 @@ export function createCrmOperationsTools(options: {
   })
   const recordCrmSubmission = buildTool({
     name: 'recordCrmSubmission', requiresCapability: 'crm',
-    description: 'Atomically record a CRM submission through an existing intake definition. The definition controls identity matching, field mappings, consent, routing, and follow-up. Pass an idempotency_key and a stable definition_key from listCrmIntakeDefinitions.',
+    description: 'Atomically record a CRM submission through an existing intake definition. Pass a stable definitionKey and idempotencyKey. Trusted email or external-subject matching requires owner-configured backend identityProof; never fabricate proof. Use new_or_review definitions for unverified claims and omit submittedAt. The definition controls mappings, consent, routing and follow-up. A duplicate with outcome submission_retired has no record ids: it acknowledges an erased or retained-away submission. Do not invent ids or change the key to recreate it.',
     inputSchema: RecordCrmSubmissionCommandSchema.omit({ kind: true }),
     execute: write((input) => ({ kind: 'record_submission', ...input } as TRecordSubmission)),
   })
@@ -524,11 +621,12 @@ export function createCrmOperationsTools(options: {
   })
   const recordCrmConsent = buildTool({
     name: 'recordCrmConsent', requiresCapability: 'crm',
-    description: 'Append consent evidence for a CRM contact and an enumerated purpose. This never overwrites history. Consent withdrawal requires user confirmation.',
+    description: 'Append consent evidence for a CRM contact and an enumerated purpose. Optional locale selects stored translated wording, falling back to the stored default; never infer language from the operator. The server freezes wording, hash and version. Consent withdrawal requires user confirmation.',
     inputSchema: RecordConsentInputSchema,
     resolveConfirmation: async (_context, input) => RecordConsentInputSchema.parse(input).action === 'withdrawn',
     execute: write((input) => ({
       kind: 'record_consent', contactId: input.contact_id, purposeKey: input.purpose_key,
+      locale: input.locale,
       action: input.action, source: input.source, occurredAt: input.occurred_at,
       provider: input.provider, providerEventId: input.provider_event_id, metadata: input.metadata,
     } as CrmOperationsCommand)),
@@ -571,7 +669,7 @@ export function createCrmOperationsTools(options: {
   })
   const grantCrmEntitlement = buildTool({
     name: 'grantCrmEntitlement', requiresCapability: 'crm',
-    description: 'Idempotently grant a CRM entitlement to a contact using a stable plan_id from listCrmEntitlementPlans. This uses the same canonical membership row seen by Association operations.',
+    description: 'Idempotently grant a CRM entitlement to a contact using a stable plan_id from listCrmEntitlementPlans. This uses the same canonical membership row seen by Association operations. Provider-backed grants require backend evidence authority. A renewal after a terminal grant needs a new provider_period_id and its predecessor_id; active periods extend in place.',
     inputSchema: GrantEntitlementInputSchema,
     execute: write((input) => ({
       kind: 'grant_entitlement', contactId: input.contact_id, planId: input.plan_id,
@@ -579,6 +677,7 @@ export function createCrmOperationsTools(options: {
       startsAt: input.starts_at, endsAt: input.ends_at,
       renewalMode: input.renewal_mode, provider: input.provider,
       providerEntitlementId: input.provider_entitlement_id,
+      providerPeriodId: input.provider_period_id, predecessorId: input.predecessor_id,
     } as CrmOperationsCommand)),
   })
   const updateCrmEntitlement = buildTool({
@@ -632,6 +731,7 @@ export function createCrmOperationsTools(options: {
     saveCrmSegment, archiveCrmSegment,
     grantCrmEntitlement, updateCrmEntitlement,
     recordCrmParticipation, updateCrmParticipation, setDealPipelineStage,
+    saveCrmEntitlementPlan, saveCrmEvent, sendCrmMessage, getCrmDelivery,
   }
 }
 

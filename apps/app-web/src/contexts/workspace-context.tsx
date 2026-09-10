@@ -47,6 +47,12 @@ export type Workspace = {
   /** `true` for the auto-created default workspace (`is_personal`) — a label
    *  only; it gates no connector/sharing behavior (that keys on `memberCount`). */
   isPersonal?: boolean;
+  // Picker preferences (`GET /api/workspaces` carries them per row). The
+  // switcher's scalable list (`lib/workspace-picker.ts`) groups on these, so
+  // they ride the shared cache instead of a private copy of the same fetch.
+  pickerPinnedAt?: string | null;
+  pickerHiddenAt?: string | null;
+  pickerLastOpenedAt?: string | null;
 };
 
 // ── Workspace list cache (the only mutable shared state) ──────────────────
@@ -163,6 +169,39 @@ export function useWorkspaces(): {
   return { workspaces, activeId, active, setActive };
 }
 
+let inflightFetch: Promise<Workspace[]> | null = null;
+
+/**
+ * Load the workspace list into the shared cache and resolve with it. ONE
+ * request at a time: the switcher's first open, the Studio layout's mount
+ * and a post-create refresh all join the same in-flight promise, so the
+ * list is fetched once per app load however many readers race for it.
+ * Rejects on a non-OK response or a transport failure; the cache is left as
+ * it was (a failed refresh must not blank a list already on screen).
+ */
+export function fetchWorkspaces(apiUrl: string): Promise<Workspace[]> {
+  if (inflightFetch) return inflightFetch;
+  const request = (async () => {
+    const res = await authFetch(`${apiUrl}/api/workspaces`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as {
+      workspaces?: Workspace[];
+      teams?: Workspace[];
+    };
+    const list = Array.isArray(data.workspaces)
+      ? data.workspaces
+      : Array.isArray(data.teams)
+        ? data.teams
+        : [];
+    setWorkspaces(list);
+    return list;
+  })().finally(() => {
+    inflightFetch = null;
+  });
+  inflightFetch = request;
+  return request;
+}
+
 /**
  * Fetch the workspace list once per app load into the shared cache. Mount on
  * a layout so every ported surface can rely on the list being populated;
@@ -171,29 +210,10 @@ export function useWorkspaces(): {
 export function useWorkspaceFetch(apiUrl: string): void {
   useEffect(() => {
     if (cachedWorkspaces.length > 0) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await authFetch(`${apiUrl}/api/workspaces`);
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as {
-          workspaces?: Workspace[];
-          teams?: Workspace[];
-        };
-        const list = Array.isArray(data.workspaces)
-          ? data.workspaces
-          : Array.isArray(data.teams)
-            ? data.teams
-            : [];
-        if (!cancelled) setWorkspaces(list);
-      } catch (err) {
-        // Non-fatal — the switcher falls back to an empty list.
-        console.warn("[workspace-context] fetch failed:", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    fetchWorkspaces(apiUrl).catch((err: unknown) => {
+      // Non-fatal — the switcher falls back to an empty list.
+      console.warn("[workspace-context] fetch failed:", err);
+    });
   }, [apiUrl]);
 }
 
@@ -206,4 +226,5 @@ export function __resetWorkspaceCacheForTest(): void {
   lastRouteActiveId = null;
   cachedSnapshot = { workspaces: cachedWorkspaces };
   listeners.clear();
+  inflightFetch = null;
 }

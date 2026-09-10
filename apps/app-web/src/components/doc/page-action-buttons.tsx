@@ -13,12 +13,22 @@
  * binding resolves, and a fetch failure hides the strip rather than erroring
  * the page.
  *
+ * Two renderings over ONE flow (`usePageActions`): the desktop strip
+ * (`PageActionButtons`, with its transient result pill) and the phone
+ * variant (`PageActionMenuItems`), which the page header folds into its `...`
+ * menu below `md` because a page with one binding plus a schedule and a run
+ * overflowed the 332px action column and pushed the menu itself off-screen
+ * (responsive contract M8; report B row 32). The menu variant reports its
+ * outcome through `onFeedback` so the header can show it in its own notice
+ * line (the menu has closed by the time the run resolves).
+ *
  * [COMP:app-web/page-action-buttons]
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Play, Target } from "lucide-react";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { useT, format } from "@/lib/i18n/client";
 import { requestWorkflowRefresh } from "@/lib/workflow-events";
 import { cn } from "@/lib/utils";
@@ -28,20 +38,21 @@ import {
   type PageActionRow,
 } from "@/lib/api/page-actions";
 
-type Feedback = { actionId: string; tone: "ok" | "error"; text: string };
+/** The result line a run reports: its tone + localised text. */
+export type PageActionFeedback = { tone: "ok" | "error"; text: string };
 
-export function PageActionButtons({
-  pageId,
-  workspaceId,
-}: {
-  pageId: string;
-  workspaceId: string;
-}) {
+type Feedback = PageActionFeedback & { actionId: string };
+
+/**
+ * The fetch + confirm + invoke flow shared by both renderings. `run` resolves
+ * to the feedback for the outcome, or `null` when the confirm was cancelled
+ * (or another action is still busy).
+ */
+function usePageActions(pageId: string, workspaceId: string) {
   const dict = useT();
   const t = dict.docPage.pageActions;
   const [actions, setActions] = useState<PageActionRow[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -55,15 +66,8 @@ export function PageActionButtons({
     void load();
   }, [load]);
 
-  // Transient result pill; clears itself.
-  useEffect(() => {
-    if (!feedback) return;
-    const tid = window.setTimeout(() => setFeedback(null), 6000);
-    return () => window.clearTimeout(tid);
-  }, [feedback]);
-
-  const onClick = async (action: PageActionRow) => {
-    if (busyId) return;
+  const run = async (action: PageActionRow): Promise<PageActionFeedback | null> => {
+    if (busyId) return null;
     const framing =
       action.action.kind === "goal" ? t.confirmGoal : t.confirmWorkflow;
     const confirmed = await confirmDialog({
@@ -72,39 +76,68 @@ export function PageActionButtons({
       confirmLabel: t.confirmRun,
       cancelLabel: t.cancel,
     });
-    if (!confirmed) return;
+    if (!confirmed) return null;
 
     setBusyId(action.id);
-    setFeedback(null);
     const outcome = await invokePageAction(pageId, action.id);
     setBusyId(null);
 
     if (!outcome.ok) {
-      setFeedback({ actionId: action.id, tone: "error", text: outcome.error || t.failed });
-      return;
+      return { tone: "error", text: outcome.error || t.failed };
     }
     if (outcome.result.kind === "goal") {
-      setFeedback({ actionId: action.id, tone: "ok", text: t.goalStarted });
-      return;
+      return { tone: "ok", text: t.goalStarted };
     }
     // Workflow run — surface the terminal state; the runs chip carries the
     // detail link (nudge it to re-fetch).
     requestWorkflowRefresh(workspaceId);
     if (outcome.result.status === "failed") {
-      setFeedback({
-        actionId: action.id,
-        tone: "error",
-        text: outcome.result.error?.message || t.failed,
-      });
-    } else {
-      setFeedback({ actionId: action.id, tone: "ok", text: t.done });
+      return { tone: "error", text: outcome.result.error?.message || t.failed };
     }
+    return { tone: "ok", text: t.done };
+  };
+
+  return { actions, busyId, run };
+}
+
+/** The action's leading glyph: spinner while busy, its icon, else the kind's. */
+function ActionGlyph({ action, busy }: { action: PageActionRow; busy: boolean }) {
+  if (busy) return <Loader2 className="size-3.5 animate-spin" aria-hidden />;
+  if (action.icon) return <span aria-hidden>{action.icon}</span>;
+  if (action.action.kind === "goal") return <Target className="size-3.5" aria-hidden />;
+  return <Play className="size-3.5" aria-hidden />;
+}
+
+export function PageActionButtons({
+  pageId,
+  workspaceId,
+  className,
+}: {
+  pageId: string;
+  workspaceId: string;
+  /** Layout hook for the host (the page header hides the strip below `md`). */
+  className?: string;
+}) {
+  const { actions, busyId, run } = usePageActions(pageId, workspaceId);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+
+  // Transient result pill; clears itself.
+  useEffect(() => {
+    if (!feedback) return;
+    const tid = window.setTimeout(() => setFeedback(null), 6000);
+    return () => window.clearTimeout(tid);
+  }, [feedback]);
+
+  const onClick = async (action: PageActionRow) => {
+    setFeedback(null);
+    const outcome = await run(action);
+    if (outcome) setFeedback({ actionId: action.id, ...outcome });
   };
 
   if (actions.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1">
+    <div className={cn("flex items-center gap-1", className)}>
       {actions.map((action) => (
         <button
           key={action.id}
@@ -117,15 +150,7 @@ export function PageActionButtons({
             "text-foreground transition-colors hover:bg-muted disabled:opacity-60",
           )}
         >
-          {busyId === action.id ? (
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-          ) : action.icon ? (
-            <span aria-hidden>{action.icon}</span>
-          ) : action.action.kind === "goal" ? (
-            <Target className="size-3.5" aria-hidden />
-          ) : (
-            <Play className="size-3.5" aria-hidden />
-          )}
+          <ActionGlyph action={action} busy={busyId === action.id} />
           <span className="max-w-32 truncate">{action.label}</span>
         </button>
       ))}
@@ -143,5 +168,45 @@ export function PageActionButtons({
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The same actions as `DropdownMenuItem` rows (plus a trailing separator) for
+ * the page header's `...` menu below `md`. Renders nothing when no binding
+ * resolves, so the menu carries no empty section.
+ */
+export function PageActionMenuItems({
+  pageId,
+  workspaceId,
+  onFeedback,
+}: {
+  pageId: string;
+  workspaceId: string;
+  /** The run's outcome; the host shows it (the menu has closed by then). */
+  onFeedback: (feedback: PageActionFeedback) => void;
+}) {
+  const { actions, busyId, run } = usePageActions(pageId, workspaceId);
+  if (actions.length === 0) return null;
+  return (
+    <>
+      {actions.map((action) => (
+        <DropdownMenuItem
+          key={action.id}
+          data-page-action={action.id}
+          disabled={busyId !== null}
+          className="min-h-11 sm:min-h-0"
+          onClick={() => {
+            void run(action).then((outcome) => {
+              if (outcome) onFeedback(outcome);
+            });
+          }}
+        >
+          <ActionGlyph action={action} busy={busyId === action.id} />
+          <span className="min-w-0 flex-1 truncate">{action.label}</span>
+        </DropdownMenuItem>
+      ))}
+      <DropdownMenuSeparator />
+    </>
   );
 }

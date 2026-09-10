@@ -12,13 +12,23 @@
  * (the editor, the version chips, the approve/reject actions) and would
  * otherwise each need a provider threaded down just to say "the list moved".
  *
+ * Since the post lists moved onto the surface cache (instant-navigation N3)
+ * the signal's real work is the mark-stale on the `feed-sessions:*` family:
+ * every mounted reader (the sidebar rail, the per-platform posts list)
+ * revalidates behind its paint, and nothing else has to listen. The
+ * CustomEvent still fires for non-data side effects.
+ *
  * [COMP:app-web/feed-posts-events]
  */
 
+import { markSurfaceCacheStale } from "@/lib/surface-cache";
+import { feedSessionsCacheFamily } from "@/lib/surface-prefetch";
+
 export const FEED_POSTS_CHANGED_EVENT = "feed:posts-changed";
 
-/** Ask the sidebar's post list to refetch. No-op on SSR. */
+/** Mark every cached post list stale and announce the change. No-op on SSR. */
 export function notifyFeedPostsChanged(): void {
   if (typeof window === "undefined") return;
+  markSurfaceCacheStale(feedSessionsCacheFamily());
   window.dispatchEvent(new CustomEvent(FEED_POSTS_CHANGED_EVENT));
 }

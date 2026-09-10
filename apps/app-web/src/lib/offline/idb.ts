@@ -4,9 +4,10 @@
  * originally Phase 3/5 of docs/plans/doc-desktop-bundled-offline.md, now used
  * by every client). No dependency, one object store, structured-clone values.
  *
- * Every call is best-effort: on any failure (private mode, quota, no IndexedDB)
+ * Cache calls are best-effort: on any failure (private mode, quota, no IndexedDB)
  * reads resolve to `null` and writes no-op, so a cache miss degrades to the
- * normal network path rather than throwing.
+ * normal network path rather than throwing. Authored outbox writes use
+ * `idbUpdate`, which rejects failures and resolves only on transaction commit.
  *
  * Also home to `clearLocalDocCaches` — the sign-out sweep that deletes this KV
  * store AND every `y-indexeddb` per-page doc store (`doc-page-*`), since page
@@ -71,6 +72,29 @@ export async function idbSet(key: string, value: unknown): Promise<void> {
   } catch {
     /* best-effort */
   }
+}
+
+/** Atomic, durable update for user-authored offline work. Unlike cache writes,
+ * failures reject and success waits for the transaction to COMMIT. */
+export async function idbUpdate<T>(key: string, update: (value: T | null) => T): Promise<T> {
+  const db = await openDb();
+  return new Promise<T>((resolve, reject) => {
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    const request = store.get(key);
+    let next: T;
+    request.onsuccess = () => {
+      try {
+        next = update((request.result ?? null) as T | null);
+        store.put(next, key);
+      } catch (error) {
+        tx.abort();
+        reject(error);
+      }
+    };
+    tx.oncomplete = () => resolve(next);
+    tx.onerror = tx.onabort = () => reject(tx.error ?? new Error("Local storage write failed"));
+  });
 }
 
 /** Delete a key. Best-effort. */

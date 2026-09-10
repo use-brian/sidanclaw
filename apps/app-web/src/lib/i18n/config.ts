@@ -10,7 +10,9 @@
  * add a locale.
  */
 
-export const LOCALES = ["en", "zh", "zh-CN", "ja"] as const;
+import { APP_LOCALES } from "@use-brian/shared";
+
+export const LOCALES = APP_LOCALES;
 export type Locale = (typeof LOCALES)[number];
 
 export const DEFAULT_LOCALE: Locale = "en";

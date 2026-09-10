@@ -100,6 +100,7 @@ describe("[COMP:app-web/feed-sdk] feed SDK", () => {
     const profiles = await fetchFeedTeamProfiles("ws-1");
     expect(authFetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/distribution/team/ws-1/profiles"),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(profiles).toEqual([
       {
@@ -122,7 +123,7 @@ describe("[COMP:app-web/feed-sdk] feed SDK", () => {
   it("throws on a non-OK response so availability probes can degrade", async () => {
     // An OSS/creds-less backend 404s the whole /api/distribution family.
     authFetch.mockResolvedValueOnce(jsonResponse({}, false, 404));
-    await expect(fetchFeedTeamProfiles("ws-1")).rejects.toThrow("feed API 404");
+    await expect(fetchFeedTeamProfiles("ws-1")).rejects.toThrow("Feed API 404");
   });
 
   it("sums pending approvals across assistants, deduped by caller", async () => {
@@ -433,6 +434,7 @@ describe("[COMP:app-web/feed-sdk] feed SDK", () => {
       expect.stringContaining(
         "/api/distribution/a-1/draft-sessions?platform=threads",
       ),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
 
     // Missing key degrades to [].
@@ -441,7 +443,7 @@ describe("[COMP:app-web/feed-sdk] feed SDK", () => {
 
     authFetch.mockResolvedValueOnce(jsonResponse({}, false, 500));
     await expect(fetchFeedDraftSessions("a-1", "threads")).rejects.toThrow(
-      "draft sessions API 500",
+      "Feed API 500",
     );
   });
 
@@ -516,6 +518,7 @@ describe("[COMP:app-web/feed-sdk] feed SDK", () => {
       expect.stringContaining(
         "/api/distribution/a-1/draft-sessions/s-1/saved-drafts",
       ),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
 
     authFetch.mockResolvedValueOnce(jsonResponse({}, false, 500));

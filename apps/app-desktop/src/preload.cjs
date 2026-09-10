@@ -115,14 +115,18 @@ const bridge = {
   // account (stash, don't replace); `switchAccount` swaps the active account to a
   // saved one and resolves to `{ ok }` / `{ ok:false, error }` so the switcher
   // can show an inline message and clear its per-row spinner. Present in every
-  // mode (like signIn/out); bundled mode stays single-account (switch errors).
+  // mode (like signIn/out); bundled mode keeps a deployment-scoped directory.
   addAccount: () => ipcRenderer.send("Use Brian:add-account"),
+  listAccounts: () => ipcRenderer.invoke("Use Brian:list-accounts"),
+  selectAccount: (key) => ipcRenderer.invoke("Use Brian:select-account", key),
+  selectCloud: () => ipcRenderer.invoke("Use Brian:select-cloud"),
+  chooseDeployment: () => ipcRenderer.send("Use Brian:choose-deployment"),
   switchAccount: (id) => ipcRenderer.invoke("Use Brian:switch-account", id),
   // Dual target (docs/plans/consumer-local-experience.md §2.2). `runLocal`
   // probes a local/self-hosted brain's paired API (`null` = the launcher
   // default address) and resolves `{ ok }` / `{ ok:false, error, url }`; on
-  // success the shell persists the target and RELAUNCHES. `useCloud` persists
-  // the cloud target and relaunches. Present in every mode; the landing that
+  // success the shell opens the saved deployment in this running app. `useCloud`
+  // opens the cloud account. Present in every mode; the landing that
   // calls them is shell-owned.
   runLocal: (url) =>
     ipcRenderer.invoke("Use Brian:run-local", typeof url === "string" ? url : null),

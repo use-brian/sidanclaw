@@ -29,67 +29,34 @@ import { publicRuntimeConfig } from "@/lib/runtime-public-config";
  * [COMP:app-web/studio-ingest]
  */
 
-import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { authFetch } from "@/lib/auth-fetch";
 import { ConnectorIcon } from "@/components/connectors/connector-icon";
 import { SensitivityBadge } from "@/components/sensitivity-badge";
+import { BackButton } from "@/components/ui/back-button";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 import { WhatsappGroupManager } from "@/components/ingest/whatsapp-groups";
 import { FeishuGroupManager } from "@/components/ingest/feishu-groups";
-import { IngestRuleEditor, type EditableRule } from "@/components/ingest/rule-editor";
+import { IngestRuleEditor } from "@/components/ingest/rule-editor";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { ingestSourceNotice } from "@/lib/ingest-source-notice";
 import {
   groupIngestRail,
   type IngestRailGroupId,
 } from "@/lib/ingest-rail-groups";
-import {
-  getWhatsappIngest,
-  type WhatsappIngestStatus,
-} from "@/lib/api/whatsapp-ingest";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
+import {
+  useIngestData,
+  type AvailableProvider,
+  type IngestNature,
+  type IngestSource,
+} from "./use-ingest-data";
 
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
-
-type IngestRule = EditableRule;
-
-/** Signal-density profile — noisy → event-rich → high-signal. */
-type IngestNature = "noisy" | "events" | "signal";
-
-type IngestSource = {
-  instanceId: string;
-  provider: string;
-  /** Ingest engine source key (`slack` / `github` / `calendar` / `fathom`). */
-  source: string;
-  /** Ownership scope — drives the detail header's scope badge. */
-  scope: "user" | "workspace";
-  /** Owning workspace's name for workspace-scoped sources; null for user-scoped. */
-  workspaceName: string | null;
-  /**
-   * Visibility tier — members below this clearance never receive the row
-   * (server-side filter), so the header badges it for those who can see it.
-   */
-  sensitivity: "public" | "internal" | "confidential";
-  label: string;
-  connectedEmail: string | null;
-  connected: boolean;
-  ingestionEnabled: boolean;
-  /** False when this instance's events cannot reach the brain (see ingestUnavailable). */
-  ambientIngestSupported?: boolean;
-  nature: IngestNature;
-  rules: IngestRule[];
-};
-
-/** An ingest-capable provider this workspace has not connected yet. */
-type AvailableProvider = {
-  provider: string;
-  source: string;
-  name: string;
-  nature: IngestNature;
-};
 
 /**
  * Whether a source's events can actually reach the brain.
@@ -296,7 +263,7 @@ function GithubRepoPicker({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={copy.searchPlaceholder}
-                className="flex-1 min-w-0 text-xs bg-background border border-border rounded-md px-2.5 py-1.5 placeholder:text-muted-foreground/70 focus:outline-none"
+                className="flex-1 min-w-0 text-[16px] md:text-xs bg-background border border-border rounded-md px-2.5 py-1.5 placeholder:text-muted-foreground/70 focus:outline-none"
               />
               {filtered.length > 0 && (
                 <button
@@ -357,7 +324,7 @@ function GithubRepoPicker({
               <button
                 onClick={save}
                 disabled={saving}
-                className="relative text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-60 transition-colors"
+                className="relative inline-flex h-11 items-center text-xs font-medium bg-action text-action-foreground px-3 rounded-lg hover:bg-action/90 disabled:opacity-60 transition-colors sm:h-7"
               >
                 <span className={saving ? "invisible" : undefined}>
                   {copy.save}
@@ -415,66 +382,45 @@ export default function StudioIngestRulesPage() {
   const connectorsHref = `/w/${workspaceId}/studio/connectors`;
   const channelsHref = `/w/${workspaceId}/studio/channels`;
 
-  const [sources, setSources] = useState<IngestSource[] | null>(null);
-  const [available, setAvailable] = useState<AvailableProvider[]>([]);
-  // Whether the active workspace is the caller's OWNED personal workspace —
-  // the API's `ownedPersonal`, the only placement truth the notices may use.
-  // Never derive this from the workspace's bare `isPersonal` flag: a legacy
-  // personal-flagged team workspace is not the viewer's personal workspace.
-  const [ownedPersonal, setOwnedPersonal] = useState<boolean | undefined>(undefined);
-  const [loadError, setLoadError] = useState(false);
+  // The source list (+ available providers + the ownedPersonal placement
+  // truth) and the WhatsApp ingest status read the workspace's cached keys in
+  // parallel (instant-navigation N1 / N7): a revisit paints the rail on the
+  // first frame; toggles write through the same key. WhatsApp is a bespoke
+  // source (group toggles, not generic rules) with no row in the generic
+  // list, so it joins the rail as a pseudo-row; null = never paired.
+  const {
+    sources,
+    available,
+    ownedPersonal,
+    error: loadError,
+    refresh: fetchSources,
+    updateSources,
+    waStatus,
+  } = useIngestData(activeId);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [pickerId, setPickerId] = useState<string | null>(null);
-  // WhatsApp ingest is a bespoke source (group toggles, not generic rules) with
-  // no row in the generic sources list. The page fetches its status itself to
-  // place it in the rail; null = never paired (no row) or still loading.
-  const [waStatus, setWaStatus] = useState<WhatsappIngestStatus | null>(null);
   // Master-detail selection — a rail row key (instance UUID, "whatsapp", or
   // `available:<provider>`); null / stale keys resolve to the first rail row.
   const [selected, setSelected] = useState<string | null>(null);
+  // Phone single-pane (responsive contract M1 / M5): below `md` the rail and
+  // the panel are two screens; a tapped row opens the panel and Back returns
+  // to the rail. Inert on `md+`.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
 
-  const fetchSources = useCallback(() => {
-    // The list is workspace-scoped server-side — don't fetch until the
-    // active workspace is known, and refetch whenever it changes so a
-    // workspace switch never leaves another workspace's connectors shown.
-    if (!activeId) return;
-    setLoadError(false);
-    authFetch(
-      `${API_URL}/api/ingest/sources?workspaceId=${encodeURIComponent(activeId)}`,
-    )
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error())))
-      .then(
-        (data: {
-          sources: IngestSource[];
-          available: AvailableProvider[];
-          ownedPersonal?: boolean;
-        }) => {
-          setSources(data.sources);
-          setAvailable(data.available ?? []);
-          setOwnedPersonal(
-            typeof data.ownedPersonal === "boolean" ? data.ownedPersonal : undefined,
-          );
-        },
-      )
-      .catch(() => {
-        setSources([]);
-        setAvailable([]);
-        setOwnedPersonal(undefined);
-        setLoadError(true);
-      });
+  // A workspace switch drops the selection and returns to the rail.
+  useEffect(() => {
+    setSelected(null);
+    setDetailOpen(false);
   }, [activeId]);
 
-  useEffect(() => {
-    fetchSources();
-  }, [fetchSources]);
-
-  useEffect(() => {
-    if (!workspaceId) return;
-    getWhatsappIngest(workspaceId)
-      .then(setWaStatus)
-      .catch(() => setWaStatus(null));
-  }, [workspaceId]);
+  function revealDetail() {
+    setDetailOpen(true);
+    requestAnimationFrame(() => {
+      detailRef.current?.scrollIntoView({ block: "start" });
+    });
+  }
 
   async function handleToggle(s: IngestSource) {
     setBusyId(s.instanceId);
@@ -493,10 +439,8 @@ export default function StudioIngestRulesPage() {
       );
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { source: IngestSource };
-      setSources(
-        (prev) =>
-          prev?.map((x) => (x.instanceId === s.instanceId ? data.source : x)) ??
-          null,
+      updateSources((prev) =>
+        prev.map((x) => (x.instanceId === s.instanceId ? data.source : x)),
       );
     } catch {
       setToggleError(copy.toggleError);
@@ -665,7 +609,7 @@ export default function StudioIngestRulesPage() {
               onClick={() => handleToggle(s)}
               disabled={busy || !s.connected}
               className={cn(
-                "text-xs font-medium px-3 py-1 rounded-lg shrink-0 transition-colors disabled:opacity-40",
+                "inline-flex h-11 items-center text-xs font-medium px-3 rounded-lg shrink-0 transition-colors disabled:opacity-40 sm:h-7",
                 s.ingestionEnabled
                   ? "border border-border text-muted-foreground hover:text-destructive hover:border-destructive/30"
                   : "bg-action text-action-foreground hover:bg-action/90",
@@ -686,7 +630,7 @@ export default function StudioIngestRulesPage() {
                 )
               }
               className={cn(
-                "text-xs font-medium px-3 py-1 rounded-lg shrink-0 border transition-colors",
+                "inline-flex h-11 items-center text-xs font-medium px-3 rounded-lg shrink-0 border transition-colors sm:h-7",
                 showPicker
                   ? "border-primary/40 text-primary bg-primary/5"
                   : "border-border text-muted-foreground hover:bg-muted",
@@ -722,11 +666,10 @@ export default function StudioIngestRulesPage() {
               source={s.source}
               rules={s.rules}
               onChange={(next) => {
-                setSources(
-                  (prev) =>
-                    prev?.map((x) =>
-                      x.instanceId === s.instanceId ? { ...x, rules: next } : x,
-                    ) ?? null,
+                updateSources((prev) =>
+                  prev.map((x) =>
+                    x.instanceId === s.instanceId ? { ...x, rules: next } : x,
+                  ),
                 );
               }}
             />
@@ -817,7 +760,7 @@ export default function StudioIngestRulesPage() {
           </p>
           <Link
             href={connectorsHref}
-            className="mt-2 inline-block rounded-lg bg-action px-3 py-1 text-xs font-medium text-action-foreground hover:bg-action/90 transition-colors"
+            className="mt-2 inline-flex h-11 items-center rounded-lg bg-action px-3 text-xs font-medium text-action-foreground hover:bg-action/90 transition-colors sm:h-7"
           >
             {copy.connectAction}
           </Link>
@@ -866,10 +809,13 @@ export default function StudioIngestRulesPage() {
       <li key={row.key}>
         <button
           type="button"
-          onClick={() => setSelected(row.key)}
+          onClick={() => {
+            setSelected(row.key);
+            revealDetail();
+          }}
           aria-current={isSel ? "true" : undefined}
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+            "flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm transition-colors",
             isSel
               ? "bg-muted font-medium text-foreground"
               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -912,10 +858,10 @@ export default function StudioIngestRulesPage() {
         </div>
       )}
 
-      {sources === null ? (
-        <div className="text-sm text-muted-foreground py-10 text-center">
-          {copy.loading}
-        </div>
+      {sources === null && !loadError ? (
+        // Cold: nothing cached for this workspace yet - the rail skeleton
+        // holds the geometry (N4), never a "Loading..." sentence.
+        <RailSurfaceSkeleton chrome={false} padded={false} />
       ) : loadError ? (
         <div className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-3 py-3 text-center">
           {copy.loadError}
@@ -936,7 +882,12 @@ export default function StudioIngestRulesPage() {
       ) : (
         /* ── Master-detail: status-grouped rail + selected source panel ── */
         <div className="flex flex-col gap-6 md:flex-row">
-          <aside className="w-full md:w-64 shrink-0 self-start">
+          <aside
+            className={cn(
+              "w-full md:w-64 shrink-0 self-start",
+              detailOpen && "max-md:hidden",
+            )}
+          >
             <nav aria-label={copy.railAriaLabel} className="flex flex-col gap-3">
               {railGroups.map((g) => (
                 <div key={g.id}>
@@ -955,7 +906,17 @@ export default function StudioIngestRulesPage() {
           </aside>
 
           {/* Detail — the selected source's management panel. */}
-          <div className="min-w-0 flex-1">
+          <div
+            ref={detailRef}
+            className={cn("min-w-0 flex-1", !detailOpen && "max-md:hidden")}
+          >
+            <div className="mb-3 md:hidden">
+              <BackButton
+                label={copy.backToList}
+                onClick={() => setDetailOpen(false)}
+                className="min-h-11"
+              />
+            </div>
             {!sel ? (
               <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                 {copy.selectPrompt}

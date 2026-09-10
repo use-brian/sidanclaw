@@ -147,9 +147,9 @@ export function CrmContactLifecycle({
       {entitlements.length === 0 ? <p className="mt-2 text-xs text-muted-foreground">{t.noEntitlements}</p> : (
         <div className="mt-2 space-y-2">{entitlements.map((row) => (
           <div key={row.id} className="flex items-center justify-between gap-2 rounded-lg border border-border/60 px-2.5 py-2 text-xs">
-            <div className="min-w-0"><div className="truncate font-medium">{row.planName}</div><div className="text-[10px] text-muted-foreground">{row.planKey}</div></div>
+            <div className="min-w-0"><div className="truncate font-medium">{row.planName}</div><div className="text-[10px] text-muted-foreground">{row.planKey}</div><div title={row.effectiveAt} className="text-[10px] text-muted-foreground">{row.isEffective === true ? t.entitlementAccessAvailable : row.isEffective === false ? t.entitlementAccessUnavailable : t.entitlementAccessUnknown}</div></div>
             <Select value={row.status} disabled={busy} onValueChange={(value) => void changeEntitlement(row, value as CrmEntitlementStatus)}>
-              <SelectTrigger className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 w-28 text-[16px] md:h-7 md:text-xs"><SelectValue>{t.entitlementStatusLabels[row.status]}</SelectValue></SelectTrigger>
               <SelectContent>{ENTITLEMENT_STATUSES.map((status) => <SelectItem key={status} value={status}>{t.entitlementStatusLabels[status]}</SelectItem>)}</SelectContent>
             </Select>
           </div>
@@ -172,7 +172,7 @@ export function CrmContactLifecycle({
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0"><div className="truncate font-medium">{row.eventTitle}</div><div className="text-[10px] text-muted-foreground">{row.sourceKind}</div></div>
               <Select value={row.status} disabled={busy || row.commerceManaged} onValueChange={(value) => void changeParticipation(row, value as CrmParticipationStatus)}>
-                <SelectTrigger className="h-7 w-28 text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9 w-28 text-[16px] md:h-7 md:text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>{PARTICIPATION_STATUSES.map((status) => <SelectItem key={status} value={status}>{t.participationStatusLabels[status]}</SelectItem>)}</SelectContent>
               </Select>
             </div>

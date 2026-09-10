@@ -15,9 +15,10 @@
  * [COMP:app-desktop/main]
  */
 
+import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { existsSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, rmSync, renameSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { createServer, type Server } from "node:http";
@@ -50,6 +51,7 @@ import {
 // main process. Default-import the module object and destructure instead.
 import electronUpdater from "electron-updater";
 
+import { DeploymentAccounts, TargetOperations, deploymentKey, deploymentAccountKey, type AccountTarget } from "./deployment-accounts.js";
 import { bundledDefaultForRuntime, resolveConfig } from "./config.js";
 import {
   AWAKE_BRIAN_FILE_NAME,
@@ -63,6 +65,7 @@ import {
 } from "./awake-brian.js";
 import {
   DEFAULT_LOCAL_APP_URL,
+  cloudTarget,
   TARGET_FILE_NAME,
   desktopConfigUrl,
   healthUrl,
@@ -179,7 +182,8 @@ import {
   type StoredTokens,
   encryptBlob,
   decryptTokens,
-  persistTokens,
+  parseStoredTokens,
+  serializeTokens,
   serializeRendererTokens,
 } from "./desktop-token-store.js";
 import {
@@ -229,8 +233,8 @@ function siriShortcutTemplatePath(): string {
  * The persisted target record (§2.1 of docs/plans/consumer-local-experience.md;
  * see target-store.ts): read synchronously BEFORE the config resolves so the
  * whole process — window, policy closures, keep-alive, menus — is born on one
- * target. Switching targets rewrites the file and relaunches; nothing
- * re-resolves in place.
+ * target. Switching rewrites the file and replaces the account window after
+ * outstanding target work has settled.
  */
 function targetFile(): string {
   return join(app.getPath("userData"), TARGET_FILE_NAME);
@@ -247,11 +251,23 @@ function readPersistedTargetRaw(): string | null {
 // Release binaries always prefer the installed renderer. Development keeps
 // the remote shell default for fast iteration; USEBRIAN_BUNDLED explicitly
 // overrides either direction for QA/compatibility.
-const cfg = resolveConfig(
+let cfg = resolveConfig(
   process.env,
   readPersistedTargetRaw(),
   bundledDefaultForRuntime(app.isPackaged),
 );
+const targetOperations = new TargetOperations();
+let changingTarget = false;
+let selectingAccount = false;
+let connectingDeployment = false;
+function accountTarget(): AccountTarget {
+  return { kind: cfg.target, appUrl: cfg.appUrl, apiUrl: cfg.apiUrl, auth: cfg.targetAuth, publicConfig: cfg.publicConfig };
+}
+/** Browser storage and gateway cookies are isolated by deployment in both modes. */
+function targetSession(target = accountTarget()) {
+  const key = createHash("sha256").update(deploymentKey(target)).digest("hex");
+  return session.fromPartition(`persist:deployment-${key}`);
+}
 const isDev = !app.isPackaged;
 
 const PRELOAD_PATH = join(__dirname, "preload.cjs");
@@ -360,7 +376,7 @@ function authenticatedSessionFetch(input: string, init: RequestInit): Promise<Re
   const authorization = accessAuthorizationForUrl(activeAccessGrant, input);
   const headers = new Headers(init.headers);
   if (authorization) headers.set("Authorization", authorization);
-  return session.defaultSession.fetch(input, { ...init, headers, credentials: "include" });
+  return targetSession().fetch(input, { ...init, headers, credentials: "include" });
 }
 
 const gatewayProbeFetch: GatewayProbeFetch = authenticatedSessionFetch;
@@ -390,7 +406,7 @@ function authenticateGateway(
       show: false,
       autoHideMenuBar: true,
       webPreferences: {
-        session: session.defaultSession,
+        session: targetSession(),
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
@@ -518,6 +534,7 @@ function createWindow(initialLoad: { useBrian?: boolean } = {}): BrowserWindow {
     show: true,
     webPreferences: {
       preload: PRELOAD_PATH,
+      session: targetSession(),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -601,7 +618,9 @@ function createWindow(initialLoad: { useBrian?: boolean } = {}): BrowserWindow {
   // and our own `file:` landing are handled inside the helper.
   win.webContents.on("did-fail-load", (_e, errorCode, _desc, failedUrl, isMainFrame) => {
     void (async () => {
+      const context = cfg;
       const hasSession = await hasPersistedSession();
+      if (context !== cfg || win.isDestroyed()) return;
       switch (
         decideLoadFailureAction({ errorCode, isMainFrame, failedUrl, hasSession, target: cfg.target })
       ) {
@@ -641,7 +660,7 @@ function createWindow(initialLoad: { useBrian?: boolean } = {}): BrowserWindow {
     void loadApp(win, initialLoad);
   }
   win.on("closed", () => {
-    mainWindow = null;
+    if (mainWindow === win) mainWindow = null;
     // The capture lives in this window's renderer — with it gone the overlay
     // has nothing to mirror or control.
     destroyRecorderOverlay();
@@ -742,6 +761,7 @@ function messageBrian(opts: { forceOpen?: boolean; useBrian?: boolean } = {}): v
     show: false,
     webPreferences: {
       preload: PRELOAD_PATH,
+      session: targetSession(),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -1130,73 +1150,85 @@ function handleRedirect(event: Event, url: string): void {
 }
 
 async function recoverPendingLocalGatewayRedirect(protectedUrl: string): Promise<void> {
-  const result = await probeWithGatewayAuthentication(
-    desktopConfigUrl(protectedUrl),
-    () => probeDesktopConfig(protectedUrl),
-  );
-  if (result.kind !== "ready") return;
+  return targetOperations.run(async () => {
+    const result = await probeWithGatewayAuthentication(
+      desktopConfigUrl(protectedUrl),
+      () => probeDesktopConfig(protectedUrl),
+    );
+    if (result.kind !== "ready") return;
+
+  });
 }
 
 async function recoverAppGatewayRedirect(redirectUrl: string): Promise<void> {
-  const first = await probeDesktopConfig(cfg.appUrl);
-  if (first.kind === "ready") {
-    if (classifyNavigation(redirectUrl, cfg.appOrigin) === "internal") {
-      await ensureWindow().webContents.loadURL(redirectUrl);
-    } else {
-      await shell.openExternal(redirectUrl);
+  return targetOperations.run(async () => {
+    const first = await probeDesktopConfig(cfg.appUrl);
+    if (first.kind === "ready") {
+      if (classifyNavigation(redirectUrl, cfg.appOrigin) === "internal") {
+        await ensureWindow().webContents.loadURL(redirectUrl);
+      } else {
+        await shell.openExternal(redirectUrl);
+      }
+      return;
     }
-    return;
-  }
-  if (first.kind !== "authentication-required") {
-    showLocalDown(ensureWindow());
-    return;
-  }
-  const result = await probeWithGatewayAuthentication(
-    desktopConfigUrl(cfg.appUrl),
-    () => probeDesktopConfig(cfg.appUrl),
-  );
-  if (result.kind === "ready") await loadApp(ensureWindow());
-  else showLocalDown(ensureWindow(), result.kind === "cancelled" ? "gateway-auth" : "unreachable");
+    if (first.kind !== "authentication-required") {
+      showLocalDown(ensureWindow());
+      return;
+    }
+    const result = await probeWithGatewayAuthentication(
+      desktopConfigUrl(cfg.appUrl),
+      () => probeDesktopConfig(cfg.appUrl),
+    );
+    if (result.kind === "ready") await loadApp(ensureWindow());
+    else showLocalDown(ensureWindow(), result.kind === "cancelled" ? "gateway-auth" : "unreachable");
+
+  });
 }
 
 /** Catch a gateway that replaces the app document with a 200/401/403 login page. */
 async function detectLoadedGatewayChallenge(win: BrowserWindow): Promise<void> {
-  if (win.isDestroyed()) return;
-  try {
-    if (new URL(win.webContents.getURL()).origin !== cfg.appOrigin) return;
-  } catch {
-    return;
-  }
-  const first = await probeDesktopConfig(cfg.appUrl);
-  if (first.kind !== "authentication-required") return;
-  const result = await probeWithGatewayAuthentication(
-    desktopConfigUrl(cfg.appUrl),
-    () => probeDesktopConfig(cfg.appUrl),
-  );
-  if (result.kind === "ready") await loadApp(win);
-  else showLocalDown(win, result.kind === "cancelled" ? "gateway-auth" : "unreachable");
+  return targetOperations.run(async () => {
+    if (win.isDestroyed()) return;
+    try {
+      if (new URL(win.webContents.getURL()).origin !== cfg.appOrigin) return;
+    } catch {
+      return;
+    }
+    const first = await probeDesktopConfig(cfg.appUrl);
+    if (first.kind !== "authentication-required") return;
+    const result = await probeWithGatewayAuthentication(
+      desktopConfigUrl(cfg.appUrl),
+      () => probeDesktopConfig(cfg.appUrl),
+    );
+    if (result.kind === "ready") await loadApp(win);
+    else showLocalDown(win, result.kind === "cancelled" ? "gateway-auth" : "unreachable");
+
+  });
 }
 
 /** Re-authenticate after an API/SSE request is redirected when a gateway cookie expires. */
 async function recoverBackgroundGatewayRequest(requestUrl: string): Promise<void> {
-  let requestOrigin: string;
-  try {
-    requestOrigin = new URL(requestUrl).origin;
-  } catch {
-    return;
-  }
+  return targetOperations.run(async () => {
+    let requestOrigin: string;
+    try {
+      requestOrigin = new URL(requestUrl).origin;
+    } catch {
+      return;
+    }
 
-  if (requestOrigin === cfg.appOrigin) {
-    await probeWithGatewayAuthentication(
-      desktopConfigUrl(cfg.appUrl),
-      () => probeDesktopConfig(cfg.appUrl),
-    );
-    return;
-  }
+    if (requestOrigin === cfg.appOrigin) {
+      await probeWithGatewayAuthentication(
+        desktopConfigUrl(cfg.appUrl),
+        () => probeDesktopConfig(cfg.appUrl),
+      );
+      return;
+    }
 
-  if (requestOrigin === new URL(cfg.apiUrl).origin) {
-    await probeWithGatewayAuthentication(healthUrl(cfg.apiUrl), () => probeLocalBrain(cfg.apiUrl));
-  }
+    if (requestOrigin === new URL(cfg.apiUrl).origin) {
+      await probeWithGatewayAuthentication(healthUrl(cfg.apiUrl), () => probeLocalBrain(cfg.apiUrl));
+    }
+
+  });
 }
 
 /** Show the built-in sign-in landing (never a blank window). */
@@ -1247,8 +1279,11 @@ function stopRetryWatchers(): void {
  * re-shows the offline landing.
  */
 async function retryLoad(win: BrowserWindow): Promise<void> {
-  stopRetryWatchers();
-  await loadApp(win);
+  return targetOperations.run(async () => {
+    stopRetryWatchers();
+    await loadApp(win);
+
+  });
 }
 
 /**
@@ -1267,7 +1302,7 @@ function showOffline(win: BrowserWindow): void {
 //
 // The machinery for fronting a local / self-hosted brain: the paired-API
 // health probe, the local-owner session mint (a local brain has no login),
-// the brain-not-reachable landing + auto-reconnect, and the persist+relaunch
+// the brain-not-reachable landing + auto-reconnect, and account switching
 // target switch. Every decision is pure (target-store.ts / window-policy.ts);
 // only the IO lives here.
 
@@ -1400,69 +1435,125 @@ async function validateLocalTarget(
   auth: TargetAuth
   publicConfig: DesktopPublicConfig | null
 }>> {
-  console.log(`[gateway-auth] validating app ${appUrl}`);
-  const config = await probeWithVisibleGatewayFallback(
-    desktopConfigUrl(appUrl),
-    () => probeDesktopConfig(appUrl),
-  );
-  if (config.kind !== "ready") {
-    console.warn(`[gateway-auth] app validation ended: ${config.kind}`);
-    return config;
-  }
+  return targetOperations.run(async () => {
+    console.log(`[gateway-auth] validating app ${appUrl}`);
+    const config = await probeWithVisibleGatewayFallback(
+      desktopConfigUrl(appUrl),
+      () => probeDesktopConfig(appUrl),
+    );
+    if (config.kind !== "ready") {
+      console.warn(`[gateway-auth] app validation ended: ${config.kind}`);
+      return config;
+    }
 
-  const target = localTarget(
-    appUrl,
-    config.value?.apiUrl,
-    config.value?.auth ?? "local-session",
-    config.value?.publicConfig,
-  ) ?? localTarget(appUrl);
-  const apiUrl = target?.apiUrl ?? fallbackApiUrl;
-  const health = await probeWithVisibleGatewayFallback(
-    healthUrl(apiUrl),
-    () => probeLocalBrain(apiUrl),
-  );
-  if (health.kind !== "ready") {
-    console.warn(`[gateway-auth] API validation ended: ${health.kind} (${apiUrl})`);
-    return health;
-  }
-  console.log(`[gateway-auth] target ready: app=${appUrl} api=${apiUrl}`);
-  return {
-    kind: "ready",
-    value: {
-      apiUrl,
-      declaredApiUrl: config.value?.apiUrl ?? null,
-      auth: target?.auth ?? "local-session",
-      publicConfig: config.value?.publicConfig ?? null,
-    },
-  };
+    const target = localTarget(
+      appUrl,
+      config.value?.apiUrl,
+      config.value?.auth ?? "local-session",
+      config.value?.publicConfig,
+    ) ?? localTarget(appUrl);
+    const apiUrl = target?.apiUrl ?? fallbackApiUrl;
+    const health = await probeWithVisibleGatewayFallback(
+      healthUrl(apiUrl),
+      () => probeLocalBrain(apiUrl),
+    );
+    if (health.kind !== "ready") {
+      console.warn(`[gateway-auth] API validation ended: ${health.kind} (${apiUrl})`);
+      return health;
+    }
+    console.log(`[gateway-auth] target ready: app=${appUrl} api=${apiUrl}`);
+    return {
+      kind: "ready",
+      value: {
+        apiUrl,
+        declaredApiUrl: config.value?.apiUrl ?? null,
+        auth: target?.auth ?? "local-session",
+        publicConfig: config.value?.publicConfig ?? null,
+      },
+    };
+
+  });
 }
 
-/**
- * Persist the target record and relaunch — the §2.1 switch. The config is a
- * process-lifetime constant (keep-alive timers, menu labels, and the policy
- * closures all hang off it), so a switch never re-resolves in place.
- */
-function persistTargetAndRelaunch(
+/** Replace only the account window, after old-target operations have settled. */
+async function activateTarget(
   kind: TargetKind,
   appUrl?: string,
   apiUrl?: string | null,
   auth?: TargetAuth,
+  installSession?: () => Promise<void>,
   publicConfig?: DesktopPublicConfig | null,
-): void {
+): Promise<boolean> {
+  if (cfg.envTargetOverride || changingTarget || recorderOverlay) return false;
+  changingTarget = true;
   try {
-    writeFileSync(
-      targetFile(),
-      serializePersistedTarget(kind, appUrl, apiUrl, auth, publicConfig),
-    );
-    // Bundled bearer tokens are target-specific. Never send a cloud token to a
-    // local deployment (or vice versa) after switching and relaunching.
-    if (cfg.bundled) clearStoredTokens();
+    closeAuthServer();
+    closeConnectorServer();
+    clearPersistedVerifier();
+    pendingVerifier = null;
+    pendingState = null;
+    pendingAddAccount = false;
+    if (!(await targetOperations.idle())) return false;
+    const oldWindow = mainWindow;
+    const bounds = oldWindow?.getBounds();
+    // close() honors the renderer's beforeunload guard for unsaved work.
+    for (const win of [desktopChatWindow, oldWindow]) {
+      if (!win || win.isDestroyed()) continue;
+      const closed = await new Promise<boolean>((resolve) => {
+        win.once("closed", () => resolve(true));
+        win.webContents.once("will-prevent-unload", () => resolve(false));
+        win.close();
+        if (win.isDestroyed()) resolve(true);
+      });
+      if (!closed) return false;
+    }
+    // Closing may flush work. It must finish against the original config.
+    if (!(await targetOperations.idle())) { ensureWindow(); return false; }
+    const raw = serializePersistedTarget(kind, appUrl, apiUrl, auth, publicConfig);
+    const next = resolveConfig(process.env, raw, bundledDefaultForRuntime(app.isPackaged));
+    writeFileSync(targetFile(), raw);
+    stopRetryWatchers();
+    closeAuthServer();
+    closeConnectorServer();
+    clearPersistedVerifier();
+    pendingVerifier = null;
+    pendingState = null;
+    pendingAddAccount = false;
+    lastWorkspaceId = null;
+    lastAssistantId = null;
+    lastLocalMintAt = 0;
+    requestedCaptureSourceId = null;
+    pendingUseBrianPrompt = null;
+    pendingNearbyUseBrian = false;
+    accessReauthorizationNeeded = false;
+    cfg = next;
+    installSessionPolicies();
+    if (installSession) await installSession();
+    installAccessRequestHook();
+    await prepareAccessForStartup();
+    mainWindow = createWindow();
+    if (bounds) mainWindow.setBounds(bounds);
+    refreshAppMenu();
+    refreshTrayMenu();
+    focusWindow(mainWindow);
+    return true;
   } catch (err) {
-    dialog.showErrorBox("Switch failed", `Could not save the target: ${String(err)}`);
-    return;
+    console.warn("Account deployment switch failed:", err);
+    ensureWindow();
+    return false;
+  } finally {
+    changingTarget = false;
+    if (pendingUrl) {
+      const url = pendingUrl;
+      pendingUrl = null;
+      handleIncomingUrl(url);
+    }
   }
-  app.relaunch();
-  app.exit(0);
+}
+
+function useCloud(installSession?: () => Promise<void>): Promise<boolean> {
+  if (selectingAccount || connectingDeployment) return Promise.resolve(false);
+  return activateTarget("cloud", rememberedLocalAppUrl(), rememberedLocalApiUrl(), rememberedLocalAuth(), installSession, rememberedLocalPublicConfig());
 }
 
 /** The last local address ever used (remembered across a switch to cloud). */
@@ -1492,53 +1583,56 @@ let bundledLocalMintInFlight: Promise<boolean> | null = null;
 
 /** Establish the local-owner bearer before a file renderer can make API calls. */
 function ensureBundledLocalSession(win: BrowserWindow): Promise<boolean> {
-  if (
-    !shouldMintLocalSessionBeforeLoad({
-      bundled: cfg.bundled,
-      targetAuth: cfg.targetAuth,
-      hasStoredTokens: readStoredTokens() !== null,
-    })
-  ) {
-    return Promise.resolve(true);
-  }
-  if (bundledLocalMintInFlight) return bundledLocalMintInFlight;
-
-  const run = (async (): Promise<boolean> => {
-    const now = Date.now();
-    if (!shouldAttemptLocalMint(lastLocalMintAt, now)) {
-      showLocalDown(win, "auth");
-      return false;
+  return targetOperations.run(async () => {
+    if (
+      !shouldMintLocalSessionBeforeLoad({
+        bundled: cfg.bundled,
+        targetAuth: cfg.targetAuth,
+        hasStoredTokens: readStoredTokens() !== null,
+      })
+    ) {
+      return Promise.resolve(true);
     }
-    lastLocalMintAt = now;
-    try {
-      const target = await validateLocalTarget(cfg.appUrl, cfg.apiUrl);
-      if (target.kind !== "ready") {
-        showLocalDown(win, target.kind === "cancelled" ? "gateway-auth" : "unreachable");
-        return false;
-      }
-      const result = await mintLocalDesktopSession(target.value.apiUrl, gatewayProbeFetch);
-      if (!persistSession(result)) {
-        clearStoredTokens();
+    if (bundledLocalMintInFlight) return bundledLocalMintInFlight;
+
+    const run = (async (): Promise<boolean> => {
+      const now = Date.now();
+      if (!shouldAttemptLocalMint(lastLocalMintAt, now)) {
         showLocalDown(win, "auth");
         return false;
       }
-      return true;
-    } catch (err) {
-      console.warn("Local session mint failed:", err);
-      showLocalDown(
-        win,
-        err instanceof Error && /HTTP (?:400|401|403)/.test(err.message)
-          ? "auth"
-          : "unreachable",
-      );
-      return false;
-    }
-  })();
-  bundledLocalMintInFlight = run;
-  void run.finally(() => {
-    if (bundledLocalMintInFlight === run) bundledLocalMintInFlight = null;
+      lastLocalMintAt = now;
+      try {
+        const target = await validateLocalTarget(cfg.appUrl, cfg.apiUrl);
+        if (target.kind !== "ready") {
+          showLocalDown(win, target.kind === "cancelled" ? "gateway-auth" : "unreachable");
+          return false;
+        }
+        const result = await mintLocalDesktopSession(target.value.apiUrl, gatewayProbeFetch);
+        if (!persistSession(result)) {
+          clearStoredTokens();
+          showLocalDown(win, "auth");
+          return false;
+        }
+        return true;
+      } catch (err) {
+        console.warn("Local session mint failed:", err);
+        showLocalDown(
+          win,
+          err instanceof Error && /HTTP (?:400|401|403)/.test(err.message)
+            ? "auth"
+            : "unreachable",
+        );
+        return false;
+      }
+    })();
+    bundledLocalMintInFlight = run;
+    void run.finally(() => {
+      if (bundledLocalMintInFlight === run) bundledLocalMintInFlight = null;
+    });
+    return run;
+
   });
-  return run;
 }
 
 /**
@@ -1548,30 +1642,33 @@ function ensureBundledLocalSession(win: BrowserWindow): Promise<boolean> {
  * returning to login cannot loop indefinitely.
  */
 async function mintLocalSession(win: BrowserWindow = ensureWindow()): Promise<void> {
-  if (cfg.bundled) {
-    if (await ensureBundledLocalSession(win)) {
-      await loadApp(win);
-      focusWindow(win);
+  return targetOperations.run(async () => {
+    if (cfg.bundled) {
+      if (await ensureBundledLocalSession(win)) {
+        await loadApp(win);
+        focusWindow(win);
+      }
+      return;
     }
-    return;
-  }
-  const now = Date.now();
-  if (!shouldAttemptLocalMint(lastLocalMintAt, now)) {
-    showLocalDown(win, "auth");
-    return;
-  }
-  lastLocalMintAt = now;
-  try {
-    await win.webContents.loadURL(localMintUrl(cfg.appUrl));
-  } catch (err) {
-    console.warn("Local session mint failed:", err);
-    showLocalDown(
-      win,
-      err instanceof Error && /HTTP (?:400|401|403)/.test(err.message)
-        ? "auth"
-        : "unreachable",
-    );
-  }
+    const now = Date.now();
+    if (!shouldAttemptLocalMint(lastLocalMintAt, now)) {
+      showLocalDown(win, "auth");
+      return;
+    }
+    lastLocalMintAt = now;
+    try {
+      await win.webContents.loadURL(localMintUrl(cfg.appUrl));
+    } catch (err) {
+      console.warn("Local session mint failed:", err);
+      showLocalDown(
+        win,
+        err instanceof Error && /HTTP (?:400|401|403)/.test(err.message)
+          ? "auth"
+          : "unreachable",
+      );
+    }
+
+  });
 }
 
 /**
@@ -1605,21 +1702,24 @@ function showLocalDown(
  * reads as a bug. Local → cloud always switches (the local address stays
  * remembered for the way back).
  */
-function switchTargetFromMenu(): void {
-  if (cfg.target === "local") {
-    persistTargetAndRelaunch(
-      "cloud",
-      rememberedLocalAppUrl(),
-      rememberedLocalApiUrl(),
-      rememberedLocalAuth(),
-      rememberedLocalPublicConfig(),
-    );
-    return;
-  }
+function chooseOwnDeployment(): void {
+  if (changingTarget || selectingAccount || connectingDeployment) return;
   const win = ensureWindow();
   void win.webContents
     .loadFile(SIGNIN_PAGE, { query: { mode: "local-choose", url: rememberedLocalAppUrl() } })
     .then(() => focusWindow(win));
+}
+
+function switchTargetFromMenu(): void {
+  if (cfg.target === "local") void useCloud();
+  else chooseOwnDeployment();
+}
+
+function isCurrentAccountSender(id: number): boolean {
+  return [mainWindow, desktopChatWindow].some((win) =>
+    win && !win.isDestroyed() && win.webContents.id === id &&
+    (isAppPage(win) || win.webContents.getURL().startsWith(pathToFileURL(SIGNIN_PAGE).href) ||
+      ["", "about:blank"].includes(win.webContents.getURL())));
 }
 
 /** Return the live window, recreating it if it was closed (tray app model). */
@@ -1669,42 +1769,43 @@ async function loadApp(
     useBrian?: boolean;
   } = {},
 ): Promise<void> {
-  const hasUseBrianPrompt =
-    opts.useBrian === true || pendingUseBrianPrompt !== null;
-  if (bundledAvailable()) {
-    if (!(await ensureBundledLocalSession(win))) return;
-    // The bundled renderer loads from file://, so it has no env: hand it the API
-    // base (and the capture/record intent) via the query string. The client reads
-    // `?api=` to know which backend to call with its Bearer token.
-    const query: Record<string, string> = {
-      api: cfg.apiUrl,
-      publicConfig: JSON.stringify(cfg.publicConfig),
-    };
-    if (opts.capture) query.capture = "1";
-    if (opts.record) query.record = "1";
-    if (hasUseBrianPrompt) query.useBrian = "1";
-    await win.webContents.loadFile(BUNDLE_INDEX, {
-      query,
-      ...(opts.route ? { hash: opts.route } : {}),
-    });
-    return;
-  }
-  if (cfg.target === "local") {
-    const target = await validateLocalTarget(cfg.appUrl, cfg.apiUrl);
-    if (target.kind !== "ready") {
-      showLocalDown(win, target.kind === "cancelled" ? "gateway-auth" : "unreachable");
+  return targetOperations.run(async () => {
+    const hasUseBrianPrompt =
+      opts.useBrian === true || pendingUseBrianPrompt !== null;
+    if (bundledAvailable()) {
+      if (!(await ensureBundledLocalSession(win))) return;
+      // The bundled renderer loads from file://, so it has no env: hand it the API
+      // base (and the capture/record intent) via the query string. The client reads
+      // `?api=` to know which backend to call with its Bearer token.
+      const query: Record<string, string> = { api: cfg.apiUrl, publicConfig: JSON.stringify(cfg.publicConfig) };
+      if (opts.capture) query.capture = "1";
+      if (opts.record) query.record = "1";
+      if (hasUseBrianPrompt) query.useBrian = "1";
+      await win.webContents.loadFile(BUNDLE_INDEX, {
+        query,
+        ...(opts.route ? { hash: opts.route } : {}),
+      });
       return;
     }
-  }
-  const targetUrl = new URL(opts.route ?? cfg.appUrl, cfg.appUrl);
-  if (opts.capture) targetUrl.searchParams.set("capture", "1");
-  else if (opts.record) targetUrl.searchParams.set("record", "1");
-  else if (!opts.route && hasUseBrianPrompt)
-    targetUrl.searchParams.set("useBrian", "1");
-  await win.webContents.loadURL(targetUrl.toString());
+    if (cfg.target === "local") {
+      const target = await validateLocalTarget(cfg.appUrl, cfg.apiUrl);
+      if (target.kind !== "ready") {
+        showLocalDown(win, target.kind === "cancelled" ? "gateway-auth" : "unreachable");
+        return;
+      }
+    }
+    const targetUrl = new URL(opts.route ?? cfg.appUrl, cfg.appUrl);
+    if (opts.capture) targetUrl.searchParams.set("capture", "1");
+    else if (opts.record) targetUrl.searchParams.set("record", "1");
+    else if (!opts.route && hasUseBrianPrompt)
+      targetUrl.searchParams.set("useBrian", "1");
+    await win.webContents.loadURL(targetUrl.toString());
+
+  });
 }
 
 function summonAndCapture(): void {
+  if (changingTarget) return;
   const win = ensureWindow();
   focusWindow(win);
   void loadApp(win, { capture: true });
@@ -1719,6 +1820,7 @@ function summonAndCapture(): void {
  * of record intent is exactly when the user expects the prompt.
  */
 function summonAndRecord(): void {
+  if (changingTarget) return;
   if (process.platform === "darwin") {
     void systemPreferences.askForMediaAccess("microphone").catch(() => {});
   }
@@ -1774,48 +1876,129 @@ const tokenCipher: TokenCipher = {
 function tokensFile(): string {
   return join(app.getPath("userData"), "tokens.bin");
 }
+const deploymentAccounts = new DeploymentAccounts(
+  tokenCipher,
+  () => readFileSync(join(app.getPath("userData"), "deployment-accounts.bin")),
+  (blob) => {
+    const file = join(app.getPath("userData"), "deployment-accounts.bin");
+    writeFileSync(`${file}.tmp`, blob, { mode: 0o600 });
+    renameSync(`${file}.tmp`, file);
+  },
+);
 
-/** Read + decrypt the stored tokens, or null (missing / unreadable / tampered). */
-function readStoredTokens(): StoredTokens | null {
+/** Copy the legacy shared jar once into its known startup/cloud deployments. */
+async function migrateLegacyCookies(target: AccountTarget): Promise<void> {
+  const key = createHash("sha256").update(deploymentKey(target)).digest("hex");
+  const marker = join(app.getPath("userData"), `cookies-migrated-${key}`);
+  if (existsSync(marker)) return;
   try {
-    return decryptTokens(tokenCipher, readFileSync(tokensFile()));
-  } catch {
-    return null;
-  }
+    for (const url of new Set([target.appUrl, target.apiUrl])) {
+      for (const cookie of await session.defaultSession.cookies.get({ url })) {
+        await targetSession(target).cookies.set({
+          url, name: cookie.name, value: cookie.value,
+          ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
+          path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly,
+          sameSite: cookie.sameSite,
+          ...(cookie.session ? {} : { expirationDate: cookie.expirationDate }),
+        });
+      }
+    }
+    writeFileSync(marker, "1", { mode: 0o600 });
+  } catch { console.warn("Could not migrate the legacy desktop cookie session."); }
 }
 
-function writeTokenBlob(blob: Buffer | null): void {
-  if (!blob) {
-    console.warn("OS encryption unavailable; refusing to persist tokens in plaintext.");
-    return;
-  }
-  writeFileSync(tokensFile(), blob);
+/** Legacy tokens belong only to the target selected when this process started. */
+function migrateLegacyTokens(): void {
+  try {
+    const tokens = decryptTokens(tokenCipher, readFileSync(tokensFile()));
+    if (tokens && (deploymentAccounts.current(accountTarget()) || deploymentAccounts.put(accountTarget(), tokens))) {
+      rmSync(tokensFile(), { force: true });
+    }
+  } catch { /* No legacy session. */ }
 }
 
-/** Encrypt, persist, and verify a freshly-exchanged session before app load. */
+function readStoredTokens(): StoredTokens | null {
+  return deploymentAccounts.current(accountTarget());
+}
+
 function persistSession(sess: DesktopSession): boolean {
-  return persistTokens(
-    tokenCipher,
-    sess,
-    Date.now(),
-    (blob) => writeFileSync(tokensFile(), blob),
-    () => readFileSync(tokensFile()),
-  );
+  const tokens = parseStoredTokens(serializeTokens(sess, Date.now()));
+  if (!tokens) return false;
+  tokens.user ??= readStoredTokens()?.user;
+  return deploymentAccounts.put(accountTarget(), tokens);
 }
 
-/** Persist tokens handed back by the renderer's client-side refresh (validated). */
 function persistRendererTokens(input: unknown): void {
   const serialized = serializeRendererTokens(input, Date.now());
-  if (!serialized) return; // malformed IPC payload — ignore
-  writeTokenBlob(encryptBlob(tokenCipher, serialized));
+  const tokens = serialized ? parseStoredTokens(serialized) : null;
+  if (!tokens) return;
+  tokens.user ??= readStoredTokens()?.user;
+  deploymentAccounts.put(accountTarget(), tokens);
 }
 
 function clearStoredTokens(): void {
+  const tokens = readStoredTokens();
+  if (tokens) deploymentAccounts.remove(deploymentAccountKey({ target: accountTarget(), tokens }));
+}
+
+/** Cookie compatibility mode imports its saved identities without exposing credentials. */
+async function listDeploymentAccounts() {
+  return targetOperations.run(async () => {
+    if (!cfg.bundled) {
+      const target = accountTarget();
+      const store = await readAccountStoreFromJar();
+      for (const account of await readAccountDirFromJar()) {
+        if (store[account.id]) deploymentAccounts.put(target, {
+          accessToken: "refresh-required", refreshToken: store[account.id], accessTokenExpiresAt: 0, user: account,
+        }, false);
+      }
+      const user = parseUserCookieValue(await readJarCookie("user"));
+      const accessToken = await readJarCookie("access_token");
+      const refreshToken = await readJarCookie("refresh_token");
+      if (user && accessToken && refreshToken) deploymentAccounts.put(target, {
+        accessToken, refreshToken, accessTokenExpiresAt: 0, user,
+      });
+    }
+    return { accounts: deploymentAccounts.rows(accountTarget()), canSwitch: !cfg.envTargetOverride };
+
+  });
+}
+
+/** Refresh at the saved destination before committing a switch. */
+async function selectDeploymentAccount(key: string): Promise<SwitchResult> {
+  if (changingTarget || selectingAccount || connectingDeployment || recorderOverlay) return { ok: false, error: "switch" };
+  selectingAccount = true;
   try {
-    rmSync(tokensFile(), { force: true });
-  } catch {
-    /* best-effort */
-  }
+    const saved = deploymentAccounts.find(key);
+    if (!saved) return { ok: false, error: "reauth" };
+    const previousConfig = cfg;
+    let result: DesktopSession | null;
+    try {
+      result = await refreshSession(saved.target.apiUrl, saved.tokens.refreshToken,
+        saved.target.kind === "local" ? (input, init) => targetSession(saved.target).fetch(input, { ...init, credentials: "include" }) : undefined);
+    } catch { return { ok: false, error: "switch" }; }
+    if (cfg !== previousConfig) return { ok: false, error: "switch" };
+    if (!result) {
+      deploymentAccounts.remove(key);
+      return { ok: false, error: "reauth" };
+    }
+    const tokens = parseStoredTokens(serializeTokens(result, Date.now()));
+    if (!tokens) return { ok: false, error: "switch" };
+    tokens.user ??= saved.tokens.user;
+    if (!deploymentAccounts.put(saved.target, tokens, false)) return { ok: false, error: "switch" };
+    const installSession = async () => {
+      if (!deploymentAccounts.put(saved.target, tokens)) throw new Error("Could not save the selected account");
+      if (!cfg.bundled) {
+        for (const spec of buildSessionCookies(saved.target.appUrl, { ...result!, user: tokens.user })) {
+          await targetSession().cookies.set(spec);
+        }
+      }
+    };
+    const ok = saved.target.kind === "cloud"
+      ? await activateTarget("cloud", rememberedLocalAppUrl(), rememberedLocalApiUrl(), rememberedLocalAuth(), installSession, rememberedLocalPublicConfig())
+      : await activateTarget("local", saved.target.appUrl, saved.target.apiUrl, saved.target.auth, installSession, saved.target.publicConfig);
+    return ok ? { ok: true } : { ok: false, error: "switch" };
+  } finally { selectingAccount = false; }
 }
 
 // ── Cloudflare Access Managed OAuth (remote OSS targets) ──────
@@ -1869,37 +2052,40 @@ function clearStoredAccessGrant(): void {
  * network/5xx failures keep it so the minute tick can retry.
  */
 function refreshActiveAccessGrant(force = false): Promise<CloudflareAccessGrant | null> {
-  if (accessRefreshInFlight) return accessRefreshInFlight;
-  const run = (async (): Promise<CloudflareAccessGrant | null> => {
-    const grant = activeAccessGrant;
-    if (!grant) return null;
-    if (!force && !isAccessGrantExpiring(grant, Date.now())) return grant;
-    let refreshed: CloudflareAccessGrant | null;
-    try {
-      refreshed = await refreshAccessGrant(grant, Date.now(), net.fetch);
-    } catch (err) {
-      console.warn("Cloudflare Access refresh failed (will retry):", err);
-      return grant;
-    }
-    if (!refreshed) {
-      clearStoredAccessGrant();
-      accessReauthorizationNeeded = true;
-      return null;
-    }
-    if (!persistAccessGrant(refreshed)) {
-      // Keep the in-memory grant for this process, but do not claim durable
-      // success. The next user-driven connect will surface secure-storage.
+  return targetOperations.run(async () => {
+    if (accessRefreshInFlight) return accessRefreshInFlight;
+    const run = (async (): Promise<CloudflareAccessGrant | null> => {
+      const grant = activeAccessGrant;
+      if (!grant) return null;
+      if (!force && !isAccessGrantExpiring(grant, Date.now())) return grant;
+      let refreshed: CloudflareAccessGrant | null;
+      try {
+        refreshed = await refreshAccessGrant(grant, Date.now(), net.fetch);
+      } catch (err) {
+        console.warn("Cloudflare Access refresh failed (will retry):", err);
+        return grant;
+      }
+      if (!refreshed) {
+        clearStoredAccessGrant();
+        accessReauthorizationNeeded = true;
+        return null;
+      }
+      if (!persistAccessGrant(refreshed)) {
+        // Keep the in-memory grant for this process, but do not claim durable
+        // success. The next user-driven connect will surface secure-storage.
+        activeAccessGrant = refreshed;
+        return refreshed;
+      }
       activeAccessGrant = refreshed;
       return refreshed;
-    }
-    activeAccessGrant = refreshed;
-    return refreshed;
-  })();
-  accessRefreshInFlight = run;
-  void run.finally(() => {
-    accessRefreshInFlight = null;
+    })();
+    accessRefreshInFlight = run;
+    void run.finally(() => {
+      accessRefreshInFlight = null;
+    });
+    return run;
+
   });
-  return run;
 }
 
 async function usableAccessGrantFor(appUrl: string): Promise<CloudflareAccessGrant | null> {
@@ -2036,9 +2222,167 @@ function authorizeCloudflareAccess(
   });
 }
 
+const downloadPolicySessions = new WeakSet<ReturnType<typeof targetSession>>();
+function installSessionPolicies(): void {
+  const policyCfg = cfg;
+    // Chromium-level media (mic) permission: grant to the app's own origin
+    // only, so the dock recorder's `getUserMedia` never shows a browser-style
+    // permission prompt inside the shell (macOS OS-level consent is separate
+    // — `askForMediaAccess` in `summonAndRecord`). Everything else keeps
+    // Electron's default-allow, unchanged from the no-handler behavior.
+    targetSession().setPermissionRequestHandler((_wc, permission, callback, details) => {
+      if (gatewayWindow && !gatewayWindow.isDestroyed() && _wc.id === gatewayWindow.webContents.id) {
+        callback(false);
+        return;
+      }
+      if (permission === "media") {
+        callback(details.requestingUrl?.startsWith(policyCfg.appOrigin) ?? false);
+        return;
+      }
+      callback(true);
+    });
+
+    // A file:// renderer has the opaque Origin `null`. Keep webSecurity enabled,
+    // but bridge CORS only in bundled mode and only for the configured API. A
+    // preflight may not carry a webContentsId, so that field is not a safe gate.
+    targetSession().webRequest.onHeadersReceived((details, callback) => {
+      if (
+        shouldBridgeBundledCors({
+          bundled: policyCfg.bundled,
+          requestUrl: details.url,
+          apiUrl: policyCfg.apiUrl,
+        })
+      ) {
+        callback({
+          responseHeaders: bridgeBundledCorsHeaders(details.responseHeaders),
+        });
+        return;
+      }
+      callback({});
+    });
+
+    // The gateway window is an authentication surface, never a download or app
+    // surface. Session-level hooks can identify its WebContents without granting
+    // remote identity pages any native bridge.
+    if (!downloadPolicySessions.has(targetSession())) targetSession().on("will-download", (event, _item, webContents) => {
+      if (gatewayWindow && !gatewayWindow.isDestroyed() && webContents?.id === gatewayWindow.webContents.id) {
+        event.preventDefault();
+      }
+    });
+
+    downloadPolicySessions.add(targetSession());
+
+    // Catch expiry on renderer REST/SSE requests as well as main-frame redirects.
+    // The failed request may retry according to its own policy; this restores the
+    // shared gateway session without reloading potentially unsaved app state.
+    targetSession().webRequest.onBeforeRedirect((details) => {
+      if (policyCfg.target !== "local") return;
+      // session.fetch probes have no WebContents and must never trigger their
+      // own recovery hook; only renderer/main-window traffic belongs here.
+      if (details.webContentsId === undefined || !isCurrentAccountSender(details.webContentsId)) return;
+      if (
+        gatewayWindow &&
+        !gatewayWindow.isDestroyed() &&
+        details.webContentsId === gatewayWindow.webContents.id
+      ) {
+        return;
+      }
+      try {
+        const sourceOrigin = new URL(details.url).origin;
+        const destinationOrigin = new URL(details.redirectURL).origin;
+        const apiOrigin = new URL(policyCfg.apiUrl).origin;
+        if (
+          (sourceOrigin === policyCfg.appOrigin || sourceOrigin === apiOrigin) &&
+          isAllowedGatewayNavigation(details.redirectURL, details.url)
+        ) {
+          void recoverBackgroundGatewayRequest(details.url);
+        }
+      } catch {
+        // Ignore malformed redirect metadata; Chromium will fail it normally.
+      }
+    });
+
+    targetSession().webRequest.onCompleted((details) => {
+      if (policyCfg.target !== "local" || details.webContentsId === undefined || !isCurrentAccountSender(details.webContentsId)) return;
+      if (
+        gatewayWindow &&
+        !gatewayWindow.isDestroyed() &&
+        details.webContentsId === gatewayWindow.webContents.id
+      ) {
+        return;
+      }
+      try {
+        const sourceOrigin = new URL(details.url).origin;
+        const apiOrigin = new URL(policyCfg.apiUrl).origin;
+        const contentType = Object.entries(details.responseHeaders ?? {}).find(
+          ([name]) => name.toLowerCase() === "content-type",
+        )?.[1];
+        const isHtmlChallenge =
+          details.resourceType !== "mainFrame" &&
+          contentType?.some((value) => value.toLowerCase().includes("text/html")) === true;
+        if (
+          (sourceOrigin === policyCfg.appOrigin || sourceOrigin === apiOrigin) &&
+          ([401, 403, 407].includes(details.statusCode) || isHtmlChallenge)
+        ) {
+          void recoverBackgroundGatewayRequest(details.url);
+        }
+      } catch {
+        // Ignore malformed completion metadata.
+      }
+    });
+
+    // Remote-meeting recording: app-web requests display media only to obtain
+    // the computer's playback stream. getDisplayMedia requires video, so grant
+    // the primary display + audible loopback; the renderer stops the video
+    // track immediately and mixes only mic + playback into MediaRecorder.
+    //
+    // The origin check is the privilege boundary. Bundled file:// is allowed
+    // only when a packaged renderer is actually active; arbitrary web content
+    // can never turn this shell into a whole-computer audio tap.
+    targetSession().setDisplayMediaRequestHandler((request, callback) => {
+      const trusted = isTrustedCaptureOrigin(
+        request.securityOrigin,
+        policyCfg.appOrigin,
+        bundledAvailable(),
+      );
+      if (!trusted || !request.audioRequested || !request.videoRequested) {
+        callback({});
+        return;
+      }
+      // A renderer-picked source (the specific-window capture) wins for ONE
+      // grant, then clears — a later computer-audio-only capture must never
+      // silently record last week's picked window.
+      const pickedId = requestedCaptureSourceId;
+      requestedCaptureSourceId = null;
+      void desktopCapturer
+        .getSources({
+          types: pickedId ? ["window", "screen"] : ["screen"],
+          thumbnailSize: { width: 0, height: 0 },
+          fetchWindowIcons: false,
+        })
+        .then((sources) => {
+          const source =
+            (pickedId ? sources.find((candidate) => candidate.id === pickedId) : undefined) ??
+            selectPrimaryDisplaySource(sources, screen.getPrimaryDisplay().id);
+          if (!source) {
+            callback({});
+            return;
+          }
+          // `loopback` leaves local playback audible. `loopbackWithMute`
+          // would make the remote meeting disappear from the user's speakers.
+          // Loopback is WHOLE-SYSTEM output: per-application audio isolation
+          // is not exposed by Chromium/Electron, so a window pick still
+          // carries all computer audio (the renderer copy says so).
+          callback({ video: source, audio: "loopback" });
+        })
+        .catch(() => callback({}));
+    });
+
+}
+
 /** Install the exact-origin request hook before the first app navigation. */
 function installAccessRequestHook(): void {
-  session.defaultSession.webRequest.onBeforeSendHeaders(
+  targetSession().webRequest.onBeforeSendHeaders(
     { urls: [`${cfg.appOrigin}/*`] },
     (details, callback) => {
       const authorization = accessAuthorizationForUrl(activeAccessGrant, details.url);
@@ -2068,6 +2412,7 @@ function showAccessReauthorization(): void {
 function startAccessGrantKeepalive(): void {
   if (accessRefreshTimer) return;
   accessRefreshTimer = setInterval(() => {
+    if (changingTarget) return;
     void (async () => {
       const before = activeAccessGrant;
       const after = await refreshActiveAccessGrant();
@@ -2082,16 +2427,19 @@ function startAccessGrantKeepalive(): void {
  * landing so Chromium never chases the traditional Access login redirect.
  */
 async function prepareAccessForStartup(): Promise<void> {
-  activeAccessGrant = readStoredAccessGrant();
-  if (activeAccessGrant && !accessGrantMatchesApp(activeAccessGrant, cfg.appUrl)) {
-    activeAccessGrant = null;
-  }
-  if (activeAccessGrant) await refreshActiveAccessGrant();
-  if (cfg.target !== "local" || new URL(cfg.appUrl).protocol !== "https:") return;
-  const discovery = await fetchDeclaredApiUrl(cfg.appUrl, activeAccessGrant);
-  if (discovery.kind === "managed-oauth" || discovery.kind === "legacy-access") {
-    accessReauthorizationNeeded = true;
-  }
+  return targetOperations.run(async () => {
+    activeAccessGrant = readStoredAccessGrant();
+    if (activeAccessGrant && !accessGrantMatchesApp(activeAccessGrant, cfg.appUrl)) {
+      activeAccessGrant = null;
+    }
+    if (activeAccessGrant) await refreshActiveAccessGrant();
+    if (cfg.target !== "local" || new URL(cfg.appUrl).protocol !== "https:") return;
+    const discovery = await fetchDeclaredApiUrl(cfg.appUrl, activeAccessGrant);
+    if (discovery.kind === "managed-oauth" || discovery.kind === "legacy-access") {
+      accessReauthorizationNeeded = true;
+    }
+
+  });
 }
 
 /** How long an unattended sign-in's loopback server stays open before teardown. */
@@ -2129,6 +2477,7 @@ function closeConnectorServer(): void {
  * loopback server can't bind, fall back to the scheme (packaged builds only).
  */
 function startSignIn(opts: { addAccount?: boolean } = {}): void {
+  if (changingTarget) return;
   const { verifier, challenge } = generatePkcePair();
   pendingVerifier = verifier;
   pendingAddAccount = opts.addAccount ?? false;
@@ -2188,59 +2537,62 @@ function startSignIn(opts: { addAccount?: boolean } = {}): void {
 }
 
 async function completeSignIn(code: string): Promise<void> {
-  // In-memory state is authoritative for the loopback transport (same process);
-  // the persisted blob covers the cross-process `usebrian://auth` fallback. Both
-  // carry the add-account intent so the right process knows to stash vs replace.
-  const pending = pendingVerifier
-    ? { verifier: pendingVerifier, addAccount: pendingAddAccount }
-    : readPersistedVerifier();
-  if (!pending) {
-    dialog.showErrorBox(
-      "Sign-in failed",
-      "This sign-in link is no longer valid. Please start sign-in again from the app.",
-    );
-    return;
-  }
-  const { verifier, addAccount } = pending;
-  pendingVerifier = null;
-  pendingAddAccount = false;
-  clearPersistedVerifier();
-  closeAuthServer(); // idempotent — the loopback path already closed it
-  try {
-    const result = await exchangeCode(
-      cfg.apiUrl,
-      code,
-      verifier,
-      cfg.target === "local" ? authenticatedSessionFetch : undefined,
-    );
-    if (cfg.bundled) {
-      // Bundled (Bearer tokens, not cookies) stays single-account — add replaces.
-      if (!persistSession(result)) {
-        clearStoredTokens();
-        throw new Error("Use Brian could not securely store your session. Please try again.");
-      }
-    } else {
-      // Add-account: stash the active account into the saved-account store before
-      // its canonical trio is overwritten with the new account. At capacity we
-      // keep the current session untouched and surface the cap.
-      if (addAccount && !(await stashCurrentAccount(result))) {
-        dialog.showErrorBox(
-          "Can't add account",
-          `You can keep up to ${MAX_ACCOUNTS} accounts signed in at once. Sign out of one first.`,
-        );
-        focusWindow(ensureWindow());
-        return;
-      }
-      for (const spec of buildSessionCookies(cfg.appUrl, result)) {
-        await session.defaultSession.cookies.set(spec);
-      }
+  return targetOperations.run(async () => {
+    // In-memory state is authoritative for the loopback transport (same process);
+    // the persisted blob covers the cross-process `usebrian://auth` fallback. Both
+    // carry the add-account intent so the right process knows to stash vs replace.
+    const pending = pendingVerifier
+      ? { verifier: pendingVerifier, addAccount: pendingAddAccount }
+      : readPersistedVerifier();
+    if (!pending) {
+      dialog.showErrorBox(
+        "Sign-in failed",
+        "This sign-in link is no longer valid. Please start sign-in again from the app.",
+      );
+      return;
     }
-    const win = ensureWindow();
-    await loadApp(win);
-    focusWindow(win); // focus AFTER the reload so the fresh contents take input
-  } catch (err) {
-    dialog.showErrorBox("Sign-in failed", err instanceof Error ? err.message : String(err));
-  }
+    const { verifier, addAccount } = pending;
+    pendingVerifier = null;
+    pendingAddAccount = false;
+    clearPersistedVerifier();
+    closeAuthServer(); // idempotent — the loopback path already closed it
+    try {
+      const result = await exchangeCode(
+        cfg.apiUrl,
+        code,
+        verifier,
+        cfg.target === "local" ? authenticatedSessionFetch : undefined,
+      );
+      if (cfg.bundled) {
+        // Saving the new identity preserves every previously saved account.
+        if (!persistSession(result)) {
+          clearStoredTokens();
+          throw new Error("Use Brian could not securely store your session. Please try again.");
+        }
+      } else {
+        // Add-account: stash the active account into the saved-account store before
+        // its canonical trio is overwritten with the new account. At capacity we
+        // keep the current session untouched and surface the cap.
+        if (addAccount && !(await stashCurrentAccount(result))) {
+          dialog.showErrorBox(
+            "Can't add account",
+            `You can keep up to ${MAX_ACCOUNTS} accounts signed in at once. Sign out of one first.`,
+          );
+          focusWindow(ensureWindow());
+          return;
+        }
+        for (const spec of buildSessionCookies(cfg.appUrl, result)) {
+          await targetSession().cookies.set(spec);
+        }
+      }
+      const win = ensureWindow();
+      await loadApp(win);
+      focusWindow(win); // focus AFTER the reload so the fresh contents take input
+    } catch (err) {
+      dialog.showErrorBox("Sign-in failed", err instanceof Error ? err.message : String(err));
+    }
+
+  });
 }
 
 // ── Connector OAuth (Google / Notion) — RFC 8252 loopback, mirrors sign-in ──
@@ -2258,9 +2610,12 @@ async function completeSignIn(code: string): Promise<void> {
  * (Google/Notion) is a cloud feature, so in practice this is the jar cookie.
  */
 async function currentConnectorAccessToken(): Promise<string | null> {
-  const jar = await readJarCookie("access_token");
-  if (jar) return jar;
-  return cfg.bundled ? (readStoredTokens()?.accessToken ?? null) : null;
+  return targetOperations.run(async () => {
+    const jar = await readJarCookie("access_token");
+    if (jar) return jar;
+    return cfg.bundled ? (readStoredTokens()?.accessToken ?? null) : null;
+
+  });
 }
 
 /** Navigate the app window to the connectors page (success or error query). */
@@ -2268,9 +2623,12 @@ async function navigateToConnectors(
   workspaceId: string,
   opts: { connector?: string; instanceId?: string; error?: string },
 ): Promise<void> {
-  const win = ensureWindow();
-  await win.webContents.loadURL(`${cfg.appUrl}${buildConnectorsReturnPath(workspaceId, opts)}`);
-  focusWindow(win);
+  return targetOperations.run(async () => {
+    const win = ensureWindow();
+    await win.webContents.loadURL(`${cfg.appUrl}${buildConnectorsReturnPath(workspaceId, opts)}`);
+    focusWindow(win);
+
+  });
 }
 
 function startConnectorConnect(raw: unknown): void {
@@ -2329,27 +2687,30 @@ function startConnectorConnect(raw: unknown): void {
 }
 
 async function completeConnectorConnect(req: ConnectorConnectRequest, code: string): Promise<void> {
-  closeConnectorServer(); // idempotent — the loopback path already closed it
-  try {
-    const accessToken = await currentConnectorAccessToken();
-    if (!accessToken) {
-      dialog.showErrorBox("Connection failed", "Please sign in first, then reconnect.");
-      return;
+  return targetOperations.run(async () => {
+    closeConnectorServer(); // idempotent — the loopback path already closed it
+    try {
+      const accessToken = await currentConnectorAccessToken();
+      if (!accessToken) {
+        dialog.showErrorBox("Connection failed", "Please sign in first, then reconnect.");
+        return;
+      }
+      const instanceId = await exchangeAndStore(cfg.apiUrl, accessToken, {
+        connector: req.connector,
+        code,
+        redirectUri: req.redirectUri,
+        createNew: req.createNew,
+        instanceId: req.instanceId,
+      });
+      await navigateToConnectors(req.workspaceId, { connector: req.connector, instanceId });
+    } catch (err) {
+      dialog.showErrorBox("Connection failed", err instanceof Error ? err.message : String(err));
+      // Land the user back on the connectors page (clears the row spinner) with the
+      // error surfaced, matching the web callback's error redirect.
+      await navigateToConnectors(req.workspaceId, { error: "store_failed" });
     }
-    const instanceId = await exchangeAndStore(cfg.apiUrl, accessToken, {
-      connector: req.connector,
-      code,
-      redirectUri: req.redirectUri,
-      createNew: req.createNew,
-      instanceId: req.instanceId,
-    });
-    await navigateToConnectors(req.workspaceId, { connector: req.connector, instanceId });
-  } catch (err) {
-    dialog.showErrorBox("Connection failed", err instanceof Error ? err.message : String(err));
-    // Land the user back on the connectors page (clears the row spinner) with the
-    // error surfaced, matching the web callback's error redirect.
-    await navigateToConnectors(req.workspaceId, { error: "store_failed" });
-  }
+
+  });
 }
 
 /**
@@ -2361,23 +2722,26 @@ async function completeConnectorConnect(req: ConnectorConnectRequest, code: stri
  * can't be keyed, so it falls through to a plain replace (`true`).
  */
 async function stashCurrentAccount(next: DesktopSession): Promise<boolean> {
-  if (!next.user?.id) return true; // unkeyable — replace, as the single-account path always did
-  const prevRefresh = await readJarCookie("refresh_token");
-  const prevUser = parseUserCookieValue(await readJarCookie("user"));
-  const prev: AccountCredential | null =
-    prevRefresh && prevUser ? { account: prevUser, refreshToken: prevRefresh } : null;
-  const res = stashAndAddAccount(
-    await readAccountStoreFromJar(),
-    await readAccountDirFromJar(),
-    prev,
-    {
-      account: { id: next.user.id, name: next.user.name, email: next.user.email },
-      refreshToken: next.refreshToken,
-    },
-  );
-  if (res.atCapacity) return false;
-  await writeAccountStoreToJar(res.store, res.dir);
-  return true;
+  return targetOperations.run(async () => {
+    if (!next.user?.id) return true; // unkeyable — replace, as the single-account path always did
+    const prevRefresh = await readJarCookie("refresh_token");
+    const prevUser = parseUserCookieValue(await readJarCookie("user"));
+    const prev: AccountCredential | null =
+      prevRefresh && prevUser ? { account: prevUser, refreshToken: prevRefresh } : null;
+    const res = stashAndAddAccount(
+      await readAccountStoreFromJar(),
+      await readAccountDirFromJar(),
+      prev,
+      {
+        account: { id: next.user.id, name: next.user.name, email: next.user.email },
+        refreshToken: next.refreshToken,
+      },
+    );
+    if (res.atCapacity) return false;
+    await writeAccountStoreToJar(res.store, res.dir);
+    return true;
+
+  });
 }
 
 /**
@@ -2390,122 +2754,138 @@ async function stashCurrentAccount(next: DesktopSession): Promise<boolean> {
  */
 async function switchAccount(accountId: string): Promise<SwitchResult> {
   // Bundled mode authenticates with a single Bearer token, not the cookie store.
-  if (cfg.bundled) return { ok: false, error: "switch" };
-
-  const store = await readAccountStoreFromJar();
-  const dir = await readAccountDirFromJar();
-  const stored = store[accountId];
-  if (!stored) return { ok: false, error: "reauth" };
-
-  // R1 — capture the current active account's latest jar token so it's written
-  // back (the keep-alive may have rotated it since it was last stored).
-  const curRefresh = await readJarCookie("refresh_token");
-  const curUser = parseUserCookieValue(await readJarCookie("user"));
-  const prevActive: AccountCredential | null =
-    curRefresh && curUser ? { account: curUser, refreshToken: curRefresh } : null;
-
-  let result: DesktopSession | null;
-  try {
-    result = await refreshSession(cfg.apiUrl, stored);
-  } catch (err) {
-    console.warn("Account switch refresh failed (transient):", err);
-    return { ok: false, error: "switch" }; // keep the active session; let the user retry
-  }
-  if (!result) {
-    // Stored token is dead (revoked / >30d idle). Prune so the row stops
-    // offering a broken switch; the active session is left untouched.
-    const pruned = pruneAccount(store, dir, accountId);
-    await writeAccountStoreToJar(pruned.store, pruned.dir);
-    return { ok: false, error: "reauth" };
+  if (cfg.bundled) {
+    const row = deploymentAccounts.rows(accountTarget()).find((account) => {
+      const saved = deploymentAccounts.find(account.key);
+      return account.id === accountId && saved && deploymentKey(saved.target) === deploymentKey(accountTarget());
+    });
+    return row ? selectDeploymentAccount(row.key) : { ok: false, error: "reauth" };
   }
 
-  const switchedAccount: AccountDirEntry = result.user
-    ? { id: result.user.id, name: result.user.name, email: result.user.email }
-    : dir.find((e) => e.id === accountId) ?? { id: accountId, name: "", email: "" };
-  const rotated = applySwitchRotation(store, dir, prevActive, {
-    account: switchedAccount,
-    refreshToken: result.refreshToken,
+  return targetOperations.run(async () => {
+    const store = await readAccountStoreFromJar();
+    const dir = await readAccountDirFromJar();
+    const stored = store[accountId];
+    if (!stored) return { ok: false, error: "reauth" };
+
+    // R1 — capture the current active account's latest jar token so it's written
+    // back (the keep-alive may have rotated it since it was last stored).
+    const curRefresh = await readJarCookie("refresh_token");
+    const curUser = parseUserCookieValue(await readJarCookie("user"));
+    const prevActive: AccountCredential | null =
+      curRefresh && curUser ? { account: curUser, refreshToken: curRefresh } : null;
+
+    let result: DesktopSession | null;
+    try {
+      result = await refreshSession(cfg.apiUrl, stored);
+    } catch (err) {
+      console.warn("Account switch refresh failed (transient):", err);
+      return { ok: false, error: "switch" }; // keep the active session; let the user retry
+    }
+    if (!result) {
+      // Stored token is dead (revoked / >30d idle). Prune so the row stops
+      // offering a broken switch; the active session is left untouched.
+      const pruned = pruneAccount(store, dir, accountId);
+      await writeAccountStoreToJar(pruned.store, pruned.dir);
+      return { ok: false, error: "reauth" };
+    }
+
+    const switchedAccount: AccountDirEntry = result.user
+      ? { id: result.user.id, name: result.user.name, email: result.user.email }
+      : dir.find((e) => e.id === accountId) ?? { id: accountId, name: "", email: "" };
+    const rotated = applySwitchRotation(store, dir, prevActive, {
+      account: switchedAccount,
+      refreshToken: result.refreshToken,
+    });
+    await writeAccountStoreToJar(rotated.store, rotated.dir);
+    for (const spec of buildSessionCookies(cfg.appUrl, result)) {
+      await targetSession().cookies.set(spec);
+    }
+    const win = ensureWindow();
+    await loadApp(win); // reload so the new account's workspace/page resolves cleanly
+    focusWindow(win);
+    return { ok: true };
   });
-  await writeAccountStoreToJar(rotated.store, rotated.dir);
-  for (const spec of buildSessionCookies(cfg.appUrl, result)) {
-    await session.defaultSession.cookies.set(spec);
-  }
-  const win = ensureWindow();
-  await loadApp(win); // reload so the new account's workspace/page resolves cleanly
-  focusWindow(win);
-  return { ok: true };
 }
 
 async function signOut(): Promise<void> {
-  if (cfg.bundled) {
-    // Bundled mode is single-account (Bearer tokens, no saved-account store).
-    clearStoredTokens();
+  return targetOperations.run(async () => {
+    if (!cfg.bundled) {
+      const active = parseUserCookieValue(await readJarCookie("user"));
+      const row = deploymentAccounts.rows(accountTarget()).find((entry) => entry.active && entry.id === active?.id);
+      if (row) deploymentAccounts.remove(row.key);
+    }
+    if (cfg.bundled) {
+      // Remove only this account; other deployments remain available.
+      clearStoredTokens();
+      const win = ensureWindow();
+      if (cfg.targetAuth === "local-session") await loadApp(win);
+      else await win.webContents.loadFile(SIGNIN_PAGE);
+      focusWindow(win);
+      return;
+    }
+
+    // "Log out" signs out only the ACTIVE account and switches into the next
+    // saved one — the jar-local mirror of the web's `/api/auth/logout?scope=active`.
+    // Same machinery as `switchAccount`, minus the R1 write-back of the account
+    // we're signing out: it's dropped from the store rather than kept. A dead
+    // candidate token is pruned and the next tried; a full sign-out (clear the
+    // trio AND the store) is the fallback when nothing remains to switch into.
+    const activeUser = parseUserCookieValue(await readJarCookie("user"));
+    const plan = planActiveLogout(
+      await readAccountStoreFromJar(),
+      await readAccountDirFromJar(),
+      activeUser?.id ?? null,
+    );
+    const store = plan.store;
+    let dir = plan.dir;
+
+    for (const nextId of plan.candidates) {
+      const token = store[nextId];
+      if (!token) continue;
+      let result: DesktopSession | null;
+      try {
+        result = await refreshSession(cfg.apiUrl, token);
+      } catch (err) {
+        console.warn("Logout switch refresh failed (transient):", err);
+        continue; // try the next candidate; don't prune a maybe-good token
+      }
+      if (!result) {
+        delete store[nextId]; // dead stored token — prune and try the next
+        dir = dir.filter((e) => e.id !== nextId);
+        continue;
+      }
+      const switched: AccountDirEntry = result.user
+        ? { id: result.user.id, name: result.user.name, email: result.user.email }
+        : dir.find((e) => e.id === nextId) ?? { id: nextId, name: "", email: "" };
+      store[switched.id] = result.refreshToken; // R1 for the now-active account
+      dir = upsertAccountDir(dir, switched);
+      await writeAccountStoreToJar(store, dir);
+      for (const spec of buildSessionCookies(cfg.appUrl, result)) {
+        await targetSession().cookies.set(spec);
+      }
+      const win = ensureWindow();
+      await loadApp(win); // reload as the switched-into account
+      focusWindow(win);
+      return;
+    }
+
+    // No saved account left to switch into → full sign-out.
+    for (const name of AUTH_COOKIE_NAMES) {
+      await targetSession().cookies.remove(cfg.appUrl, name);
+    }
+    for (const name of ACCOUNT_STORE_COOKIE_NAMES) {
+      await targetSession().cookies.remove(cfg.appUrl, name);
+    }
+    // Reloading re-seeds the (now empty) renderer auth, which redirects to login:
+    // in the thin shell canvas 302s to /login (intercepted to start the PKCE flow);
+    // in bundled mode the preload seeds no token and `desktopAuthSource` calls
+    // `redirectToLogin()` → `signIn()`.
     const win = ensureWindow();
-    if (cfg.targetAuth === "local-session") await loadApp(win);
-    else await win.webContents.loadFile(SIGNIN_PAGE);
     focusWindow(win);
-    return;
-  }
+    await loadApp(win);
 
-  // "Log out" signs out only the ACTIVE account and switches into the next
-  // saved one — the jar-local mirror of the web's `/api/auth/logout?scope=active`.
-  // Same machinery as `switchAccount`, minus the R1 write-back of the account
-  // we're signing out: it's dropped from the store rather than kept. A dead
-  // candidate token is pruned and the next tried; a full sign-out (clear the
-  // trio AND the store) is the fallback when nothing remains to switch into.
-  const activeUser = parseUserCookieValue(await readJarCookie("user"));
-  const plan = planActiveLogout(
-    await readAccountStoreFromJar(),
-    await readAccountDirFromJar(),
-    activeUser?.id ?? null,
-  );
-  const store = plan.store;
-  let dir = plan.dir;
-
-  for (const nextId of plan.candidates) {
-    const token = store[nextId];
-    if (!token) continue;
-    let result: DesktopSession | null;
-    try {
-      result = await refreshSession(cfg.apiUrl, token);
-    } catch (err) {
-      console.warn("Logout switch refresh failed (transient):", err);
-      continue; // try the next candidate; don't prune a maybe-good token
-    }
-    if (!result) {
-      delete store[nextId]; // dead stored token — prune and try the next
-      dir = dir.filter((e) => e.id !== nextId);
-      continue;
-    }
-    const switched: AccountDirEntry = result.user
-      ? { id: result.user.id, name: result.user.name, email: result.user.email }
-      : dir.find((e) => e.id === nextId) ?? { id: nextId, name: "", email: "" };
-    store[switched.id] = result.refreshToken; // R1 for the now-active account
-    dir = upsertAccountDir(dir, switched);
-    await writeAccountStoreToJar(store, dir);
-    for (const spec of buildSessionCookies(cfg.appUrl, result)) {
-      await session.defaultSession.cookies.set(spec);
-    }
-    const win = ensureWindow();
-    await loadApp(win); // reload as the switched-into account
-    focusWindow(win);
-    return;
-  }
-
-  // No saved account left to switch into → full sign-out.
-  for (const name of AUTH_COOKIE_NAMES) {
-    await session.defaultSession.cookies.remove(cfg.appUrl, name);
-  }
-  for (const name of ACCOUNT_STORE_COOKIE_NAMES) {
-    await session.defaultSession.cookies.remove(cfg.appUrl, name);
-  }
-  // Reloading re-seeds the (now empty) renderer auth, which redirects to login:
-  // in the thin shell canvas 302s to /login (intercepted to start the PKCE flow);
-  // in bundled mode the preload seeds no token and `desktopAuthSource` calls
-  // `redirectToLogin()` → `signIn()`.
-  const win = ensureWindow();
-  focusWindow(win);
-  await loadApp(win);
+  });
 }
 
 // ── Session keep-alive (thin shell) ────────────────────────────
@@ -2519,7 +2899,7 @@ async function signOut(): Promise<void> {
 // docs/architecture/features/app-desktop.md → "Session lifetime".
 
 async function readJarCookie(name: string): Promise<string | null> {
-  const cookies = await session.defaultSession.cookies.get({ url: cfg.appUrl, name });
+  const cookies = await targetSession().cookies.get({ url: cfg.appUrl, name });
   return cookies[0]?.value ?? null;
 }
 
@@ -2550,22 +2930,25 @@ function currentTrustedAppUrl(win: BrowserWindow): string | null {
  * definitively rejected credential reaches the sign-in landing.
  */
 async function recoverCloudSessionOrSignIn(resumeUrl: string | null): Promise<void> {
-  const action = decideLoginRecoveryAction("pkce", await hasPersistedSession());
-  if (action !== "recover-session") {
-    promptSignIn();
-    return;
-  }
+  return targetOperations.run(async () => {
+    const action = decideLoginRecoveryAction("pkce", await hasPersistedSession());
+    if (action !== "recover-session") {
+      promptSignIn();
+      return;
+    }
 
-  if (cfg.bundled) {
-    // Bundled mode refreshes through the renderer's Bearer-token source. A
-    // stored credential means this navigation raced that source; reload the
-    // local bundle rather than presenting a false sign-out.
-    await loadApp(ensureWindow());
-    return;
-  }
+    if (cfg.bundled) {
+      // Bundled mode refreshes through the renderer's Bearer-token source. A
+      // stored credential means this navigation raced that source; reload the
+      // local bundle rather than presenting a false sign-out.
+      await loadApp(ensureWindow());
+      return;
+    }
 
-  await resumeAfterRefresh(resumeUrl ?? cfg.appUrl, {
-    preserveLoadedContent: resumeUrl !== null,
+    await resumeAfterRefresh(resumeUrl ?? cfg.appUrl, {
+      preserveLoadedContent: resumeUrl !== null,
+    });
+
   });
 }
 
@@ -2586,7 +2969,7 @@ async function writeAccountStoreToJar(
   dir: AccountDirEntry[],
 ): Promise<void> {
   for (const spec of buildAccountStoreCookies(cfg.appUrl, store, dir)) {
-    await session.defaultSession.cookies.set(spec);
+    await targetSession().cookies.set(spec);
   }
 }
 
@@ -2602,71 +2985,74 @@ let sessionRefreshInFlight: Promise<RefreshOutcome> | null = null;
  * (transient error — session kept for a later retry).
  */
 function refreshSessionInPlace(): Promise<RefreshOutcome> {
-  if (sessionRefreshInFlight) return sessionRefreshInFlight;
-  const run = (async (): Promise<RefreshOutcome> => {
-    const refreshToken = await readJarCookie("refresh_token");
-    if (!refreshToken) return "signed-out";
-    let result: DesktopSession | null;
-    try {
-      if (cfg.target === "local") {
-        let health = await probeLocalBrain(cfg.apiUrl);
-        if (
-          health.kind === "authentication-required" &&
-          mainWindow &&
-          !mainWindow.isDestroyed() &&
-          mainWindow.isVisible()
-        ) {
-          health = await probeWithGatewayAuthentication(
-            healthUrl(cfg.apiUrl),
-            () => probeLocalBrain(cfg.apiUrl),
-          );
+  return targetOperations.run(async () => {
+    if (sessionRefreshInFlight) return sessionRefreshInFlight;
+    const run = (async (): Promise<RefreshOutcome> => {
+      const refreshToken = await readJarCookie("refresh_token");
+      if (!refreshToken) return "signed-out";
+      let result: DesktopSession | null;
+      try {
+        if (cfg.target === "local") {
+          let health = await probeLocalBrain(cfg.apiUrl);
+          if (
+            health.kind === "authentication-required" &&
+            mainWindow &&
+            !mainWindow.isDestroyed() &&
+            mainWindow.isVisible()
+          ) {
+            health = await probeWithGatewayAuthentication(
+              healthUrl(cfg.apiUrl),
+              () => probeLocalBrain(cfg.apiUrl),
+            );
+          }
+          if (health.kind !== "ready") return "failed";
         }
-        if (health.kind !== "ready") return "failed";
+        result =
+          cfg.target === "local"
+            ? await refreshSession(cfg.apiUrl, refreshToken, (input, init) =>
+                targetSession().fetch(input, { ...init, credentials: "include" }),
+              )
+            : await refreshSession(cfg.apiUrl, refreshToken);
+      } catch (err) {
+        console.warn("Session refresh failed (will retry):", err);
+        return "failed";
       }
-      result =
-        cfg.target === "local"
-          ? await refreshSession(cfg.apiUrl, refreshToken, (input, init) =>
-              session.defaultSession.fetch(input, { ...init, credentials: "include" }),
-            )
-          : await refreshSession(cfg.apiUrl, refreshToken);
-    } catch (err) {
-      console.warn("Session refresh failed (will retry):", err);
-      return "failed";
-    }
-    if (!result) {
-      // The refresh token itself is dead (revoked or >30d idle) — a real sign-out.
-      for (const name of AUTH_COOKIE_NAMES) {
-        await session.defaultSession.cookies.remove(cfg.appUrl, name);
+      if (!result) {
+        // The refresh token itself is dead (revoked or >30d idle) — a real sign-out.
+        for (const name of AUTH_COOKIE_NAMES) {
+          await targetSession().cookies.remove(cfg.appUrl, name);
+        }
+        return "signed-out";
       }
-      return "signed-out";
-    }
-    // The refresh response carries no `plan`, so keep the display-only `user`
-    // cookie's current value — only its expiry slides with the new window.
-    const existingUser = await readJarCookie("user");
-    for (const spec of buildSessionCookies(cfg.appUrl, result)) {
-      const value = spec.name === "user" && existingUser ? existingUser : spec.value;
-      await session.defaultSession.cookies.set({ ...spec, value });
-    }
-    // R1 — if this jar holds a saved-account store, keep the active account's
-    // stored refresh token in sync with the rotation above so a later
-    // switch-back doesn't rely on a token rotated out from under it. No-ops for
-    // single-account sessions (no store). Mirrors the web's `rotateActiveAccount`.
-    const activeUser = parseUserCookieValue(existingUser);
-    if (activeUser) {
-      const synced = rotateActiveInStore(
-        await readAccountStoreFromJar(),
-        await readAccountDirFromJar(),
-        { account: activeUser, refreshToken: result.refreshToken },
-      );
-      if (synced) await writeAccountStoreToJar(synced.store, synced.dir);
-    }
-    return "refreshed";
-  })();
-  sessionRefreshInFlight = run;
-  void run.finally(() => {
-    sessionRefreshInFlight = null;
+      // The refresh response carries no `plan`, so keep the display-only `user`
+      // cookie's current value — only its expiry slides with the new window.
+      const existingUser = await readJarCookie("user");
+      for (const spec of buildSessionCookies(cfg.appUrl, result)) {
+        const value = spec.name === "user" && existingUser ? existingUser : spec.value;
+        await targetSession().cookies.set({ ...spec, value });
+      }
+      // R1 — if this jar holds a saved-account store, keep the active account's
+      // stored refresh token in sync with the rotation above so a later
+      // switch-back doesn't rely on a token rotated out from under it. No-ops for
+      // single-account sessions (no store). Mirrors the web's `rotateActiveAccount`.
+      const activeUser = parseUserCookieValue(existingUser);
+      if (activeUser) {
+        const synced = rotateActiveInStore(
+          await readAccountStoreFromJar(),
+          await readAccountDirFromJar(),
+          { account: activeUser, refreshToken: result.refreshToken },
+        );
+        if (synced) await writeAccountStoreToJar(synced.store, synced.dir);
+      }
+      return "refreshed";
+    })();
+    sessionRefreshInFlight = run;
+    void run.finally(() => {
+      sessionRefreshInFlight = null;
+    });
+    return run;
+
   });
-  return run;
 }
 
 /**
@@ -2679,32 +3065,35 @@ async function resumeAfterRefresh(
   nextUrl: string,
   opts: { preserveLoadedContent?: boolean } = {},
 ): Promise<void> {
-  const outcome = await refreshSessionInPlace();
-  if (outcome === "refreshed") {
-    try {
-      await ensureWindow().webContents.loadURL(nextUrl);
-    } catch (err) {
-      console.warn("Post-refresh resume load failed:", err); // did-fail-load shows the landing
+  return targetOperations.run(async () => {
+    const outcome = await refreshSessionInPlace();
+    if (outcome === "refreshed") {
+      try {
+        await ensureWindow().webContents.loadURL(nextUrl);
+      } catch (err) {
+        console.warn("Post-refresh resume load failed:", err); // did-fail-load shows the landing
+      }
+      return;
     }
-    return;
-  }
-  if (outcome === "failed") {
-    // Transient (offline / 5xx) — the refresh token is still valid. When the
-    // intercepted navigation was cancelled over a trusted app document, leave
-    // it visible so its cached brain remains available; a later tick retries.
-    // Cold/blank loads still get the explicit offline landing + auto-retry.
-    const win = ensureWindow();
-    if (!opts.preserveLoadedContent || !currentTrustedAppUrl(win)) showOffline(win);
-    return;
-  }
-  // "signed-out" — the refresh token is dead. A local target re-mints instead
-  // of prompting: reloading the app bounces to /login, which decideLoginAction
-  // turns into a fresh local-owner session (a local brain has no sign-in).
-  if (cfg.targetAuth === "local-session") {
-    void loadApp(ensureWindow());
-    return;
-  }
-  promptSignIn();
+    if (outcome === "failed") {
+      // Transient (offline / 5xx) — the refresh token is still valid. When the
+      // intercepted navigation was cancelled over a trusted app document, leave
+      // it visible so its cached brain remains available; a later tick retries.
+      // Cold/blank loads still get the explicit offline landing + auto-retry.
+      const win = ensureWindow();
+      if (!opts.preserveLoadedContent || !currentTrustedAppUrl(win)) showOffline(win);
+      return;
+    }
+    // "signed-out" — the refresh token is dead. A local target re-mints instead
+    // of prompting: reloading the app bounces to /login, which decideLoginAction
+    // turns into a fresh local-owner session (a local brain has no sign-in).
+    if (cfg.targetAuth === "local-session") {
+      void loadApp(ensureWindow());
+      return;
+    }
+    promptSignIn();
+
+  });
 }
 
 /**
@@ -2717,6 +3106,8 @@ async function resumeAfterRefresh(
 function startSessionKeepalive(): Promise<void> {
   if (cfg.bundled) return Promise.resolve(); // renderer owns Bearer-token refresh
   const tick = async (): Promise<void> => {
+    if (changingTarget) return;
+    return targetOperations.run(async () => {
     try {
       if (!(await readJarCookie("refresh_token"))) return; // signed out — nothing to keep alive
       const accessToken = await readJarCookie("access_token");
@@ -2733,6 +3124,7 @@ function startSessionKeepalive(): Promise<void> {
     } catch (err) {
       console.warn("Session keep-alive tick failed:", err);
     }
+    });
   };
   setInterval(() => void tick(), SESSION_REFRESH_CHECK_INTERVAL_MS);
   // Timers don't run during sleep, so a wake can land past the token's exp.
@@ -2860,6 +3252,7 @@ function startAutoUpdate(): void {
 // ── Deep links + auth callback ─────────────────────────────────
 
 function handleIncomingUrl(rawUrl: string): void {
+  if (changingTarget) { pendingUrl = rawUrl; return; }
   if (rawUrl === `${cfg.protocolScheme}://firefox-control`) {
     void startFirefoxForControl();
     return;
@@ -3068,7 +3461,10 @@ function buildTrayMenu(): Menu {
 }
 
 function refreshTrayMenu(): void {
-  if (tray) tray.setContextMenu(buildTrayMenu());
+  if (tray) {
+    tray.setContextMenu(buildTrayMenu());
+    tray.setToolTip(cfg.target === "local" ? `${app.name} · ${cfg.targetLabel}` : app.name);
+  }
 }
 
 function createTray(): Tray {
@@ -3109,7 +3505,7 @@ if (!gotLock) {
       handleIncomingUrl(url);
       return;
     }
-    focusWindow(ensureWindow());
+    if (!changingTarget) focusWindow(ensureWindow());
   });
 
   // macOS delivers deep links + the auth callback via open-url; before the
@@ -3121,7 +3517,9 @@ if (!gotLock) {
   });
 
   // The sign-in landing's button asks the main process to start the flow.
-  ipcMain.on("Use Brian:sign-in", () => startSignIn());
+  ipcMain.on("Use Brian:sign-in", (event) => {
+    if (!changingTarget && isCurrentAccountSender(event.sender.id)) startSignIn();
+  });
   // macOS does not install an app-owned Siri phrase automatically. Settings
   // opens the fixed Apple-signed shortcut template bundled with this app; only
   // the trusted main renderer may invoke it, and Shortcuts owns confirmation.
@@ -3312,145 +3710,147 @@ if (!gotLock) {
   // the thin shell clears its own cookie jar here, which the web UI cannot do
   // for itself without bouncing to the primary's external logout (→ system
   // browser → logs out the *web* session, not this app). See `signOut()`.
-  ipcMain.on("Use Brian:sign-out", () => void signOut());
+  ipcMain.on("Use Brian:sign-out", (event) => {
+    if (!changingTarget && isCurrentAccountSender(event.sender.id)) void signOut();
+  });
 
   // Multi-account. The web switcher's "Add another account" / account-switch
   // rows route through the shell in Electron: the primary (where the web's
   // shared `.usebrian.ai` account cookies live) is an external origin the
   // host-only jar can't reach, so the shell owns its own saved-account store.
   // Registered in every mode like sign-in/out; bundled mode (Bearer tokens, not
-  // cookies) stays single-account — `switchAccount` returns an error there.
-  ipcMain.on("Use Brian:add-account", () => startSignIn({ addAccount: true }));
+  // cookies) uses the encrypted deployment account directory.
+  ipcMain.on("Use Brian:add-account", (event) => {
+    if (changingTarget || !isCurrentAccountSender(event.sender.id)) return;
+    if (cfg.target === "local") void useCloud().then((ok) => { if (ok) startSignIn({ addAccount: true }); });
+    else startSignIn({ addAccount: true });
+  });
   // Connector OAuth (Google / Notion): the connectors page hands us the provider
   // authorize URL; we drive the loopback flow (see startConnectorConnect).
   ipcMain.on("Use Brian:connect-connector", (_event, req: unknown) => startConnectorConnect(req));
-  ipcMain.handle("Use Brian:switch-account", (_event, accountId: unknown): Promise<SwitchResult> =>
-    typeof accountId === "string"
+  ipcMain.handle("Use Brian:switch-account", (event, accountId: unknown): Promise<SwitchResult> =>
+    !changingTarget && isCurrentAccountSender(event.sender.id) && typeof accountId === "string"
       ? switchAccount(accountId)
       : Promise.resolve({ ok: false, error: "switch" }),
   );
 
   // Dual target (§2.2). `run-local` probes the paired API of the requested
   // (or default) local address; on success it replies, then persists the
-  // target and relaunches on the next tick so the landing can paint its
-  // "Restarting..." state before the process dies. `use-cloud` switches back,
+  // selected account window in this running app. `use-cloud` switches back,
   // keeping the local address remembered for the return trip.
   ipcMain.handle("Use Brian:run-local", async (event, rawUrl: unknown) => {
-    const input = typeof rawUrl === "string" && rawUrl.trim() ? rawUrl : DEFAULT_LOCAL_APP_URL;
-    const notifyAccess = (state: "checking" | "browser" | "approved"): void => {
-      if (!event.sender.isDestroyed()) event.sender.send("Use Brian:access-auth-state", state);
-    };
-    notifyAccess("checking");
-    // The dev env override outranks the persisted record (§2.1 precedence),
-    // so a switch would persist but never survive the relaunch — refuse with
-    // an explanation instead of silently reopening in the same place.
-    if (cfg.envTargetOverride) return { ok: false, error: "env-override", url: input };
-    // Normalize first (cheap reject on a bad URL), then ask the deployment
-    // where its own API lives before probing — a reverse-proxied self-host is
-    // only reachable via its declaration, since derivation would guess `:4000`.
-    const normalized = localTarget(input);
-    if (!normalized) return { ok: false, error: "invalid-url", url: input };
-    let grant = await usableAccessGrantFor(normalized.appUrl);
-    let discovery = await fetchDeclaredApiUrl(normalized.appUrl, grant);
-    if (discovery.kind === "legacy-access") {
-      return {
-        ok: false,
-        error: "access-oauth-unavailable",
-        url: normalized.appUrl,
+    if (!isCurrentAccountSender(event.sender.id) || changingTarget || selectingAccount || connectingDeployment) return { ok: false, error: "switch" };
+    connectingDeployment = true;
+    try {
+      const input = typeof rawUrl === "string" && rawUrl.trim() ? rawUrl : DEFAULT_LOCAL_APP_URL;
+      const notifyAccess = (state: "checking" | "browser" | "approved"): void => {
+        if (!event.sender.isDestroyed()) event.sender.send("Use Brian:access-auth-state", state);
       };
-    }
-    if (discovery.kind === "managed-oauth") {
-      try {
-        grant = await authorizeCloudflareAccess(
-          normalized.appUrl,
-          discovery.resourceMetadataUrl,
-          notifyAccess,
-        );
-      } catch (err) {
-        console.warn("Cloudflare Access authorization failed:", err);
-        const error =
-          err instanceof AccessOAuthError &&
-          (err.code === "registration-failed" || err.code === "invalid-metadata")
-            ? "access-oauth-misconfigured"
-            : err instanceof AccessOAuthError && err.message.includes("OS keychain")
-              ? "secure-storage-unavailable"
-              : "access-auth-failed";
+      notifyAccess("checking");
+      // The dev env override outranks the persisted record (§2.1 precedence),
+      // so a switch would persist but never survive the relaunch — refuse with
+      // an explanation instead of silently reopening in the same place.
+      if (cfg.envTargetOverride) return { ok: false, error: "env-override", url: input };
+      // Normalize first (cheap reject on a bad URL), then ask the deployment
+      // where its own API lives before probing — a reverse-proxied self-host is
+      // only reachable via its declaration, since derivation would guess `:4000`.
+      const normalized = localTarget(input);
+      if (!normalized) return { ok: false, error: "invalid-url", url: input };
+      let grant = await usableAccessGrantFor(normalized.appUrl);
+      let discovery = await fetchDeclaredApiUrl(normalized.appUrl, grant);
+      if (discovery.kind === "legacy-access") {
         return {
           ok: false,
-          error,
+          error: "access-oauth-unavailable",
           url: normalized.appUrl,
         };
       }
-      discovery = await fetchDeclaredApiUrl(normalized.appUrl, grant);
-      if (discovery.kind !== "configured") {
-        return { ok: false, error: "access-auth-failed", url: normalized.appUrl };
+      if (discovery.kind === "managed-oauth") {
+        try {
+          grant = await authorizeCloudflareAccess(
+            normalized.appUrl,
+            discovery.resourceMetadataUrl,
+            notifyAccess,
+          );
+        } catch (err) {
+          console.warn("Cloudflare Access authorization failed:", err);
+          const error =
+            err instanceof AccessOAuthError &&
+            (err.code === "registration-failed" || err.code === "invalid-metadata")
+              ? "access-oauth-misconfigured"
+              : err instanceof AccessOAuthError && err.message.includes("OS keychain")
+                ? "secure-storage-unavailable"
+                : "access-auth-failed";
+          return {
+            ok: false,
+            error,
+            url: normalized.appUrl,
+          };
+        }
+        discovery = await fetchDeclaredApiUrl(normalized.appUrl, grant);
+        if (discovery.kind !== "configured") {
+          return { ok: false, error: "access-auth-failed", url: normalized.appUrl };
+        }
       }
-    }
 
-    const declaredConfig = discovery.config;
-    const declaredApiUrl = declaredConfig?.apiUrl ?? null;
-    const target = localTarget(
-      normalized.appUrl,
-      declaredApiUrl,
-      declaredConfig?.auth ?? "local-session",
-      declaredConfig?.publicConfig,
-    ) ?? normalized;
-    pendingLocalGatewayUrl = target.appUrl;
-    const validation = await validateLocalTarget(target.appUrl, target.apiUrl).finally(() => {
-      pendingLocalGatewayUrl = null;
-    });
-    if (validation.kind !== "ready") {
-      return {
-        ok: false,
-        error: validation.kind === "cancelled" ? "gateway-auth" : "unreachable",
-        url: target.appUrl,
-      };
-    }
-    const resolvedDeclaredApiUrl = validation.value.declaredApiUrl ?? declaredApiUrl;
-    const resolvedTarget = localTarget(
-      target.appUrl,
-      resolvedDeclaredApiUrl,
-      validation.value.auth,
-      validation.value.publicConfig,
-    ) ?? target;
-    // A short delay (not setImmediate) so the ok-reply actually flushes to the
-    // renderer and the landing paints "Restarting..." before the process dies.
-    // The declaration rides along into the record so startup stays sync.
-    setTimeout(
-      () => persistTargetAndRelaunch(
-        "local",
-        resolvedTarget.appUrl,
+      const declaredConfig = discovery.config;
+      const declaredApiUrl = declaredConfig?.apiUrl ?? null;
+      const target = localTarget(
+        normalized.appUrl,
+        declaredApiUrl,
+        declaredConfig?.auth ?? "local-session",
+        declaredConfig?.publicConfig,
+      ) ?? normalized;
+      pendingLocalGatewayUrl = target.appUrl;
+      const validation = await validateLocalTarget(target.appUrl, target.apiUrl).finally(() => {
+        pendingLocalGatewayUrl = null;
+      });
+      if (validation.kind !== "ready") {
+        return {
+          ok: false,
+          error: validation.kind === "cancelled" ? "gateway-auth" : "unreachable",
+          url: target.appUrl,
+        };
+      }
+      const resolvedDeclaredApiUrl = validation.value.declaredApiUrl ?? declaredApiUrl;
+      const resolvedTarget = localTarget(
+        target.appUrl,
         resolvedDeclaredApiUrl,
-        resolvedTarget.auth,
+        validation.value.auth,
         validation.value.publicConfig,
-      ),
-      150,
-    );
-    return { ok: true, url: resolvedTarget.appUrl };
+      ) ?? target;
+      const ok = await activateTarget("local", resolvedTarget.appUrl, resolvedDeclaredApiUrl, resolvedTarget.auth, undefined, validation.value.publicConfig);
+      return ok ? { ok: true, url: resolvedTarget.appUrl } : { ok: false, error: "switch", url: resolvedTarget.appUrl };
+    } finally { connectingDeployment = false; }
   });
-  ipcMain.on("Use Brian:use-cloud", () =>
-    persistTargetAndRelaunch(
-      "cloud",
-      rememberedLocalAppUrl(),
-      rememberedLocalApiUrl(),
-      rememberedLocalAuth(),
-      rememberedLocalPublicConfig(),
-    ),
-  );
+  ipcMain.on("Use Brian:use-cloud", (event) => {
+    if (isCurrentAccountSender(event.sender.id)) void useCloud();
+  });
+  ipcMain.on("Use Brian:choose-deployment", (event) => {
+    if (isCurrentAccountSender(event.sender.id)) chooseOwnDeployment();
+  });
+  ipcMain.handle("Use Brian:list-accounts", (event) => isCurrentAccountSender(event.sender.id) ? listDeploymentAccounts() : { accounts: [], canSwitch: false });
+  ipcMain.handle("Use Brian:select-account", (event, key: unknown) =>
+    isCurrentAccountSender(event.sender.id) && typeof key === "string" ? selectDeploymentAccount(key) : { ok: false, error: "switch" });
+  ipcMain.handle("Use Brian:select-cloud", async (event) => ({ ok: isCurrentAccountSender(event.sender.id) && await useCloud() }));
 
   // Bundled-mode token bridge: the preload reads/writes the Bearer token here.
   // Registered only in bundled mode so the thin shell exposes no token surface.
   if (cfg.bundled) {
     ipcMain.on("Use Brian:get-tokens", (event) => {
-      const t = readStoredTokens();
+      const t = isCurrentAccountSender(event.sender.id) ? readStoredTokens() : null;
       // Synchronous reply (the renderer's AuthSource getters are sync). Hand back
       // only the renderer-facing subset, never the raw stored record.
       event.returnValue = t
         ? { accessToken: t.accessToken, refreshToken: t.refreshToken, user: t.user }
         : null;
     });
-    ipcMain.on("Use Brian:set-tokens", (_event, tokens: unknown) => persistRendererTokens(tokens));
-    ipcMain.on("Use Brian:clear-tokens", () => clearStoredTokens());
+    ipcMain.on("Use Brian:set-tokens", (event, tokens: unknown) => {
+      if (isCurrentAccountSender(event.sender.id)) persistRendererTokens(tokens);
+    });
+    ipcMain.on("Use Brian:clear-tokens", (event) => {
+      if (isCurrentAccountSender(event.sender.id)) clearStoredTokens();
+    });
   }
 
   app.whenReady().then(async () => {
@@ -3477,161 +3877,15 @@ if (!gotLock) {
       app.setAsDefaultProtocolClient(cfg.protocolScheme);
     }
 
+    await migrateLegacyCookies(accountTarget());
+    if (cfg.target !== "cloud") await migrateLegacyCookies(cloudTarget());
+    migrateLegacyTokens();
     await prepareAccessForStartup();
     installAccessRequestHook();
     startAccessGrantKeepalive();
     await startSessionKeepalive();
 
-    // Chromium-level media (mic) permission: grant to the app's own origin
-    // only, so the dock recorder's `getUserMedia` never shows a browser-style
-    // permission prompt inside the shell (macOS OS-level consent is separate
-    // — `askForMediaAccess` in `summonAndRecord`). Everything else keeps
-    // Electron's default-allow, unchanged from the no-handler behavior.
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
-      if (gatewayWindow && !gatewayWindow.isDestroyed() && _wc.id === gatewayWindow.webContents.id) {
-        callback(false);
-        return;
-      }
-      if (permission === "media") {
-        callback(details.requestingUrl?.startsWith(cfg.appOrigin) ?? false);
-        return;
-      }
-      callback(true);
-    });
-
-    // A file:// renderer has the opaque Origin `null`. Keep webSecurity enabled,
-    // but bridge CORS only in bundled mode and only for the configured API. A
-    // preflight may not carry a webContentsId, so that field is not a safe gate.
-    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-      if (
-        shouldBridgeBundledCors({
-          bundled: cfg.bundled,
-          requestUrl: details.url,
-          apiUrl: cfg.apiUrl,
-        })
-      ) {
-        callback({
-          responseHeaders: bridgeBundledCorsHeaders(details.responseHeaders),
-        });
-        return;
-      }
-      callback({});
-    });
-
-    // The gateway window is an authentication surface, never a download or app
-    // surface. Session-level hooks can identify its WebContents without granting
-    // remote identity pages any native bridge.
-    session.defaultSession.on("will-download", (event, _item, webContents) => {
-      if (gatewayWindow && !gatewayWindow.isDestroyed() && webContents?.id === gatewayWindow.webContents.id) {
-        event.preventDefault();
-      }
-    });
-
-    // Catch expiry on renderer REST/SSE requests as well as main-frame redirects.
-    // The failed request may retry according to its own policy; this restores the
-    // shared gateway session without reloading potentially unsaved app state.
-    session.defaultSession.webRequest.onBeforeRedirect((details) => {
-      if (cfg.target !== "local") return;
-      // session.fetch probes have no WebContents and must never trigger their
-      // own recovery hook; only renderer/main-window traffic belongs here.
-      if (details.webContentsId === undefined) return;
-      if (
-        gatewayWindow &&
-        !gatewayWindow.isDestroyed() &&
-        details.webContentsId === gatewayWindow.webContents.id
-      ) {
-        return;
-      }
-      try {
-        const sourceOrigin = new URL(details.url).origin;
-        const destinationOrigin = new URL(details.redirectURL).origin;
-        const apiOrigin = new URL(cfg.apiUrl).origin;
-        if (
-          (sourceOrigin === cfg.appOrigin || sourceOrigin === apiOrigin) &&
-          isAllowedGatewayNavigation(details.redirectURL, details.url)
-        ) {
-          void recoverBackgroundGatewayRequest(details.url);
-        }
-      } catch {
-        // Ignore malformed redirect metadata; Chromium will fail it normally.
-      }
-    });
-
-    session.defaultSession.webRequest.onCompleted((details) => {
-      if (cfg.target !== "local" || details.webContentsId === undefined) return;
-      if (
-        gatewayWindow &&
-        !gatewayWindow.isDestroyed() &&
-        details.webContentsId === gatewayWindow.webContents.id
-      ) {
-        return;
-      }
-      try {
-        const sourceOrigin = new URL(details.url).origin;
-        const apiOrigin = new URL(cfg.apiUrl).origin;
-        const contentType = Object.entries(details.responseHeaders ?? {}).find(
-          ([name]) => name.toLowerCase() === "content-type",
-        )?.[1];
-        const isHtmlChallenge =
-          details.resourceType !== "mainFrame" &&
-          contentType?.some((value) => value.toLowerCase().includes("text/html")) === true;
-        if (
-          (sourceOrigin === cfg.appOrigin || sourceOrigin === apiOrigin) &&
-          ([401, 403, 407].includes(details.statusCode) || isHtmlChallenge)
-        ) {
-          void recoverBackgroundGatewayRequest(details.url);
-        }
-      } catch {
-        // Ignore malformed completion metadata.
-      }
-    });
-
-    // Remote-meeting recording: app-web requests display media only to obtain
-    // the computer's playback stream. getDisplayMedia requires video, so grant
-    // the primary display + audible loopback; the renderer stops the video
-    // track immediately and mixes only mic + playback into MediaRecorder.
-    //
-    // The origin check is the privilege boundary. Bundled file:// is allowed
-    // only when a packaged renderer is actually active; arbitrary web content
-    // can never turn this shell into a whole-computer audio tap.
-    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-      const trusted = isTrustedCaptureOrigin(
-        request.securityOrigin,
-        cfg.appOrigin,
-        bundledAvailable(),
-      );
-      if (!trusted || !request.audioRequested || !request.videoRequested) {
-        callback({});
-        return;
-      }
-      // A renderer-picked source (the specific-window capture) wins for ONE
-      // grant, then clears — a later computer-audio-only capture must never
-      // silently record last week's picked window.
-      const pickedId = requestedCaptureSourceId;
-      requestedCaptureSourceId = null;
-      void desktopCapturer
-        .getSources({
-          types: pickedId ? ["window", "screen"] : ["screen"],
-          thumbnailSize: { width: 0, height: 0 },
-          fetchWindowIcons: false,
-        })
-        .then((sources) => {
-          const source =
-            (pickedId ? sources.find((candidate) => candidate.id === pickedId) : undefined) ??
-            selectPrimaryDisplaySource(sources, screen.getPrimaryDisplay().id);
-          if (!source) {
-            callback({});
-            return;
-          }
-          // `loopback` leaves local playback audible. `loopbackWithMute`
-          // would make the remote meeting disappear from the user's speakers.
-          // Loopback is WHOLE-SYSTEM output: per-application audio isolation
-          // is not exposed by Chromium/Electron, so a window pick still
-          // carries all computer audio (the renderer copy says so).
-          callback({ video: source, audio: "loopback" });
-        })
-        .catch(() => callback({}));
-    });
+    installSessionPolicies();
 
     // Before the first menu/tray build so their update item reflects the gate.
     startAutoUpdate();
@@ -3653,7 +3907,7 @@ if (!gotLock) {
       pendingUrl = null;
     }
 
-    app.on("activate", () => focusWindow(ensureWindow()));
+    app.on("activate", () => { if (!changingTarget) focusWindow(ensureWindow()); });
   });
 
   // Tray app on every desktop OS: stay resident when the window is closed so the

@@ -131,12 +131,13 @@ const findPageInputSchema = z.object({
 })
 
 /**
- * Build the always-on `findPage` tool. Wired into `allTools` at API boot
+ * Build the Page Read `findPage` tool. Wired into `allTools` at API boot
  * (`apps/api/src/index.ts`) rather than through `injectDocTools`, so it is
  * available on every surface, including un-anchored workflow / cron turns.
  */
 export function createFindPageTool(deps: FindPageToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'findPage',
     description:
       'Find a doc page by its title (or read one by id). Use this whenever you need a doc page you do not already have open — for example a scheduled or workflow task that says "read the X doc page". ' +

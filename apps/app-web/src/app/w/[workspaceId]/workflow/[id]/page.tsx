@@ -22,11 +22,22 @@
  * `/w/[workspaceId]` layout's `<main>` (its own chrome, not the doc page
  * shell).
  *
+ * Instant navigation (N1-N3, `[COMP:app-web/workflow-detail-cache]`): the
+ * full row reads `workflowDetailCacheKey(wid, id)` through
+ * `useCachedResource`, so a revisit paints on the first frame and the spine
+ * (`WORKFLOW_REFRESH_EVENT` -> `workflow-detail:<wid>:`) revalidates behind
+ * it. A cold entry seeds the header from the `workflow:<wid>` list row the
+ * user just came from and paints a board skeleton below, never a "…". The
+ * definition is an EDITABLE DRAFT: a revalidated row is adopted only while
+ * the draft is clean (realtime-sync.md -> "Editable-draft surfaces"), so an
+ * in-progress edit is never clobbered. Assistants share the Studio
+ * `assistants:<wid>` slot.
+ *
  * Spec: docs/architecture/features/workflow.md → "Board view".
  * [COMP:app-web/workflow]
  */
 
-import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Pencil } from "lucide-react";
 import { BackButton } from "@/components/ui/back-button";
@@ -51,10 +62,23 @@ import {
   type WorkflowFull,
   type WorkflowIssue,
   type WorkflowStep,
+  type WorkflowSummary,
   type WorkflowTrigger,
 } from "@/lib/api/workflow";
 import { useWorkflowLiveRun } from "@/lib/workflow-live-run";
 import { listAssistants, type StudioAssistantSummary } from "@/lib/api/studio";
+import {
+  mutateSurfaceCache,
+  readSurfaceCache,
+  useCachedResource,
+} from "@/lib/surface-cache";
+import {
+  assistantsCacheKey,
+  surfaceDataKey,
+  workflowDetailCacheKey,
+} from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   listCustomPageTemplates,
   listViews,
@@ -65,6 +89,7 @@ import { listWorkspaceSkills, type WorkspaceSkillSummary } from "@/lib/api/skill
 import { WorkflowBoard } from "@/components/workflow/workflow-board";
 import {
   MAX_FAN_OUT_WIDTH,
+  connectEdge,
   removeStep as removeStepFromDefinition,
 } from "@/lib/workflow-canvas";
 import { buildToolCatalog } from "@/lib/workflow-tools";
@@ -97,9 +122,40 @@ export default function WorkflowDetailPage({
   const { activeId } = useWorkspaces();
   const listHref = `/w/${workspaceId}/workflow`;
 
+  // The full row, cache-backed. `workflow` below is the SAVED baseline the
+  // page has adopted and `draft` the editable copy; the adopt effect (after
+  // the dirty check) is the only bridge from the cache into them.
+  const detailKey = workflowDetailCacheKey(workspaceId, id);
+  const detail = useCachedResource<WorkflowFull | null>(detailKey, () =>
+    getWorkflowFull(id),
+  );
+  // The list row the user came from (the rail hover / list page already
+  // filled `workflow:<wid>`): seeds the header on a cold entry. A plain read,
+  // not a subscription - it is only a seed, and the list is never fetched on
+  // the detail page's behalf.
+  const listKey = surfaceDataKey("workflow", workspaceId);
+  const listRow = useMemo(
+    () =>
+      readSurfaceCache<WorkflowSummary[]>(listKey).data?.find((w) => w.id === id) ??
+      null,
+    [listKey, id],
+  );
+
   const [workflow, setWorkflow] = useState<WorkflowFull | null | undefined>(undefined);
   const [draft, setDraft] = useState<WorkflowFull | null>(null);
-  const [assistants, setAssistants] = useState<StudioAssistantSummary[]>([]);
+  /** The cache value most recently adopted into `workflow` / `draft`. */
+  const adoptedRef = useRef<WorkflowFull | null | undefined>(undefined);
+  // Assistants for the picker + board node labels: the Studio `assistants:`
+  // slot, filtered to this workspace like Studio does.
+  const assistantsRes = useCachedResource<StudioAssistantSummary[]>(
+    activeId ? assistantsCacheKey(activeId) : null,
+    () => listAssistants(activeId as string),
+  );
+  const assistantRows = assistantsRes.data;
+  const assistants = useMemo(
+    () => (assistantRows ?? []).filter((a) => a.workspaceId === activeId),
+    [assistantRows, activeId],
+  );
   const [destinations, setDestinations] = useState<ChannelDestination[]>([]);
   const [channelOptions, setChannelOptions] = useState<WorkspaceChannelOption[]>([]);
   const [slackChannels, setSlackChannels] = useState<SlackChannelOption[]>([]);
@@ -134,7 +190,6 @@ export default function WorkflowDetailPage({
     definition: WorkflowFull["definition"];
     selectedKey: string | null;
   } | null>(null);
-  const [refetchTick, setRefetchTick] = useState(0);
 
   // Recent runs + live-run overlay. The hook owns the runs list (poll-based:
   // 2.5 s while a run is executing, 15 s idle, so a schedule/webhook fire
@@ -143,35 +198,6 @@ export default function WorkflowDetailPage({
   const { runs, liveView, pollNow } = useWorkflowLiveRun(id, {
     forceActive: running,
   });
-
-  // Load the workflow.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const wf = await getWorkflowFull(id);
-      if (cancelled) return;
-      setWorkflow(wf);
-      setDraft(wf);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [id, refetchTick]);
-
-  // Load assistants for the picker + board node labels.
-  useEffect(() => {
-    if (!activeId) return;
-    let cancelled = false;
-    void (async () => {
-      const list = await listAssistants(activeId);
-      if (!cancelled) {
-        setAssistants(list.filter((a) => a.workspaceId === activeId));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId]);
 
   useEffect(() => {
     if (!activeId) return;
@@ -316,7 +342,7 @@ export default function WorkflowDetailPage({
     return () => window.clearTimeout(tid);
   }, [selectedKey]);
 
-  const refresh = useCallback(() => setRefetchTick((n) => n + 1), []);
+  const refresh = detail.refresh;
 
   // Single-mode dirty check — the header Save button is the only commit
   // path, enabled exactly when the draft's editable fields differ from the
@@ -333,13 +359,49 @@ export default function WorkflowDetailPage({
     );
   }, [draft, workflow]);
 
-  if (workflow === undefined) {
+  // Adopt the cached / revalidated row into the page (the editable-draft
+  // rule, realtime-sync.md). The spine marks `workflow-detail:<wid>:` stale
+  // on every workflow signal and the hook refetches behind the paint; the
+  // fresh row lands here and is adopted ONLY while the draft is clean, so an
+  // in-progress edit is never clobbered. A dirty draft keeps its edits AND
+  // its baseline until the user saves (which adopts the save result) or
+  // reverts (dirty flips false and the newest row is adopted then). A row
+  // older than the one already on screen is never adopted - the server
+  // toggles write the fresh row into the cache and `adoptedRef` first.
+  const cached = detail.data;
+  useEffect(() => {
+    if (cached === undefined) return;
+    if (cached === adoptedRef.current) return;
+    if (workflow !== undefined && dirty) return;
+    const previous = adoptedRef.current;
+    if (
+      cached &&
+      previous &&
+      Date.parse(cached.updatedAt) < Date.parse(previous.updatedAt)
+    ) {
+      return;
+    }
+    adoptedRef.current = cached;
+    setWorkflow(cached);
+    setDraft(cached);
+  }, [cached, dirty, workflow]);
+
+  // Cold entry (nothing cached for this row yet): the frame paints at once -
+  // header seeded from the list row when the user came from the list, a
+  // board-shaped skeleton below - never a "…" (N4). A cold load that failed
+  // outright falls through to the not-found block.
+  if (workflow === undefined && detail.error === undefined) {
     return (
-      <div className="w-full px-6 py-10 text-sm text-muted-foreground">…</div>
+      <WorkflowDetailEntrySkeleton
+        listHref={listHref}
+        listRow={listRow}
+        backLabel={t.workflowPage.detail.backToList}
+        disabledLabel={t.workflowPage.builder.disabledLabel}
+      />
     );
   }
 
-  if (workflow === null || !draft) {
+  if (workflow === undefined || workflow === null || !draft) {
     return (
       <div className="w-full px-6 py-20 text-center flex flex-col gap-3">
         <div className="font-medium">{t.workflowPage.detail.notFound}</div>
@@ -466,6 +528,39 @@ export default function WorkflowDetailPage({
     setSelectedKey(nextId);
   };
 
+  /**
+   * Wire `stepId` -> `targetStepId` from the step editor's "Connect to" row
+   * (the non-drag path, responsive contract M9). Same `connectEdge` as the
+   * board's port drag, so the refusals are identical; they surface in the
+   * header error line since the editor sits below the board.
+   */
+  const connectStep = (
+    stepId: string,
+    targetStepId: string,
+    port?: "true" | "false",
+  ) => {
+    const result = connectEdge(
+      draft.definition,
+      { kind: "step", stepId, port },
+      targetStepId,
+    );
+    if (!result.ok) {
+      const bd = t.workflowPage.board;
+      setError(
+        result.reason === "cycle"
+          ? bd.wireRefusedCycle
+          : result.reason === "width"
+            ? bd.wireRefusedWidth.replace("{n}", String(MAX_FAN_OUT_WIDTH))
+            : result.reason === "self"
+              ? bd.wireRefusedSelf
+              : bd.wireRefusedDuplicate,
+      );
+      return;
+    }
+    setError(null);
+    updateDefinition(result.definition);
+  };
+
   // ── Board node selection → open that node's editor below the board ───
   const selectStep = (stepId: string) => setSelectedKey(stepId);
   const selectTrigger = () => setSelectedKey("trigger");
@@ -473,7 +568,11 @@ export default function WorkflowDetailPage({
   // Server-side writes that bypass the draft (rotate / enable / pin /
   // restore) adopt the fresh server row but graft the draft's editable
   // fields back on, so an in-progress edit is never silently discarded.
+  // The row is written into the cache and marked adopted FIRST, so the
+  // adopt effect never sees the pre-write cached row as "newer".
   const adoptServerRow = (next: WorkflowFull) => {
+    adoptedRef.current = next;
+    mutateSurfaceCache<WorkflowFull | null>(detailKey, () => next);
     setWorkflow(next);
     setDraft((d) =>
       d
@@ -548,12 +647,17 @@ export default function WorkflowDetailPage({
       }
       return;
     }
+    // The save result is the newest row: cache + adopt it before the spine
+    // signal below marks the key stale and the revalidation (which also
+    // brings `triggerJobs` back) lands behind it.
+    adoptedRef.current = result.workflow;
+    mutateSurfaceCache<WorkflowFull | null>(detailKey, () => result.workflow);
     setWorkflow(result.workflow);
     setDraft(result.workflow);
     setUndoRemove(null);
     setWarnings(result.warnings ?? []);
     requestWorkflowRefresh(result.workflow.workspaceId);
-    refresh();
+    void refresh();
   };
 
   const onDelete = async () => {
@@ -663,11 +767,13 @@ export default function WorkflowDetailPage({
     // board vanishes. Pinning children to their natural height makes the page
     // scroll as one document, with everything reachable. pb-28 then keeps the
     // footer clear of the fixed "Ask anything" chat dock floated bottom-right.
-    <div className="w-full h-full overflow-y-auto px-6 pt-6 pb-28 flex flex-col gap-6 [&>*]:shrink-0">
+    <div className="w-full h-full overflow-y-auto px-4 md:px-6 pt-4 md:pt-6 pb-28 flex flex-col gap-6 [&>*]:shrink-0">
       <BackButton href={listHref} label={t.workflowPage.detail.backToList} />
 
       <header className="flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
+        {/* Title block, then the action cluster on its own line below `sm`
+            (C 8): at 360px the cluster is wider than the room the name has. */}
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               <InlineEditableText
@@ -722,7 +828,9 @@ export default function WorkflowDetailPage({
               maxLength={2000}
               multiline
               hasIssues={descriptionIssues.length > 0}
-              textClassName="text-sm text-muted-foreground"
+              // 16px below `md` so the in-place field does not zoom iOS (M4);
+              // the view-mode copy shares the class so nothing jumps on edit.
+              textClassName="text-[16px] md:text-sm text-muted-foreground"
               className="mt-1"
             />
             {descriptionIssues.length > 0 && (
@@ -756,13 +864,26 @@ export default function WorkflowDetailPage({
               </div>
             )}
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Enabled switch (C 9): the one on/off control, in the header
+                where it is reachable, not a 12px link at the page foot. The
+                label is the 44px target on a phone; the switch keeps the
+                primitive's geometry. */}
+            <label className="inline-flex min-h-11 sm:min-h-0 items-center gap-2 pr-1 text-xs text-muted-foreground cursor-pointer">
+              <Switch
+                checked={workflow.enabled}
+                onCheckedChange={() => void onToggleEnabled()}
+                disabled={saving}
+                aria-label={t.workflowPage.builder.enabledSwitch}
+              />
+              {t.workflowPage.builder.enabledSwitch}
+            </label>
             {workflow.lifecycleState === "archived" && (
               <button
                 type="button"
                 onClick={onRestoreLifecycle}
                 disabled={saving}
-                className="px-3 py-1.5 rounded-md border border-border text-sm font-medium hover:bg-muted disabled:opacity-50"
+                className="inline-flex h-11 sm:h-8 items-center px-3 rounded-md border border-border text-sm font-medium hover:bg-muted disabled:opacity-50"
               >
                 {t.workflowPage.lifecycle.restore}
               </button>
@@ -778,7 +899,7 @@ export default function WorkflowDetailPage({
               }
               aria-pressed={workflow.pinned ?? false}
               className={cn(
-                "p-1.5 rounded-md border text-sm disabled:opacity-50 transition-colors",
+                "inline-flex size-11 sm:size-8 items-center justify-center rounded-md border text-sm disabled:opacity-50 transition-colors",
                 workflow.pinned
                   ? "border-primary/50 bg-primary/10 text-primary"
                   : "border-border text-muted-foreground hover:bg-muted",
@@ -803,7 +924,7 @@ export default function WorkflowDetailPage({
               type="button"
               onClick={onRunNow}
               disabled={running || !workflow.enabled}
-              className="px-3 py-1.5 rounded-md bg-action text-action-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              className="inline-flex h-11 sm:h-8 items-center px-3 rounded-md bg-action text-action-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               {running ? t.workflowPage.builder.running : t.workflowPage.builder.runNowBtn}
             </button>
@@ -811,7 +932,7 @@ export default function WorkflowDetailPage({
               type="button"
               onClick={onSave}
               disabled={saving || !dirty}
-              className="px-3 py-1.5 rounded-md bg-action text-action-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+              className="inline-flex h-11 sm:h-8 items-center px-3 rounded-md bg-action text-action-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
             >
               {saving ? t.workflowPage.builder.saving : t.workflowPage.builder.saveChanges}
             </button>
@@ -921,7 +1042,7 @@ export default function WorkflowDetailPage({
           <button
             type="button"
             onClick={addStep}
-            className="text-xs px-2 py-1 rounded border border-border hover:bg-muted"
+            className="inline-flex h-11 sm:h-7 items-center px-3 text-xs rounded border border-border hover:bg-muted"
           >
             {t.workflowPage.builder.addStepBtn}
           </button>
@@ -1002,6 +1123,11 @@ export default function WorkflowDetailPage({
                 onMoveUp={() => moveStep(selectedStepIdx, -1)}
                 onMoveDown={() => moveStep(selectedStepIdx, 1)}
                 onRemove={() => removeStepById(selectedStep.id)}
+                onConnect={
+                  draft.managedBy
+                    ? undefined
+                    : (target, port) => connectStep(selectedStep.id, target, port)
+                }
                 disabled={saving}
               />
             </div>
@@ -1017,27 +1143,95 @@ export default function WorkflowDetailPage({
         runs={runs}
       />
 
-      {/* Footer actions */}
-      <div className="flex items-center justify-between pt-2 border-t border-border">
-        <button
-          type="button"
-          onClick={onToggleEnabled}
-          disabled={saving}
-          className={cn(
-            "text-xs text-muted-foreground hover:text-foreground disabled:opacity-50",
-          )}
-        >
-          {workflow.enabled
-            ? t.workflowPage.builder.disableAction
-            : t.workflowPage.builder.enableAction}
-        </button>
+      {/* Footer actions. Enable / Disable moved into the header switch. */}
+      <div className="flex items-center justify-end pt-2 border-t border-border">
         <button
           type="button"
           onClick={onDelete}
-          className="text-xs text-red-600 dark:text-red-400 hover:underline"
+          className="inline-flex h-11 sm:h-7 items-center px-2 text-xs text-red-600 dark:text-red-400 hover:underline"
         >
           {t.workflowPage.builder.deleteBtn}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The cold-entry frame (instant-navigation N4): Back, the header seeded from
+ * the list row when there is one (name, disabled badge, description) or a
+ * title-shaped bar when there is not, and a board-shaped skeleton (three
+ * node cards on a wire) where the canvas will land. Geometry matches the
+ * real page so the swap-in does not jump.
+ */
+function WorkflowDetailEntrySkeleton({
+  listHref,
+  listRow,
+  backLabel,
+  disabledLabel,
+}: {
+  listHref: string;
+  listRow: WorkflowSummary | null;
+  backLabel: string;
+  disabledLabel: string;
+}) {
+  return (
+    <div
+      className="w-full h-full overflow-y-auto px-4 md:px-6 pt-4 md:pt-6 pb-28 flex flex-col gap-6 [&>*]:shrink-0 animate-fade-in"
+      data-testid="workflow-detail-entry"
+    >
+      <BackButton href={listHref} label={backLabel} />
+      <header className="flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            {listRow ? (
+              <>
+                <div className="flex items-center gap-2 min-w-0">
+                  <h1 className="text-xl font-semibold truncate">{listRow.name}</h1>
+                  {!listRow.enabled && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground uppercase tracking-wide">
+                      {disabledLabel}
+                    </span>
+                  )}
+                </div>
+                {listRow.description ? (
+                  <p className="mt-1 text-[16px] md:text-sm text-muted-foreground whitespace-pre-wrap break-words">
+                    {listRow.description}
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Skeleton className="h-6 w-56 max-w-full" />
+                <Skeleton className="mt-2 h-3.5 w-80 max-w-full" />
+              </>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <Skeleton className="h-11 sm:h-8 w-20 rounded-md" />
+            <Skeleton className="h-11 sm:h-8 w-24 rounded-md" />
+          </div>
+        </div>
+      </header>
+      <div className="rounded-xl border border-border bg-muted/20 p-10 overflow-hidden">
+        <div className="flex items-center gap-20">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="relative flex shrink-0 items-start gap-2.5 rounded-xl border border-border bg-card p-3 w-[210px] h-[84px]">
+              <Skeleton className="size-8 rounded-lg" />
+              <div className="flex min-w-0 flex-1 flex-col gap-2 pt-0.5">
+                <Skeleton className="h-2.5 w-14" />
+                <Skeleton className="h-3.5 w-3/4" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+              {i < 2 && (
+                <Skeleton className="absolute -right-20 top-1/2 h-0.5 w-20 rounded-none" />
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex justify-end">
+        <Skeleton className="h-11 sm:h-7 w-24 rounded" />
       </div>
     </div>
   );
@@ -1165,8 +1359,10 @@ function InlineEditableText({
       >
         {value || placeholder}
       </span>
+      {/* Touch reveal (M2 / C 58): a dim pencil is always there below `md`
+          so the title reads as editable; hover / focus reveal above it. */}
       <Pencil
-        className="size-3.5 shrink-0 text-muted-foreground/70 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+        className="size-3.5 shrink-0 text-muted-foreground/70 opacity-60 md:opacity-0 md:group-hover:opacity-100 md:group-focus-visible:opacity-100 transition-opacity"
         aria-hidden
       />
     </button>

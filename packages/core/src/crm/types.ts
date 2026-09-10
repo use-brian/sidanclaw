@@ -66,6 +66,8 @@ export type CompanyRecord = {
    */
   entityId: string | null
   name: string
+  /** Native entity aliases, separate from the canonical display name. */
+  aliases?: string[]
   domain: string | null
   tags: string[]
   externalRef: CrmExternalRef
@@ -78,7 +80,7 @@ export type CompanyRecord = {
 
 export type CompanyListRow = Pick<
   CompanyRecord,
-  'id' | 'workspaceId' | 'entityId' | 'name' | 'domain' | 'tags' | 'sensitivity' | 'compartments' | 'projectIds' | 'updatedAt'
+  'id' | 'workspaceId' | 'entityId' | 'name' | 'aliases' | 'domain' | 'tags' | 'sensitivity' | 'compartments' | 'projectIds' | 'updatedAt'
 >
 
 export type CompanyListFilters = {
@@ -103,6 +105,8 @@ export type ContactRecord = {
   /** Underlying entity row id — see CompanyRecord.entityId for context. */
   entityId: string | null
   name: string
+  /** Native entity aliases, separate from the canonical display name. */
+  aliases?: string[]
   email: string | null
   phone: string | null
   companyId: string | null
@@ -117,7 +121,7 @@ export type ContactRecord = {
 
 export type ContactListRow = Pick<
   ContactRecord,
-  'id' | 'workspaceId' | 'entityId' | 'name' | 'email' | 'phone' | 'companyId' | 'tags' | 'sensitivity' | 'compartments' | 'projectIds' | 'updatedAt'
+  'id' | 'workspaceId' | 'entityId' | 'name' | 'aliases' | 'email' | 'phone' | 'companyId' | 'tags' | 'sensitivity' | 'compartments' | 'projectIds' | 'updatedAt'
 >
 
 export type ContactListFilters = {
@@ -149,6 +153,8 @@ export type DealRecord = {
   /** The deal entity's `display_name` (e.g. "Deal - Acme"), the row's title
    *  on operator surfaces. */
   name: string
+  /** Native entity aliases, separate from the canonical display name. */
+  aliases?: string[]
   contactId: string | null
   companyId: string | null
   stage: DealStage
@@ -164,7 +170,7 @@ export type DealRecord = {
 
 export type DealListRow = Pick<
   DealRecord,
-  'id' | 'workspaceId' | 'entityId' | 'name' | 'contactId' | 'companyId' | 'stage' | 'amount' | 'closeDate' | 'sensitivity' | 'compartments' | 'projectIds' | 'updatedAt'
+  'id' | 'workspaceId' | 'entityId' | 'name' | 'aliases' | 'contactId' | 'companyId' | 'stage' | 'amount' | 'closeDate' | 'sensitivity' | 'compartments' | 'projectIds' | 'updatedAt'
 >
 
 export type DealListFilters = {

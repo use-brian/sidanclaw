@@ -1,3 +1,7 @@
+// Recipient admission is exercised with real PostgreSQL in crm-managed-mailbox.integration.test.ts.
+vi.mock('../../crm-operations/delivery-policy.js', () => ({
+  withCrmMailAdmission: (_context: unknown, _provider: unknown, _envelope: unknown, invoke: () => Promise<unknown>) => invoke(),
+}))
 import { describe, it, expect, vi } from 'vitest'
 import { createAgentmailClient, AgentmailApiError } from '../client.js'
 
@@ -77,12 +81,13 @@ describe('[COMP:api/agentmail-client] AgentMail REST client', () => {
     await expect(client.getInbox('a@b.c')).rejects.toBeInstanceOf(AgentmailApiError)
   })
 
-  it('throws with status + truncated body on other errors', async () => {
+  it('keeps send error status without retaining provider response text', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response('boom'.repeat(200), { status: 500 }))
     const client = createAgentmailClient({ apiKey: 'k', fetchImpl })
-    await expect(client.sendMessage('a@b.c', { to: 'x@y.z', text: 'hi' })).rejects.toThrow(
-      /AgentMail API error \(500\)/,
-    )
+    const error = await client.sendMessage('a@b.c', { to: 'x@y.z', text: 'hi' }).catch(error => error)
+    expect(error).toMatchObject({status:500})
+    expect(error.message).toContain('AgentMail API error (500)')
+    expect(error.message).not.toContain('boom')
   })
 
   it('rejects a response that fails schema validation', async () => {

@@ -21,18 +21,13 @@ const USER = 'u-1'
 function makeSeam(creds: { primary?: string | null; instance?: string | null }) {
   return createGmailSendSeam({
     connectorStore: {
-      getCredentials: vi.fn(async () =>
-        creds.primary === null || creds.primary === undefined
-          ? null
-          : { client_id: 'ignored', client_secret: creds.primary },
-      ),
+      list: vi.fn(async () => creds.primary ? [{ id:'primary-1',connectorId:'gmail',connected:true,createdAt:new Date(0) }] as never : []),
     },
     connectorInstanceStore: {
-      getCredentials: vi.fn(async () =>
-        creds.instance === null || creds.instance === undefined
-          ? null
-          : { client_id: 'ignored', client_secret: creds.instance },
-      ),
+      getCredentials: vi.fn(async (_userId, id) => {
+        const token = id === 'primary-1' ? creds.primary : creds.instance
+        return token ? { client_id:'ignored',client_secret:token } : null
+      }),
     },
   })
 }
@@ -70,7 +65,7 @@ describe('[COMP:api/gmail-send-seam] acquireGmailSender', () => {
         to: 'a@b.co',
         subject: 'Hi',
         body: 'Body',
-      })
+      }, {userId:USER,workspaceId:undefined,connectorInstanceId:'primary-1'})
     }
   })
 

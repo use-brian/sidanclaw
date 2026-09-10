@@ -5,7 +5,8 @@ import type { BrainAuth } from '../../brain-mcp/auth.js'
 import type { BrainKeyStore } from '../../db/brain-keys-store.js'
 import type { AssociationStore } from '../../db/association-store.js'
 import { AssociationError } from '../../association/domain.js'
-import type { CrmOperationsServicePort } from '@use-brian/core'
+import { WorkspaceModuleError } from '../../db/workspace-modules-store.js'
+import { CrmOperationsError, type CrmOperationsServicePort } from '@use-brian/core'
 import { associationRoutes } from '../association.js'
 
 const WID = '11111111-1111-4111-8111-111111111111'
@@ -15,7 +16,7 @@ const RECORD_ID = '44444444-4444-4444-8444-444444444444'
 
 function auth(overrides: Partial<BrainAuth> = {}): BrainAuth {
   return {
-    keyId: 'brain-key-1',
+    keyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     workspaceId: WID,
     scope: 'read_write',
     maxClearance: 'internal',
@@ -46,9 +47,19 @@ function fakeStore(): AssociationStore {
     listEvents: vi.fn(),
     upsertTicket: vi.fn(),
     listTickets: vi.fn(),
+    listWaitlist: vi.fn(),
+    offerWaitlistPlace: vi.fn(),
     createOrder: vi.fn(),
     getOrder: vi.fn(),
+    listOrders: vi.fn(),
+    expireDueOrder: vi.fn(),
+    cancelOrder: vi.fn(),
+    confirmFreeOrder: vi.fn(),
     reconcileProviderEvent: vi.fn(),
+    bindOrderProvider: vi.fn(),
+    reconcileProviderEntitlement: vi.fn(),
+    retryProviderEventReceipt: vi.fn(),
+    listProviderReceipts: vi.fn(),
     listEventRegistrations: vi.fn(),
     getRegistrationManagement: vi.fn().mockResolvedValue({ sourceKind: 'commerce' }),
     updateRegistration: vi.fn(),
@@ -73,6 +84,54 @@ function makeApp(
 }
 
 describe('[COMP:api/association-route] credential and workspace authority', () => {
+  it('preserves durable receipt creation, pagination and retry details at the compatibility boundary', async () => {
+    const store = fakeStore(), app = makeApp(store)
+    const event = { provider: 'fixture', providerReference: 'fictional-subscription', providerPeriodId: 'period-1', eventId: 'event-1', occurredAt: '2026-09-09T00:00:00Z', command: { kind: 'update_entitlement', entitlementId: RECORD_ID, status: 'cancelled' } }
+    vi.mocked(store.reconcileProviderEntitlement).mockResolvedValue({ record: { id: RECORD_ID }, created: true, receipt: { id: CONTACT_ID, state: 'applied' } })
+    const accepted = await request(app).post('/api/association/provider-entitlement-events').send(event)
+    expect(accepted.status).toBe(201)
+    expect(accepted.body).toMatchObject({ entitlement: { id: RECORD_ID }, receipt: { id: CONTACT_ID, state: 'applied' } })
+    vi.mocked(store.listProviderReceipts).mockResolvedValue({ items: [{ id: CONTACT_ID, state: 'applied' }], nextCursor: null })
+    expect((await request(app).get('/api/association/provider-receipts?limit=10&state=applied')).body).toMatchObject({ receipts: [{ id: CONTACT_ID }], nextCursor: null })
+    vi.mocked(store.reconcileProviderEntitlement).mockRejectedValue(new CrmOperationsError('conflict', 'Provider receipt is processing.', { reason: 'provider_event_processing', receiptId: CONTACT_ID, receiptState: 'processing' }))
+    const busy = await request(app).post('/api/association/provider-entitlement-events').send(event)
+    expect(busy.status).toBe(409)
+    expect(busy.body.details).toMatchObject({ receiptId: CONTACT_ID, receiptState: 'processing' })
+    expect((await request(makeApp(store, auth({ scope: 'read' }))).post('/api/association/provider-entitlement-events').send(event)).status).toBe(403)
+  })
+  it('accepts backend binding and rejects incomplete payment evidence before the store', async () => {
+    const store = fakeStore(), binding = { provider: 'fixture', providerReference: 'fictional-object', amountMinor: 1000, currency: 'USD' }
+    vi.mocked(store.bindOrderProvider).mockResolvedValue({ record: { id: RECORD_ID, ...binding }, created: true })
+    const response = await request(makeApp(store)).post(`/api/association/orders/${RECORD_ID}/provider-binding`).send(binding)
+    expect(response.status).toBe(201)
+    expect(store.bindOrderProvider).toHaveBeenCalledWith(WID, RECORD_ID, binding, expect.objectContaining({ credentialKind: 'brain_key' }))
+    const rejected = await request(makeApp(store)).post(`/api/association/orders/${RECORD_ID}/provider-events`).send({ provider: 'fixture', eventId: 'fictional-event', targetStatus: 'paid', occurredAt: '2026-09-01T00:00:00Z' })
+    expect(rejected.status).toBe(400)
+    expect(store.reconcileProviderEvent).not.toHaveBeenCalled()
+  })
+  it('adapts paginated waitlist reads and explicit offers through the shared command service', async () => {
+    const store = fakeStore()
+    vi.mocked(store.listWaitlist).mockResolvedValue({ items: [{ id: RECORD_ID, waitlistState: 'waiting' }], nextCursor: null })
+    vi.mocked(store.offerWaitlistPlace).mockResolvedValue({ record: { orderId: CONTACT_ID }, created: true })
+    const app = makeApp(store)
+    const page = await request(app).get('/api/association/waitlist').query({ includeClosed: 'true', limit: '10' })
+    expect(page.status).toBe(200)
+    expect(page.body).toMatchObject({ submissions: [{ id: RECORD_ID }], nextCursor: null })
+    expect(store.listWaitlist).toHaveBeenCalledWith(WID, expect.objectContaining({ includeClosed: true, limit: 10 }))
+    const offered = await request(app).post(`/api/association/waitlist/${RECORD_ID}/offer`).send({ promotionId: CONTACT_ID })
+    expect(offered.status).toBe(201)
+    expect(store.offerWaitlistPlace).toHaveBeenCalledWith(WID, expect.objectContaining({ submissionId: RECORD_ID, promotionId: CONTACT_ID, reservationMinutes: 20 }), expect.any(Object))
+    expect((await request(makeApp(store, auth({ scope: 'read' }))).post(`/api/association/waitlist/${RECORD_ID}/offer`).send({ promotionId: CONTACT_ID })).status).toBe(403)
+  })
+  it('lists retired notifications with their prior delivery state through the compatibility route', async () => {
+    const store=fakeStore()
+    vi.mocked(store.listNotifications).mockResolvedValue({items:[{id:RECORD_ID,status:'retired',retiredFromStatus:'sending',retiredAt:'2026-01-01T00:00:00Z'}],nextCursor:null})
+    const result=await request(makeApp(store,auth({scope:'read'}))).get('/api/association/notifications').query({status:'retired',limit:'10'})
+    expect(result.status).toBe(200)
+    expect(result.body).toMatchObject({notifications:[{status:'retired',retiredFromStatus:'sending'}],nextCursor:null})
+    expect(store.listNotifications).toHaveBeenCalledWith(WID,expect.objectContaining({status:'retired',limit:10}))
+  })
+
   it('requires a valid Brain credential', async () => {
     const store = fakeStore()
     const response = await request(makeApp(store, null)).get('/api/association/events')
@@ -111,7 +170,7 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
     expect(store.createEnquiry).toHaveBeenCalledWith(
       WID,
       expect.not.objectContaining({ workspaceId: OTHER_WID }),
-      { credentialKind: 'api_key', credentialId: 'brain-key-1' },
+      { credentialKind: 'api_key', credentialId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     )
   })
 
@@ -197,7 +256,7 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
       WID,
       RECORD_ID,
       { status: 'checked_in' },
-      { credentialKind: 'api_key', credentialId: 'brain-key-1' },
+      { credentialKind: 'brain_key', credentialId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     )
   })
 
@@ -232,7 +291,7 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
     expect(store.createMembership).not.toHaveBeenCalled()
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: WID,
-      actor: { kind: 'brain_key', credentialId: 'brain-key-1' },
+      actor: { kind: 'brain_key', credentialId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
     }), expect.objectContaining({
       kind: 'grant_entitlement', contactId: CONTACT_ID,
       providerEntitlementId: 'provider-member-1',
@@ -264,4 +323,14 @@ describe('[COMP:api/association-route] credential and workspace authority', () =
       kind: 'update_participation', participationId: RECORD_ID, status: 'attended',
     })
   })
+  it.each(['module_disabled', 'module_draining'] as const)('returns a 409 for %s at the existing commerce route', async (code) => {
+    const store = fakeStore()
+    vi.mocked(store.upsertTicket).mockRejectedValue(new WorkspaceModuleError(code, 'Module unavailable'))
+    const response = await request(makeApp(store))
+      .post(`/api/association/events/${RECORD_ID}/tickets`)
+      .send({ key: 'standard', name: 'Standard', currency: 'USD', priceMinor: 0 })
+    expect(response.status).toBe(409)
+    expect(response.body.error).toBe(code)
+  })
+
 })

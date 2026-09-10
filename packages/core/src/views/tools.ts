@@ -264,6 +264,7 @@ const OUT_APP_LINK_NOTE =
  */
 export function createRenderViewTool(deps: ViewToolDeps): Tool {
   return buildTool({
+    homeAppToolSet: { app: 'page', set: 'write' },
     name: 'renderView',
     description:
       'Render a Table, Board, or Calendar of the workspace\'s primitives — tasks / contacts / companies / deals / workflow runs. ' +
@@ -600,6 +601,7 @@ function buildChartWidget(
  */
 export function createRenderChartTool(deps: ViewToolDeps): Tool {
   return buildTool({
+    homeAppToolSet: { app: 'page', set: 'write' },
     name: 'renderChart',
     description:
       'Render a KPI tile, bar chart, line chart, or pie chart from the workspace primitives ' +
@@ -864,6 +866,7 @@ export function createRenderChartTool(deps: ViewToolDeps): Tool {
  */
 export function createSaveViewTool(deps: ViewToolDeps): Tool {
   return buildTool({
+    homeAppToolSet: { app: 'page', set: 'write' },
     name: 'saveView',
     description:
       'Persist a previously-rendered view as a saved view in this workspace. ' +

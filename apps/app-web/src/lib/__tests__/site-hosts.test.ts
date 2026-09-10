@@ -60,6 +60,24 @@ describe("[COMP:app-web/site-route] Custom-domain host classification", () => {
         },
       );
     });
+
+    it("preserves hosted legacy app hosts and prefers an explicit runtime override", async () => {
+      await withEnv(
+        { NEXT_PUBLIC_APP_HOSTS: "app.usebrian.ai,.vercel.app", NODE_ENV: "production" },
+        (m) => {
+          expect(m.isAppHost("app.usebrian.ai")).toBe(true);
+          expect(m.isAppHost("preview.vercel.app")).toBe(true);
+          expect(m.isAppHost("docs.customer.example")).toBe(false);
+        },
+      );
+      await withEnv(
+        { APP_HOSTS: "app.customer.example", NEXT_PUBLIC_APP_HOSTS: "app.usebrian.ai", NODE_ENV: "production" },
+        (m) => {
+          expect(m.isAppHost("app.customer.example")).toBe(true);
+          expect(m.isAppHost("app.usebrian.ai")).toBe(false);
+        },
+      );
+    });
   });
 
   describe("normalizeHostHeader", () => {

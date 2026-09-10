@@ -27,10 +27,11 @@ const POINTER_KEYS = new Set([
   'entitlementId', 'planId', 'planKey', 'participationId', 'eventId',
   'eventKey', 'dealId', 'pipelineId', 'pipelineKey', 'stageId', 'stageKey',
   'actorKind', 'occurredAt', 'batchId', 'batchCount',
+  'ticketId','ticketKey','capacity','used','revision',
 ])
 
 const STABLE_KEY_FIELDS = [
-  'definitionKey', 'purposeKey', 'planKey', 'eventKey', 'pipelineKey', 'stageKey',
+  'definitionKey', 'purposeKey', 'planKey', 'eventKey', 'pipelineKey', 'stageKey', 'ticketKey',
 ] as const
 
 export function redactCrmDomainEventPayload(payload: Record<string, unknown>): Record<string, unknown> {

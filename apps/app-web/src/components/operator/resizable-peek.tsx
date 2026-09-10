@@ -216,7 +216,10 @@ export function ResizablePeek({
           responsiveFullWidth && "max-lg:!w-full",
         )}
       >
-        <div className={cn(responsiveFullWidth && "max-lg:hidden")}>
+        {/* The 6px drag handle cannot be grabbed by a finger, and below `sm`
+            the aside is full-width anyway - so it hides below `md` for every
+            consumer, and below `lg` for the full-width-destination flavour. */}
+        <div className={cn("max-md:hidden", responsiveFullWidth && "max-lg:hidden")}>
           <PeekResizeHandle resizing={resizing} {...handleProps} />
         </div>
         {children}

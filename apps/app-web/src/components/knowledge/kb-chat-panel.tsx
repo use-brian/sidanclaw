@@ -346,7 +346,7 @@ export function KbChatPanel({
   );
 
   return (
-    <div className="flex h-[26rem] min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
+    <div className="flex h-[26rem] max-h-[60dvh] min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
       <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {resuming ? (
           <div className="py-8 text-center text-xs text-muted-foreground">
@@ -419,7 +419,7 @@ export function KbChatPanel({
             placeholder={assistantId ? copy.placeholder : copy.noAssistant}
             disabled={!assistantId || resuming}
             className={cn(
-              "min-h-[2.25rem] max-h-32 flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[13px]",
+              "min-h-[2.25rem] max-h-32 flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-[13px]",
               "placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50",
             )}
           />

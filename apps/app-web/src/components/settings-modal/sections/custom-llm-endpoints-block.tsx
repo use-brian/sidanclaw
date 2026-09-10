@@ -1,12 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Plus, Server, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { useWorkspaceContext } from "@/lib/workspace-context";
+import { useCachedResource } from "@/lib/surface-cache";
+import { customLlmEndpointsCacheKey } from "@/lib/surface-prefetch";
 import {
   createCustomLlmEndpoint,
   CustomLlmEndpointsUnavailableError,
@@ -16,7 +19,22 @@ import {
   type CustomLlmEndpoint,
 } from "@/lib/api/custom-llm-endpoints";
 
-const inputClass = "w-full rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm outline-none";
+// 16px below `md` so iOS does not zoom on focus (responsive contract M4).
+const inputClass = "w-full rounded-lg border border-border bg-muted/30 px-3 py-2 text-[16px] outline-none md:text-sm";
+
+/** The endpoint list, or the "feature not available on this edition" degrade. */
+type EndpointsState = { available: boolean; endpoints: CustomLlmEndpoint[] };
+
+async function fetchEndpointsState(workspaceId: string): Promise<EndpointsState> {
+  try {
+    return { available: true, endpoints: await listCustomLlmEndpoints(workspaceId) };
+  } catch (err) {
+    if (err instanceof CustomLlmEndpointsUnavailableError) return { available: false, endpoints: [] };
+    throw err;
+  }
+}
+
+const NO_ENDPOINTS: CustomLlmEndpoint[] = [];
 
 export function CustomLlmEndpointsBlock({
   onChanged,
@@ -27,9 +45,27 @@ export function CustomLlmEndpointsBlock({
 } = {}) {
   const t = useT().customLlmEndpoints;
   const { workspaceId } = useWorkspaceContext();
-  const [endpoints, setEndpoints] = useState<CustomLlmEndpoint[]>([]);
-  const [available, setAvailable] = useState<boolean | null>(null);
-  const [error, setError] = useState("");
+  // Paints from the surface cache (instant-navigation contract N1): reopening
+  // Providers renders the last-known endpoints on its first frame and
+  // revalidates behind them; only a cold open shows the skeleton row. No
+  // spine primitive names an endpoint, so every mutation awaits `refresh()`.
+  const resource = useCachedResource<EndpointsState>(
+    workspaceId ? customLlmEndpointsCacheKey(workspaceId) : null,
+    () => fetchEndpointsState(workspaceId as string),
+  );
+  const { refresh } = resource;
+  const endpoints = resource.data?.endpoints ?? NO_ENDPOINTS;
+  const available: boolean | null = resource.data ? resource.data.available : null;
+  const loadFailed = resource.error !== undefined && resource.data === undefined;
+  const [actionError, setActionError] = useState("");
+  const error =
+    actionError ||
+    (loadFailed
+      ? resource.error instanceof Error && resource.error.message
+        ? resource.error.message
+        : t.loadFailed
+      : "");
+  const setError = setActionError;
   const [saving, setSaving] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [fallbackSaving, setFallbackSaving] = useState<string | null>(null);
@@ -42,16 +78,8 @@ export function CustomLlmEndpointsBlock({
 
   const reload = useCallback(async () => {
     if (!workspaceId) return;
-    try {
-      setEndpoints(await listCustomLlmEndpoints(workspaceId));
-      setAvailable(true);
-    } catch (err) {
-      if (err instanceof CustomLlmEndpointsUnavailableError) setAvailable(false);
-      else setError(err instanceof Error ? err.message : t.loadFailed);
-    }
-  }, [workspaceId, t.loadFailed]);
-
-  useEffect(() => { void reload(); }, [reload]);
+    await refresh();
+  }, [refresh, workspaceId]);
 
   if (available === false) return null;
 
@@ -100,7 +128,18 @@ export function CustomLlmEndpointsBlock({
       {error ? <p className="rounded-lg bg-destructive/10 px-3 py-2 text-[12px] text-destructive">{error}</p> : null}
 
       {available === null ? (
-        <p className="text-[12px] text-muted-foreground">{t.loading}</p>
+        loadFailed ? null : (
+          // Cold open only: one endpoint row's geometry (N4).
+          <ul aria-busy="true" data-testid="custom-llm-skeleton" className="space-y-2">
+            <li className="flex items-center gap-3 rounded-lg border border-border/70 px-3 py-2.5">
+              <Skeleton className="size-4 shrink-0 rounded" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <Skeleton className="h-3.5 w-40" />
+                <Skeleton className="h-3 w-56 max-w-full" />
+              </div>
+            </li>
+          </ul>
+        )
       ) : (
         <>
           <ul className="space-y-2">

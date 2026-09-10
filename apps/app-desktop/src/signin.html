@@ -417,8 +417,8 @@
         desktop.runLocal(url)
           .then(function (res) {
             if (res && res.ok) {
-              // The shell persists the target and relaunches; leave busy.
-              setLocalStatus("Connected. Restarting Use Brian...");
+              // The shell opens the selected account; leave busy.
+              setLocalStatus("Connected. Opening your account...");
               return;
             }
             setLocalBusy(false);
@@ -444,7 +444,7 @@
         desktop.runLocal(null)
           .then(function (res) {
             if (res && res.ok) {
-              btn.textContent = "Connected. Restarting...";
+              btn.textContent = "Connected. Opening account...";
               return;
             }
             btn.disabled = false;

@@ -39,8 +39,11 @@
  * [COMP:api/workspace-flush]
  */
 
+import {captureCrmErasure} from '../crm-operations/erasure-journal.js'
 import { getPool } from './client.js'
 import { notifyWorkspaceChange } from '../brain-stream/notify.js'
+import { redactCrmDeliveryReceipts } from '../crm-operations/privacy.js'
+import { retainWorkspaceAddressSuppression } from '../crm-operations/suppression-tombstones.js'
 
 /**
  * Content tables deleted by `workspace_id`, in FK-safe order:
@@ -63,6 +66,7 @@ export const WORKSPACE_FLUSH_TABLES = [
   'crm_entity_separations',
   'decision_events',
   'decision_applications',
+  'workflow_run_copy_sources',
   'workflows',
   'workflow_runs', // cascade-covered by `workflows`; kept explicit for the classifier
   'sandbox_tasks',
@@ -84,6 +88,9 @@ export const WORKSPACE_FLUSH_TABLES = [
   'crm_import_rows',
   'crm_import_chunks',
   'crm_import_jobs',
+  'crm_import_sources',
+  'crm_privacy_previews',
+  'crm_retention_runs',
   'transcript_segments',
   'recording_jobs',
   'recordings',
@@ -106,18 +113,24 @@ export const WORKSPACE_FLUSH_TABLES = [
   // hard-bound to their episodes and must go with them)
   'entity_links',
   'entity_merges',
+  // Retired-receipt parent FKs refuse deletion unless receipts leave first.
+  'crm_intake_idempotency',
+  'crm_delivery_receipt_contacts',
+  'association_waitlist_offers',
+  'association_integration_events',
   'entities',
   'memories',
   'consolidation_logs',
   'connector_actions',
   // CRM operations rows that directly or indirectly reference contacts.
   'crm_domain_event_outbox',
-  'crm_intake_idempotency',
+  'association_inventory_boundaries',
   'crm_suppression_events',
   'crm_intake_credential_definitions',
   'crm_intake_credentials',
   'crm_intake_definition_versions',
   'crm_intake_definitions',
+  'crm_consent_purpose_versions',
   'crm_consent_purposes',
   'crm_segments',
   'episodes',
@@ -156,6 +169,14 @@ export const ASSISTANT_SCOPED_FLUSH_TABLES = [
   'episodic_memories',
 ] as const
 
+// These tables belong to the hosted overlay, which is absent on standalone
+// OSS. Every other listed content table is required: SQL errors must abort
+// and roll back the flush rather than silently omit data.
+const HOSTED_ONLY_FLUSH_TABLES = [
+  'pending_classifications', 'brain_candidates', 'connector_actions',
+  'external_entities', 'distribution_events',
+] as const
+
 /**
  * Tables with a `workspace_id` column the flush deliberately PRESERVES.
  * Structure, configuration, capabilities, billing, and audit — the shell the
@@ -183,6 +204,15 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'oauth_authorizations',
   // Settings + config + authored structure
   'workspace_tool_policy',
+  'crm_privacy_policies',
+  'crm_erasure_journal',
+  'crm_address_suppression_tombstones',
+  'crm_import_file_cleanups', // Preserve pending blob deletion across a workspace reset.
+  'crm_managed_mailbox_policies',
+  'crm_mailbox_integration_grants',
+  'crm_delivery_receipts',
+  'crm_integration_credentials',
+  'crm_integration_credential_grants',
   'workspace_knowledge_sources',
   'workspace_page_templates',
   'entity_types',
@@ -202,6 +232,7 @@ export const WORKSPACE_FLUSH_PRESERVED_TABLES = [
   'usage_tracking',
   'oss_usage_tracking',
   'workspace_goal_defaults',
+  'workspace_modules',
   'usage_sessions',
   'bulk_ingest_surcharges',
   'recording_surcharges',
@@ -248,6 +279,16 @@ export async function flushWorkspaceData(
     if (owner.rowCount === 0) {
       throw new WorkspaceFlushNotOwnerError()
     }
+    await captureCrmErasure(client)
+    await retainWorkspaceAddressSuppression(client,workspaceId)
+    await redactCrmDeliveryReceipts(client,workspaceId)
+
+    const optional = await client.query<{ name: string; installed: boolean }>(
+      `SELECT name, to_regclass(format('public.%I', name)) IS NOT NULL AS installed
+         FROM unnest($1::text[]) AS name`,
+      [HOSTED_ONLY_FLUSH_TABLES],
+    )
+    const absent = new Set(optional.rows.filter((row) => !row.installed).map((row) => row.name))
 
     const assistants = await client.query<{ id: string }>(
       `SELECT id FROM assistants WHERE workspace_id = $1`,
@@ -256,6 +297,10 @@ export async function flushWorkspaceData(
     const assistantIds = assistants.rows.map((r) => r.id)
 
     for (const table of WORKSPACE_FLUSH_TABLES) {
+      if (absent.has(table)) {
+        deleted[table] = 0
+        continue
+      }
       const result =
         table === 'sessions'
           ? // Sessions ride the assistant, not the workspace (workspace_id is
@@ -269,7 +314,7 @@ export async function flushWorkspaceData(
     }
 
     for (const table of ASSISTANT_SCOPED_FLUSH_TABLES) {
-      if (assistantIds.length === 0) {
+      if (assistantIds.length === 0 || absent.has(table)) {
         deleted[table] = 0
         continue
       }

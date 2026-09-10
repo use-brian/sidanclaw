@@ -136,17 +136,15 @@ export async function resolveCrmPersonIdentity(
   const rows = await queryable.query(
     `SELECT ${BINDING_COLUMNS}
        FROM crm_identity_bindings b
-       JOIN entities e
-         ON e.workspace_id = b.workspace_id AND e.id = b.entity_id
       WHERE b.workspace_id = $1
         AND b.provider = $2
         AND b.provider_instance_key = $3
         AND b.subject_id = $4
         AND b.revoked_at IS NULL
-        AND e.kind = 'person'
-        AND e.valid_to IS NULL
-        AND e.retracted_at IS NULL
-        AND NOT COALESCE((e.attributes->>'self')::boolean, false)
+        AND EXISTS (SELECT 1 FROM entities e
+          WHERE e.workspace_id = b.workspace_id AND e.id = b.entity_id
+            AND e.kind = 'person' AND e.valid_to IS NULL AND e.retracted_at IS NULL
+            AND NOT COALESCE((e.attributes->>'self')::boolean, false))
       ORDER BY b.bound_at, b.id`,
     [workspaceId, identity.provider, identity.providerInstanceKey, identity.subjectId],
   )

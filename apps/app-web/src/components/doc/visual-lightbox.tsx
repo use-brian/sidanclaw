@@ -76,7 +76,10 @@ export function ZoomableVisual({
         aria-label={t.open}
         title={t.open}
         onClick={() => setOpen(true)}
-        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-background/80 p-1.5 text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/zoom:opacity-100 motion-reduce:transition-none"
+        // Always visible on touch (a double-tap never fires `dblclick` on
+        // iOS, so this is the only touch entry), hover-revealed from `md`
+        // (responsive contract M2); 36px on a phone.
+        className="absolute right-2 top-2 z-10 rounded-md border border-border bg-background/80 p-2.5 text-muted-foreground opacity-100 shadow-sm backdrop-blur transition-opacity hover:bg-muted hover:text-foreground md:p-1.5 md:opacity-0 md:focus-visible:opacity-100 md:group-hover/zoom:opacity-100 motion-reduce:transition-none"
       >
         <Expand className="size-4" aria-hidden />
       </button>
@@ -182,7 +185,7 @@ export function VisualLightbox({
             definite box to fill instead of collapsing. */}
         <Dialog.Popup
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[92vh] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden bg-background shadow-xl",
+            "fixed left-1/2 top-1/2 z-50 flex max-h-[92dvh] max-w-[92vw] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden bg-background shadow-xl",
             "transition-all duration-150",
             "data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0",
             "data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0",
@@ -260,7 +263,7 @@ function ToolbarButton({ children, ...props }: ButtonHTMLAttributes<HTMLButtonEl
     <button
       type="button"
       {...props}
-      className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      className="rounded-md p-2.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40 md:p-1.5"
     >
       {children}
     </button>

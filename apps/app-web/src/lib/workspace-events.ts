@@ -29,6 +29,12 @@ import { publicRuntimeConfig } from "@/lib/runtime-public-config";
  *   inbox           → INBOX_REFRESH_EVENT (InboxPanel + the sidebar unread
  *                     badge, same never-unmounting-layout reasoning as
  *                     `assistant` above — docs/plans/room-human-mentions.md T-H8)
+ *   session         → LIVE_REFRESH_EVENT (the Live roster)
+ *   goal            → GOAL_REFRESH_EVENT (`goal-events.ts`; no direct
+ *                     listener — the surface-cache map marks `goals:`,
+ *                     `triage:` and `goal:` stale, so the goals board, the
+ *                     Triage panel and the goal detail revalidate behind
+ *                     their paint instead of off a local refetch tick)
  *
  * Catch-up without replay: on every EventSource `open` (first connect AND
  * each auto-reconnect) and on `visibilitychange → visible`, all domain
@@ -83,6 +89,10 @@ import {
   INBOX_REFRESH_EVENT,
   type InboxRefreshDetail,
 } from "@/lib/inbox-refresh-events";
+import {
+  GOAL_REFRESH_EVENT,
+  type GoalRefreshDetail,
+} from "@/lib/goal-events";
 
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
@@ -105,7 +115,8 @@ type WorkspacePrimitive =
   | "assistant"
   | "workspace_config"
   | "inbox"
-  | "session";
+  | "session"
+  | "goal";
 
 export type WorkspaceChangePayload = {
   workspaceId: string;
@@ -250,6 +261,16 @@ export function routeWorkspaceChange(
           } satisfies LiveRefreshDetail,
         },
       ];
+    case "goal":
+      return [
+        {
+          event: GOAL_REFRESH_EVENT,
+          detail: {
+            workspaceId: payload.workspaceId,
+            rowId: payload.rowId,
+          } satisfies GoalRefreshDetail,
+        },
+      ];
     default:
       return [];
   }
@@ -268,6 +289,7 @@ export function allDomainDispatches(workspaceId: string): DomainDispatch[] {
     { event: WORKSPACE_IDENTITY_REFRESH_EVENT, detail: { workspaceId } },
     { event: INBOX_REFRESH_EVENT, detail: { workspaceId } },
     { event: LIVE_REFRESH_EVENT, detail: { workspaceId } },
+    { event: GOAL_REFRESH_EVENT, detail: { workspaceId } },
   ];
 }
 

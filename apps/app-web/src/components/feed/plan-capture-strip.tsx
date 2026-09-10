@@ -106,13 +106,13 @@ export function PlanCaptureStrip({
               }}
               placeholder={tp.capturePlaceholder}
               aria-label={tp.capturePlaceholder}
-              className="min-w-0 flex-1 resize-none bg-transparent py-1.5 text-sm leading-relaxed placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-70"
+              className="min-w-0 flex-1 resize-none bg-transparent py-1.5 text-[16px] md:text-sm leading-relaxed placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-70"
             />
             <button
               type="button"
               disabled={!text.trim() || saving}
               onClick={() => void submit()}
-              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[12.5px] font-medium text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
+              className="inline-flex h-9 md:h-8 shrink-0 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[12.5px] font-medium text-background transition-colors hover:bg-foreground/90 disabled:opacity-50"
             >
               <Plus className="size-3.5" aria-hidden />
               {tp.captureLog}
@@ -140,7 +140,7 @@ export function PlanCaptureStrip({
               type="button"
               disabled={busy}
               onClick={() => escalate(onDraftIdea)}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+              className="inline-flex h-9 md:h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
             >
               <PenLine className="size-3" aria-hidden />
               {tp.captureDraftNow}
@@ -149,7 +149,7 @@ export function PlanCaptureStrip({
               type="button"
               disabled={busy}
               onClick={() => escalate(onPlanIdea)}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+              className="inline-flex h-9 md:h-7 items-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
             >
               <CalendarPlus className="size-3" aria-hidden />
               {tp.planIdea}
@@ -159,7 +159,7 @@ export function PlanCaptureStrip({
               onClick={() => setLogged(null)}
               aria-label={tp.captureDismiss}
               title={tp.captureDismiss}
-              className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="inline-flex size-9 md:size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               <X className="size-3" aria-hidden />
             </button>
@@ -175,7 +175,7 @@ export function PlanCaptureStrip({
           data-plan-ideas-toggle
           aria-expanded={trayOpen}
           onClick={() => setTrayOpen((open) => !open)}
-          className="inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex h-9 md:h-7 items-center gap-1.5 rounded-md px-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ChevronRight
             className={cn("size-3.5 transition-transform", trayOpen && "rotate-90")}
@@ -212,7 +212,7 @@ export function PlanCaptureStrip({
                         type="button"
                         disabled={busy}
                         onClick={() => onDraftIdea(idea)}
-                        className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                        className="inline-flex h-9 md:h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
                       >
                         <PenLine className="size-3" aria-hidden />
                         {tp.draftIdea}
@@ -221,7 +221,7 @@ export function PlanCaptureStrip({
                         type="button"
                         disabled={busy}
                         onClick={() => onPlanIdea(idea)}
-                        className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                        className="inline-flex h-9 md:h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
                       >
                         <CalendarPlus className="size-3" aria-hidden />
                         {tp.planIdea}
@@ -241,7 +241,7 @@ export function PlanCaptureStrip({
                         }}
                         aria-label={tp.discardIdea}
                         title={tp.discardIdea}
-                        className="inline-flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        className="inline-flex size-9 md:size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       >
                         <X className="size-3" aria-hidden />
                       </button>

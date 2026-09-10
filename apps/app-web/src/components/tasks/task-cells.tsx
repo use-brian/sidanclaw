@@ -67,9 +67,22 @@ export const STATUS_DOT: Record<TaskStatus, string> = {
   archived: "bg-muted-foreground/30",
 };
 
+// 44px below `md` (responsive contract M3): there the cells render inside the
+// stacked card row and the board card, where the status select is the primary
+// touch control. The dense 28px grid only renders from `md`.
 const CELL_TRIGGER =
-  "inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] " +
+  "inline-flex h-11 max-w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] md:h-7 " +
   "text-foreground/90 transition-colors hover:bg-muted/70 disabled:opacity-50";
+
+/** Up to two initials for the assignee cell's compact rendering. */
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join("");
+}
 
 /** Status pill cell — a `Select` over the five lifecycle statuses. */
 export function StatusCell({
@@ -207,7 +220,8 @@ export function AssigneeCell({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         disabled={disabled || busy || !roster}
-        aria-label={t.filterAssignee}
+        // The name rides the label: a tooltip cannot open on touch (C78).
+        aria-label={name ? `${t.filterAssignee}: ${name}` : t.filterAssignee}
         className={cn(CELL_TRIGGER, busy && "opacity-60")}
       >
         {member ? (
@@ -219,6 +233,11 @@ export function AssigneeCell({
               size={18}
             />
             <span className="hidden truncate md:inline">{name}</span>
+            {name && (
+              <span className="text-[11px] font-medium text-muted-foreground md:hidden">
+                {initialsOf(name)}
+              </span>
+            )}
           </>
         ) : (
           <span className="text-muted-foreground/60">{t.unassignedOption}</span>
@@ -375,7 +394,7 @@ export function DueCell({
                 onClick={() => setMonth(addMonths(month, -1))}
                 aria-label={t.duePrevMonth}
                 title={t.duePrevMonth}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:size-7"
               >
                 <ChevronLeft className="size-4" aria-hidden />
               </button>
@@ -387,7 +406,7 @@ export function DueCell({
                 onClick={() => setMonth(addMonths(month, 1))}
                 aria-label={t.dueNextMonth}
                 title={t.dueNextMonth}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:size-7"
               >
                 <ChevronRight className="size-4" aria-hidden />
               </button>
@@ -409,7 +428,7 @@ export function DueCell({
                     type="button"
                     onClick={() => commit(day.iso)}
                     className={cn(
-                      "inline-flex h-7 items-center justify-center rounded-md text-[12.5px] tabular-nums transition-colors hover:bg-muted",
+                      "inline-flex h-9 items-center justify-center rounded-md text-[12.5px] tabular-nums transition-colors hover:bg-muted md:h-7",
                       !day.inMonth && "text-muted-foreground/40",
                       day.isToday && !selected && "font-semibold text-foreground",
                       selected &&

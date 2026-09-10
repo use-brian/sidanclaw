@@ -53,6 +53,11 @@ import Link from "next/link";
 import { Check, Download, FolderOpen, Pencil, Upload, X } from "lucide-react";
 import { authFetch } from "@/lib/auth-fetch";
 import { BrowseDirectory } from "./browse-directory";
+import { useConnectorsList } from "./use-connectors-list";
+import type { Connector } from "@/lib/api/connectors";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
+import { BackButton } from "@/components/ui/back-button";
+import { isPhoneViewport } from "@/lib/viewport";
 import { resolveDirectoryConnectRow } from "@/lib/connector-directory-connect";
 import { DrivePicker, type PickedFile } from "@/components/drive-picker";
 import { ConnectorToolList, type ToolPolicy } from "@/components/connectors/connector-tool-list";
@@ -183,65 +188,8 @@ type ConnectorConnectOptions = {
   preferWorkspaceApp?: boolean;
 };
 
-type Connector = {
-  id: string;
-  /**
-   * The connector_instance UUID — distinct from `id`, the provider slug.
-   * Workspace-expose / grant calls key on this. Absent only for
-   * never-connected built-in placeholders.
-   */
-  connectorInstanceId?: string;
-  name: string;
-  /** Per-instance, user-editable nickname (defaults to the provider name). */
-  label?: string;
-  /** Oldest instance of this provider — keeps canonical tools at runtime. */
-  isPrimary?: boolean;
-  /** Whether the user can connect ANOTHER instance of this provider. */
-  addable?: boolean;
-  /** A built-in provider with no instance yet (the bare connect affordance). */
-  isPlaceholder?: boolean;
-  description?: string;
-  connected: boolean;
-  /** Pipeline-C state; selects the stronger state-aware removal warning. */
-  ingestionEnabled?: boolean;
-  /**
-   * Liveness (migration 294). "auth_failed" means the credentials stopped
-   * working (a 401/403 at call time) and the connector needs reconnecting even
-   * though `connected` is still true - drives the "Reconnect needed" state.
-   */
-  healthStatus?: "ok" | "auth_failed" | "degraded" | "unknown";
-  custom?: boolean;
-  url?: string;
-  oauthRequired?: boolean;
-  icon_url?: string;
-  category?: "official" | "community";
-  connectedEmail?: string;
-  /**
-   * Tracks which OAuth scope revision was used when the user last connected.
-   * `gdrive` migrated from documents+spreadsheets+presentations to
-   * `drive.file` + Picker (scopeVersion = 2). Unset / older values on a
-   * connected row mean the user needs to reconnect to use the new flow.
-   */
-  scopeVersion?: number;
-  /** Managed Picker access or customer-owned full-Drive read access. */
-  driveAccessMode?: "picked_files" | "full_drive_readonly";
-  /** Custom connectors only — how outbound MCP calls authenticate. */
-  authType?: ConnectorAuthType;
-  /** Custom-header connectors only — the non-secret header name. */
-  authHeaderName?: string;
-  /**
-   * Read-only workspace-shared row — a connector available to you in this
-   * workspace that you do NOT own (a teammate exposed it, or a legacy
-   * team-native instance). No manage/connect/remove affordances; credentials
-   * never leave the server. Set by the backend's "Available in this workspace"
-   * list.
-   */
-  readonly?: boolean;
-  /** Read-only rows only — how it reaches you: 'granted' | 'team_native'. */
-  source?: "granted" | "team_native";
-  /** Read-only granted rows only — display name of the member who shared it. */
-  sharedBy?: string | null;
-};
+// `Connector` (the row shape) lives in `lib/api/connectors.ts` beside the
+// list fetch, so the intent prefetch and this page read the same contract.
 
 /** Current scope revision for each OAuth connector. Bump when scopes change. */
 const CURRENT_SCOPE_VERSION: Record<string, number> = {
@@ -432,7 +380,7 @@ function GDriveAuthorizedFiles({ connectorInstanceId }: { connectorInstanceId?: 
               onClick={open}
               disabled={isOpening || disabled}
               title={disabledReason}
-              className="text-[11px] font-medium px-3 py-1 rounded-lg bg-action text-action-foreground hover:bg-action/90 disabled:opacity-40 transition-colors shrink-0"
+              className="text-[11px] font-medium px-3 py-1 rounded-lg bg-action text-action-foreground hover:bg-action/90 disabled:opacity-40 transition-colors shrink-0 min-h-11 sm:min-h-0"
             >
               {isOpening ? gd.opening : gd.addFromDrive}
             </button>
@@ -467,7 +415,7 @@ function GDriveAuthorizedFiles({ connectorInstanceId }: { connectorInstanceId?: 
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={`text-[11px] font-medium px-3 py-1.5 border-b-2 transition-colors ${
+              className={`text-[11px] font-medium px-3 py-3 sm:py-1.5 border-b-2 transition-colors ${
                 tab === id
                   ? "border-primary text-primary"
                   : "border-transparent text-muted-foreground hover:text-foreground"
@@ -506,7 +454,7 @@ function GDriveAuthorizedFiles({ connectorInstanceId }: { connectorInstanceId?: 
               <button
                 onClick={() => handleRemove(f.id)}
                 disabled={removingId === f.id}
-                className="text-[11px] text-muted-foreground hover:text-destructive transition-colors shrink-0 disabled:opacity-50"
+                className="text-[11px] text-muted-foreground hover:text-destructive transition-colors shrink-0 disabled:opacity-50 min-h-11 sm:min-h-0 px-2"
               >
                 {removingId === f.id ? gd.removing : gd.remove}
               </button>
@@ -527,14 +475,14 @@ function GDriveAuthorizedFiles({ connectorInstanceId }: { connectorInstanceId?: 
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={page === 0}
-              className="text-[11px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="text-[11px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-11 sm:min-h-0"
             >
               {gd.previous}
             </button>
             <button
               onClick={() => setPage((p) => p + 1)}
               disabled={page + 1 >= pageCount}
-              className="text-[11px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="text-[11px] px-2 py-1 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed transition-colors min-h-11 sm:min-h-0"
             >
               {gd.next}
             </button>
@@ -749,7 +697,7 @@ function GDriveCatalogScopePanel(props: { workspaceId: string; connectorInstance
                 type="button"
                 onClick={open}
                 disabled={disabled || isOpening}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium hover:bg-muted disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium hover:bg-muted disabled:opacity-50 min-h-11 sm:min-h-0"
               >
                 <FolderOpen className="h-3.5 w-3.5" />
                 {isOpening ? copy.openingPicker : copy.chooseFolders}
@@ -788,7 +736,7 @@ function GDriveCatalogScopePanel(props: { workspaceId: string; connectorInstance
           type="button"
           onClick={() => void estimateAndStart()}
           disabled={saving || loading}
-          className="rounded-md bg-action px-3 py-1.5 text-[11px] font-medium text-action-foreground hover:bg-action/90 disabled:opacity-50"
+          className="rounded-md bg-action px-3 py-1.5 text-[11px] font-medium text-action-foreground hover:bg-action/90 disabled:opacity-50 min-h-11 sm:min-h-0"
         >
           {saving ? copy.estimatingBtn : status?.configured ? copy.updateBtn : copy.startBtn}
         </button>
@@ -940,7 +888,7 @@ function GDriveEnrichmentImport(props: { workspaceId: string; connectorInstanceI
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={uploading}
-          className="inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground hover:bg-action/90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground hover:bg-action/90 disabled:opacity-50 min-h-11 sm:min-h-0"
         >
           <Upload className="h-3.5 w-3.5" />
           {uploading ? copy.uploadingBtn : copy.uploadBtn}
@@ -949,7 +897,7 @@ function GDriveEnrichmentImport(props: { workspaceId: string; connectorInstanceI
           type="button"
           onClick={downloadTemplate}
           disabled={uploading}
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted disabled:opacity-50 min-h-11 sm:min-h-0"
         >
           <Download className="h-3.5 w-3.5" />
           {copy.templateBtn}
@@ -1031,7 +979,7 @@ function ConnectorAuthSection(props: {
       <div className="flex items-center gap-3">
         <span className="text-xs text-muted-foreground shrink-0">{tc.authTypeLabel}</span>
         <Select value={props.authType} onValueChange={(v) => { if (v) props.onAuthType(v as ConnectorAuthType); }}>
-          <SelectTrigger size="sm" className="text-sm">
+          <SelectTrigger size="sm" className="text-[16px] md:text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1101,14 +1049,36 @@ function ConnectorsList() {
   const tc = t.settings.connectors;
   const { activeId, active } = useWorkspaces();
   const workspaceId = activeId ?? "";
-  const [connectors, setConnectors] = useState<Connector[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The list paints from the surface cache (instant-navigation contract):
+  // a revisit renders last-known rows on the first frame and revalidates
+  // behind them; `loading` is true only when nothing is cached.
+  const {
+    connectors,
+    loading,
+    refresh: refreshConnectors,
+    mutate: mutateConnectors,
+    markStale: markConnectorsStale,
+  } = useConnectorsList(workspaceId);
   const [connecting, setConnecting] = useState<string | null>(null);
   // Master-detail selection — a rowId (instance UUID, slug for placeholders)
   // OR a bare provider slug from the OAuth `?connected=` return when the
   // callback didn't carry `?instance=` (resolution below tries both).
   // Null = no explicit pick yet → first rail row.
   const [selected, setSelected] = useState<string | null>(null);
+  // Phone single-pane (responsive contract M1 / M5): below `md` the rail and
+  // the detail are two screens, not two columns. The first row is still
+  // auto-selected (so `md+` opens on a connector), but the detail only takes
+  // the pane once a row is TAPPED (or a connect flow reveals a form), and
+  // Back returns to the rail. On `md+` both render side by side and this
+  // flag is inert.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailRef = useRef<HTMLDivElement | null>(null);
+  // The Studio pane is its own scroll container and the rail can run 500px+,
+  // so a tap near its bottom would otherwise open the detail below the fold.
+  useEffect(() => {
+    if (!detailOpen || !isPhoneViewport()) return;
+    detailRef.current?.scrollIntoView({ block: "start" });
+  }, [detailOpen, selected]);
   const [expandTab, setExpandTab] = useState<"tools" | "settings">("tools");
   const [toolsMap, setToolsMap] = useState<Record<string, { tools: ToolPermission[]; serverName: string; loading: boolean }>>({});
 
@@ -1335,35 +1305,15 @@ function ConnectorsList() {
   }, [gdriveError]);
 
   // ── Fetch ────────────────────────────────────────────────────
+  //
+  // The list itself is read through `useConnectorsList` (the surface cache:
+  // `connectorsCacheKey(workspaceId)` + `fetchConnectorsList`), which loads
+  // on mount when nothing is cached and paints the cached rows otherwise.
+  // `fetchConnectors` is the post-mutation re-sync every handler below calls:
+  // a forced revalidation of that same key (the rows on screen stay up while
+  // it runs), plus the active-assistant read the link at the bottom needs.
   const fetchConnectors = useCallback(() => {
-    // Pass the active workspace so the API includes workspace-scoped connectors
-    // (e.g. the BYO `gcs` storage binding) in the list, not just personal ones.
-    const listUrl = workspaceId
-      ? `${API_URL}/api/connectors?workspaceId=${encodeURIComponent(workspaceId)}`
-      : `${API_URL}/api/connectors`;
-    authFetch(listUrl)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { connectors?: Connector[] } | null) => {
-        if (!data?.connectors) return;
-        let rows = data.connectors;
-        // BYO `gcs` storage is workspace-scoped, so it surfaces BOTH as an
-        // official "Connect" placeholder and as the workspace binding instance.
-        // Collapse to the single manageable instance row (which carries the
-        // connected state + Remove affordance) whenever a binding exists.
-        if (rows.some((r) => r.id === "gcs" && r.connectorInstanceId)) {
-          rows = rows.filter((r) => !(r.id === "gcs" && !r.connectorInstanceId));
-        }
-        // Same collapse for the workspace-scoped `s3` storage binding.
-        if (rows.some((r) => r.id === "s3" && r.connectorInstanceId)) {
-          rows = rows.filter((r) => !(r.id === "s3" && !r.connectorInstanceId));
-        }
-        if (rows.some((r) => r.id === "local" && r.connectorInstanceId)) {
-          rows = rows.filter((r) => !(r.id === "local" && !r.connectorInstanceId));
-        }
-        setConnectors(rows);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    const done = refreshConnectors();
 
     // Read active assistant from localStorage (same key as app-sidebar)
     try {
@@ -1379,23 +1329,45 @@ function ConnectorsList() {
         })
         .catch(() => {});
     }
+    return done;
+  }, [refreshConnectors]);
+
+  // The active-assistant read runs once per workspace; the list load is the
+  // cache hook's job, so this no longer refetches on mount.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("active-assistant-id");
+      if (saved) {
+        setActiveAssistantId(saved);
+        return;
+      }
+    } catch {}
+    authFetch(`${API_URL}/api/assistants`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { assistants?: Array<{ id: string }> } | null) => {
+        if (data?.assistants?.[0]) setActiveAssistantId(data.assistants[0].id);
+      })
+      .catch(() => {});
   }, [workspaceId]);
 
   useEffect(() => {
-    fetchConnectors();
     // Reset stuck "Connecting..." state when page regains visibility
-    // (e.g. user navigated back from OAuth without completing it)
+    // (e.g. user navigated back from OAuth without completing it). The rows
+    // stay on screen: mark the cached list stale and revalidate behind it
+    // (an OAuth round trip may have changed a row elsewhere).
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         setConnecting(null);
-        fetchConnectors();
+        markConnectorsStale();
+        void refreshConnectors();
       }
     };
     // Handle bfcache restoration (browser back button from OAuth page)
     const onPageShow = (e: PageTransitionEvent) => {
       if (e.persisted) {
         setConnecting(null);
-        fetchConnectors();
+        markConnectorsStale();
+        void refreshConnectors();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -1404,7 +1376,7 @@ function ConnectorsList() {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pageshow", onPageShow);
     };
-  }, [fetchConnectors]);
+  }, [markConnectorsStale, refreshConnectors]);
 
   // Load this account's connector-exposure grants and index the ones
   // pointing at the active workspace, so each row knows if it's shared.
@@ -1497,6 +1469,7 @@ function ConnectorsList() {
     // Select so the user sees the status; connect if not already connected.
     // Built-in primitives are always-on — selection is the whole flow.
     setSelected(rowId(c));
+    setDetailOpen(true);
     if (!c.connected && !isBuiltinPrimitive(c)) handleConnect(c);
     setAutoTriggered(true);
     const url = new URL(window.location.href);
@@ -1521,6 +1494,7 @@ function ConnectorsList() {
     const instanceId = sp.get("instance") ?? undefined;
     setJustConnected({ slug: connectedSlug, instanceId });
     setSelected(instanceId ?? connectedSlug);
+    setDetailOpen(true);
     const url = new URL(window.location.href);
     url.searchParams.delete("connected");
     url.searchParams.delete("instance");
@@ -1680,6 +1654,7 @@ function ConnectorsList() {
    */
   function revealConnectForm(rid: string) {
     setSelected(rid);
+    setDetailOpen(true);
     setShowBrowse(false);
   }
 
@@ -1888,7 +1863,7 @@ function ConnectorsList() {
         headers: { "Content-Type": "application/json" },
       });
       if (res.ok) {
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
         setSelected(rid);
         loadTools(id);
         // Refetch so the new connector_instance UUID lands in state, then arm
@@ -1994,7 +1969,7 @@ function ConnectorsList() {
         body: JSON.stringify({ label: renameLabel.trim() }),
       });
       if (res.ok) {
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, label: renameLabel.trim() } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, label: renameLabel.trim() } : x)));
         setRenamingId(null);
       }
     } catch {
@@ -2022,7 +1997,7 @@ function ConnectorsList() {
         // same provider. The legacy path returns none — slug-only arm, which
         // resolveAutoExpose only honors while the provider has one instance.
         const data = (await res.json().catch(() => ({}))) as { connectorInstanceId?: string };
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
         setSelected(rid);
         loadTools(c.id);
         // Refetch so the new connector_instance UUID lands in state, then arm
@@ -2335,15 +2310,15 @@ function ConnectorsList() {
         <input
           type="text" placeholder={tc.namePlaceholder} value={editName}
           onChange={(e) => setEditName(e.target.value)}
-          className="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="w-full text-[16px] md:text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
         <input
           type="url" placeholder={tc.remoteUrlPlaceholder} value={editUrl}
           onChange={(e) => setEditUrl(e.target.value)}
-          className="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="w-full text-[16px] md:text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
         <ConnectorAuthSection
-          fieldClass="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          fieldClass="w-full text-[16px] md:text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
           authType={editAuthType} onAuthType={setEditAuthType}
           oauthId={editOauthId} onOauthId={setEditOauthId}
           oauthSecret={editOauthSecret} onOauthSecret={setEditOauthSecret}
@@ -2376,14 +2351,14 @@ function ConnectorsList() {
           <button
             onClick={() => handleTestConnection(sel.id)}
             disabled={probeState[sel.id]?.status === "testing"}
-            className="text-xs font-medium border border-border px-4 py-1.5 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-50 transition-colors"
+            className="text-xs font-medium border border-border px-4 py-1.5 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
           >
             {tc.testConnection}
           </button>
           <button
             onClick={() => handleSaveCustom(sel.id)}
             disabled={!editName.trim() || !editUrl.trim()}
-            className="text-xs font-medium bg-action text-action-foreground px-4 py-1.5 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+            className="text-xs font-medium bg-action text-action-foreground px-4 py-1.5 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
           >
             {tc.saveBtn}
           </button>
@@ -2418,15 +2393,15 @@ function ConnectorsList() {
     )}
     {sel.id === "cli" && !wsOwned && sel.connectorInstanceId && (
       <div className="space-y-2">
-        <input type="text" placeholder={tc.cli.labelPlaceholder} value={cliLabel} onChange={(e) => setCliLabel(e.target.value)} className="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-        <input type="text" placeholder={tc.cli.pathPlaceholder} value={cliBinaryPath} onChange={(e) => setCliBinaryPath(e.target.value)} className="w-full text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-        <input type="text" placeholder={tc.cli.argsPlaceholder} value={cliArgs} onChange={(e) => setCliArgs(e.target.value)} className="w-full text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-        <input type="text" placeholder={tc.cli.cwdPlaceholder} value={cliCwd} onChange={(e) => setCliCwd(e.target.value)} className="w-full text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-        <input type="number" min={1000} max={300000} step={1000} placeholder={tc.cli.timeoutPlaceholder} value={cliTimeoutMs} onChange={(e) => setCliTimeoutMs(e.target.value)} className="w-full text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="text" placeholder={tc.cli.labelPlaceholder} value={cliLabel} onChange={(e) => setCliLabel(e.target.value)} className="w-full text-[16px] md:text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="text" placeholder={tc.cli.pathPlaceholder} value={cliBinaryPath} onChange={(e) => setCliBinaryPath(e.target.value)} className="w-full text-[16px] md:text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="text" placeholder={tc.cli.argsPlaceholder} value={cliArgs} onChange={(e) => setCliArgs(e.target.value)} className="w-full text-[16px] md:text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="text" placeholder={tc.cli.cwdPlaceholder} value={cliCwd} onChange={(e) => setCliCwd(e.target.value)} className="w-full text-[16px] md:text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <input type="number" min={1000} max={300000} step={1000} placeholder={tc.cli.timeoutPlaceholder} value={cliTimeoutMs} onChange={(e) => setCliTimeoutMs(e.target.value)} className="w-full text-[16px] md:text-sm font-mono bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
         {cliEnvKeys.length > 0 && <p className="text-[11px] text-muted-foreground">{tc.cli.envKeys.replace("{keys}", cliEnvKeys.join(", "))}</p>}
         <p className="text-[11px] text-muted-foreground">{tc.cli.updateNote}</p>
         {cliError && <p className="text-xs text-destructive">{cliError}</p>}
-        <button onClick={() => handleUpdateCli(sel)} disabled={!cliLabel.trim() || !cliBinaryPath.trim() || connecting === rid} className="text-xs font-medium bg-action text-action-foreground px-3 py-1.5 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors">
+        <button onClick={() => handleUpdateCli(sel)} disabled={!cliLabel.trim() || !cliBinaryPath.trim() || connecting === rid} className="text-xs font-medium bg-action text-action-foreground px-3 py-1.5 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0">
           {connecting === rid ? tc.cli.connectingBtn : tc.cli.updateBtn}
         </button>
       </div>
@@ -2451,7 +2426,7 @@ function ConnectorsList() {
               <button
                 key={value}
                 onClick={() => saveConfig(cfg, { sendUpdates: value })}
-                className={`text-[11px] font-medium px-2.5 py-0.5 rounded transition-colors ${
+                className={`text-[11px] font-medium px-2.5 h-9 sm:h-6 py-0.5 rounded transition-colors ${
                   (configMap[cfg.key]?.sendUpdates ?? "all") === value
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
@@ -2514,7 +2489,7 @@ function ConnectorsList() {
         type="button"
         onClick={() => void openMsGraphAppEditor(sel)}
         disabled={connecting === rid}
-        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-50"
+        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-50 min-h-11 sm:min-h-0"
       >
         {tc.msgraph.editLink}
       </button>
@@ -2543,8 +2518,8 @@ function ConnectorsList() {
           value={msgraphAppId}
           onChange={(e) => setMsGraphAppId(e.target.value)}
           autoComplete="off"
-          autoFocus
-          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          autoFocus={!isPhoneViewport()}
+          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
         <input
           type="password"
@@ -2552,7 +2527,7 @@ function ConnectorsList() {
           value={msgraphAppSecret}
           onChange={(e) => setMsGraphAppSecret(e.target.value)}
           autoComplete="off"
-          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
         <input
           type="text"
@@ -2561,7 +2536,7 @@ function ConnectorsList() {
           onChange={(e) => setMsGraphTenantId(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") saveMsGraphApp(sel); }}
           autoComplete="off"
-          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
         <p className="text-[11px] text-muted-foreground">{tc.msgraph.tenantHelp}</p>
         {/* Where the values come from. The admin has to register the app and
@@ -2590,14 +2565,14 @@ function ConnectorsList() {
         <div className="flex gap-2">
           <button
             onClick={closeMsGraphForm}
-            className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+            className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
           >
             {tc.cancel}
           </button>
           <button
             onClick={() => saveMsGraphApp(sel)}
             disabled={!msgraphAppId.trim() || !msgraphAppSecret.trim() || connecting === rid}
-            className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+            className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
           >
             {connecting === rid ? tc.msgraph.connectingBtn : tc.msgraph.connectBtn}
           </button>
@@ -2715,7 +2690,7 @@ function ConnectorsList() {
       });
       if (res.ok) {
         const data = (await res.json().catch(() => ({}))) as { connectorInstanceId?: string };
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
         setShowShopifyForm(null);
         setShopifyDomain(""); setShopifyToken(""); setShopifyConnectOpts(null);
         setShopifyResolved(null); setShopifyResolving(false); setShopifyResolveFailed(false);
@@ -2769,7 +2744,7 @@ function ConnectorsList() {
       });
       if (response.ok) {
         const data = (await response.json().catch(() => ({}))) as { connectorInstanceId?: string };
-        setConnectors((prev) => prev.map((item) => (isSameRow(item, c) ? { ...item, connected: true } : item)));
+        mutateConnectors((prev) => prev.map((item) => (isSameRow(item, c) ? { ...item, connected: true } : item)));
         closeWordPressForm();
         setSelected(rid);
         loadTools(c.id);
@@ -2820,7 +2795,7 @@ function ConnectorsList() {
       });
       if (response.ok) {
         const data = (await response.json().catch(() => ({}))) as { connectorInstanceId?: string };
-        setConnectors((prev) => prev.map((item) => (isSameRow(item, c) ? { ...item, connected: true } : item)));
+        mutateConnectors((prev) => prev.map((item) => (isSameRow(item, c) ? { ...item, connected: true } : item)));
         closeGscForm();
         setSelected(rid);
         loadTools(c.id);
@@ -2862,7 +2837,7 @@ function ConnectorsList() {
         }),
       });
       if (res.ok) {
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
         setSelected(rid);
         setShowGcsForm(null);
         setGcsKey(""); setGcsBucket(""); setGcsProjectId("");
@@ -2944,7 +2919,7 @@ function ConnectorsList() {
       });
       if (res.ok) {
         const data = (await res.json().catch(() => ({}))) as { connectorInstanceId?: string };
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
         setSelected(rid);
         setShowImapForm(null);
         setImapEmail(""); setImapPassword(""); setImapPreset(null); setImapResolved(false);
@@ -2996,7 +2971,7 @@ function ConnectorsList() {
         }),
       });
       if (res.ok) {
-        setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+        mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
         setSelected(rid);
         setShowS3Form(null);
         setS3Bucket(""); setS3Region(""); setS3Endpoint(""); setS3AccessKeyId(""); setS3SecretKey("");
@@ -3111,7 +3086,7 @@ function ConnectorsList() {
         return;
       }
 
-      setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+      mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
       setSelected(rid);
       setShowLocalForm(null);
       setLocalDirPath("");
@@ -3255,7 +3230,7 @@ function ConnectorsList() {
         body: JSON.stringify(built.payload),
       });
       if (res.ok) {
-        setConnectors((prev) => prev.map((c) => c.id === id
+        mutateConnectors((prev) => prev.map((c) => c.id === id
           ? {
               ...c,
               name: editName.trim(),
@@ -3296,7 +3271,7 @@ function ConnectorsList() {
       });
       if (res.ok) {
         const data = await res.json();
-        setConnectors((prev) => [...prev, {
+        mutateConnectors((prev) => [...prev, {
           id: data.id,
           name: newName.trim(),
           url: newUrl.trim(),
@@ -3305,6 +3280,9 @@ function ConnectorsList() {
           authType: newAuthType,
           authHeaderName: newAuthType === "custom_header" ? newHeaderName.trim() : undefined,
         }]);
+        // The optimistic row has no instance UUID yet; the server's copy
+        // replaces it behind the paint.
+        void refreshConnectors();
         // Probe right away so the row shows a real connection state
         // instead of a silent "Disconnected" the user has to chase.
         void handleTestConnection(data.id);
@@ -3325,7 +3303,7 @@ function ConnectorsList() {
       const res = await authFetch(`${API_URL}/api/connectors/custom/${id}/test`, { method: "POST" });
       if (!res.ok) throw new Error();
       const data = await res.json() as { ok: boolean; toolCount?: number; error?: string; connected: boolean };
-      setConnectors((prev) => prev.map((c) => (c.id === id ? { ...c, connected: data.connected } : c)));
+      mutateConnectors((prev) => prev.map((c) => (c.id === id ? { ...c, connected: data.connected } : c)));
       setProbeState((prev) => ({
         ...prev,
         [id]: data.ok ? { status: "ok", toolCount: data.toolCount } : { status: "fail", error: data.error },
@@ -3370,10 +3348,11 @@ function ConnectorsList() {
         body: JSON.stringify({ workspaceId }),
       });
       if (!res.ok) return false;
-      setConnectors((prev) =>
+      mutateConnectors((prev) =>
         prev.map((x) => (isSameRow(x, c) ? { ...x, connected: false } : x)),
       );
       setSelected(null);
+      setDetailOpen(false);
       fetchConnectors();
       return true;
     } catch {
@@ -3383,8 +3362,9 @@ function ConnectorsList() {
 
   async function handleRemoveCustom(c: Connector) {
     if (!(await confirmConnectorRemoval(c))) return;
-    setConnectors((prev) => prev.filter((x) => !isSameRow(x, c)));
+    mutateConnectors((prev) => prev.filter((x) => !isSameRow(x, c)));
     setSelected(null);
+    setDetailOpen(false);
     // Custom rows are keyed by their provider UUID (== `c.id`), unique per row.
     try { await authFetch(`${API_URL}/api/connectors/custom/${c.id}`, { method: "DELETE" }); } catch {}
   }
@@ -3398,8 +3378,9 @@ function ConnectorsList() {
       await disconnectStorageConnector(c);
       return;
     }
-    setConnectors((prev) => prev.filter((x) => !isSameRow(x, c)));
+    mutateConnectors((prev) => prev.filter((x) => !isSameRow(x, c)));
     setSelected(null);
+    setDetailOpen(false);
     const url = c.connectorInstanceId
       ? `${API_URL}/api/connectors/instances/${c.connectorInstanceId}`
       : `${API_URL}/api/connectors/${c.id}`;
@@ -3435,8 +3416,9 @@ function ConnectorsList() {
         { method: "DELETE" },
       );
       if (!res.ok) throw new Error();
-      setConnectors((prev) => prev.filter((x) => !isSameRow(x, c)));
+      mutateConnectors((prev) => prev.filter((x) => !isSameRow(x, c)));
       setSelected(null);
+      setDetailOpen(false);
       fetchConnectors();
     } catch {
       setWsManageError(tc.wsManageError);
@@ -3507,7 +3489,7 @@ function ConnectorsList() {
       if (!res.ok) throw new Error();
       setWsReconnectId(null);
       setWsReconnectSecret("");
-      setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
+      mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, connected: true } : x)));
       fetchConnectors();
     } catch {
       setWsManageError(tc.wsReconnectError);
@@ -3548,7 +3530,7 @@ function ConnectorsList() {
       };
       const nextLabel = data.instance?.label ?? undefined;
       const nextSensitivity = data.instance?.sensitivity ?? wsEditSensitivity;
-      setConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, label: nextLabel ?? x.label } : x)));
+      mutateConnectors((prev) => prev.map((x) => (isSameRow(x, c) ? { ...x, label: nextLabel ?? x.label } : x)));
       setWsOwnedSensitivity((prev) => ({ ...prev, [iid]: nextSensitivity }));
       setWsEditingId(null);
     } catch {
@@ -3713,8 +3695,12 @@ function ConnectorsList() {
     setAddAuthError(null); setShowAdvanced(false);
   }
 
+  // Cold entry only (nothing cached for this workspace + viewer): the same
+  // rail skeleton the route's `loading.tsx` draws, so the frame does not
+  // change shape when the rows land. A revisit never reaches this branch -
+  // the cached rows paint and revalidate behind the paint (N4 / N5).
   if (loading) {
-    return <div className="text-sm text-muted-foreground py-10 text-center">{tc.loading}</div>;
+    return <RailSurfaceSkeleton chrome={false} />;
   }
 
   return (
@@ -3737,16 +3723,16 @@ function ConnectorsList() {
           <input
             type="text" placeholder={tc.namePlaceholder} value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
           <input
             type="url" placeholder={tc.remoteUrlPlaceholder} value={newUrl}
             onChange={(e) => setNewUrl(e.target.value)}
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
           <button
             type="button" onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors min-h-11 sm:min-h-0"
           >
             <ChevronIcon open={showAdvanced} />
             {tc.advancedSettings}
@@ -3754,7 +3740,7 @@ function ConnectorsList() {
           <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${showAdvanced ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
             <div className="overflow-hidden">
               <ConnectorAuthSection
-                fieldClass="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                fieldClass="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
                 authType={newAuthType} onAuthType={setNewAuthType}
                 oauthId={newOauthId} onOauthId={setNewOauthId}
                 oauthSecret={newOauthSecret} onOauthSecret={setNewOauthSecret}
@@ -3770,11 +3756,11 @@ function ConnectorsList() {
             {tc.trustWarning}
           </p>
           <div className="flex items-center gap-2 justify-end">
-            <button onClick={resetAddForm} className="text-xs font-medium border border-border px-4 py-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors">
+            <button onClick={resetAddForm} className="text-xs font-medium border border-border px-4 py-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0">
               {tc.cancel}
             </button>
             <button onClick={handleAddCustom} disabled={!newName.trim() || !newUrl.trim()}
-              className="text-xs font-medium bg-action text-action-foreground px-4 py-1.5 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors">
+              className="text-xs font-medium bg-action text-action-foreground px-4 py-1.5 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0">
               {tc.add}
             </button>
           </div>
@@ -3807,17 +3793,24 @@ function ConnectorsList() {
           <div className="min-w-0">{gdriveError}</div>
           <button
             onClick={() => setGdriveError(null)}
-            className="text-[11px] opacity-60 hover:opacity-100 shrink-0"
+            className="text-[11px] opacity-60 hover:opacity-100 shrink-0 min-h-11 sm:min-h-0 px-2"
           >
             {tc.dismiss}
           </button>
         </div>
       )}
 
-      {/* ── Master-detail: grouped rail + selected connector panel ── */}
+      {/* ── Master-detail: grouped rail + selected connector panel ──
+          Below `md` the two are one pane at a time (`detailOpen`): the rail
+          yields to the detail once a row is tapped, and Back returns. */}
       <div className="flex flex-col gap-6 md:flex-row">
         {/* Rail — active rows plus the curated Available shortlist. */}
-        <aside className="w-full md:w-64 shrink-0 self-start">
+        <aside
+          className={cn(
+            "w-full md:w-64 shrink-0 self-start",
+            detailOpen && "max-md:hidden",
+          )}
+        >
           <nav aria-label={tc.railAriaLabel} className="flex flex-col gap-3">
             {railGroups.map((g) => (
               <div key={g.id}>
@@ -3835,10 +3828,13 @@ function ConnectorsList() {
                       <li key={rid}>
                         <button
                           type="button"
-                          onClick={() => setSelected(rid)}
+                          onClick={() => {
+                            setSelected(rid);
+                            setDetailOpen(true);
+                          }}
                           aria-current={isSel ? "true" : undefined}
                           className={cn(
-                            "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+                            "flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 sm:py-1.5 text-left text-sm transition-colors",
                             isSel
                               ? "bg-muted font-medium text-foreground"
                               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -3872,7 +3868,7 @@ function ConnectorsList() {
                   <button
                     type="button"
                     onClick={() => setShowBrowse(true)}
-                    className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed border-border px-2 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/60 hover:text-foreground"
+                    className="mt-1 flex w-full items-center gap-2 rounded-md border border-dashed border-border px-2 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:bg-muted/60 hover:text-foreground min-h-11 sm:min-h-0"
                   >
                     <span
                       aria-hidden
@@ -3896,8 +3892,19 @@ function ConnectorsList() {
           </nav>
         </aside>
 
-        {/* Detail — the selected connector's management panel. */}
-        <div className="min-w-0 flex-1">
+        {/* Detail — the selected connector's management panel. On a phone it
+            is the second screen, with a Back row above the header (M1). */}
+        <div
+          ref={detailRef}
+          className={cn("min-w-0 flex-1", !detailOpen && "max-md:hidden")}
+        >
+          <div className="mb-3 md:hidden">
+            <BackButton
+              label={tc.backToList}
+              onClick={() => setDetailOpen(false)}
+              className="min-h-11"
+            />
+          </div>
           {!sel ? (
             <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
               {tc.selectPrompt}
@@ -3985,7 +3992,7 @@ function ConnectorsList() {
                           setWsReconnectSecret("");
                           setWsManageError(null);
                         }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.reconnectBtn}
                       </button>
@@ -3998,7 +4005,7 @@ function ConnectorsList() {
                         setWsEditSensitivity(sensitivity);
                         setWsManageError(null);
                       }}
-                      className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+                      className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors min-h-11 sm:min-h-0"
                     >
                       {tc.editDetailsBtn}
                     </button>
@@ -4013,7 +4020,7 @@ function ConnectorsList() {
                         type="button"
                         onClick={() => void handleSyncLocal(sel)}
                         disabled={connecting === rid}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-50"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-50 min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.local.syncingBtn : tc.local.syncBtn}
                       </button>
@@ -4021,7 +4028,7 @@ function ConnectorsList() {
                     <button
                       type="button"
                       onClick={() => handleRemoveWorkspaceConnector(sel)}
-                      className="text-xs font-medium text-destructive/60 hover:text-destructive transition-colors px-2 py-1"
+                      className="text-xs font-medium text-destructive/60 hover:text-destructive transition-colors px-2 py-1 min-h-11 sm:min-h-0"
                     >
                       {connectorRemovalConfirmationModel(sel).action === "disconnect"
                         ? tc.disconnectBtn
@@ -4053,7 +4060,7 @@ function ConnectorsList() {
                             if (!configMap[cfg.key]) void loadConfig(cfg);
                           }
                         }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.tabSettings}
                       </button>
@@ -4067,7 +4074,7 @@ function ConnectorsList() {
                       <button
                         onClick={() => handleWsOauthReconnect(sel)}
                         disabled={connecting === rid}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-foreground hover:bg-muted transition-colors disabled:opacity-50 min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.connectingBtn : tc.reconnectBtn}
                       </button>
@@ -4084,20 +4091,20 @@ function ConnectorsList() {
                         value={wsReconnectSecret}
                         onChange={(e) => setWsReconnectSecret(e.target.value)}
                         onKeyDown={(e) => { if (e.key === "Enter") handleWsReconnect(sel); }}
-                        className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        autoFocus
+                        className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        autoFocus={!isPhoneViewport()}
                       />
                       <div className="flex gap-2">
                         <button
                           onClick={() => { setWsReconnectId(null); setWsReconnectSecret(""); }}
-                          className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                          className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                         >
                           {tc.cancel}
                         </button>
                         <button
                           onClick={() => handleWsReconnect(sel)}
                           disabled={!wsReconnectSecret.trim() || connecting === rid}
-                          className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                          className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                         >
                           {connecting === rid ? tc.savingBtn : tc.saveBtn}
                         </button>
@@ -4116,13 +4123,13 @@ function ConnectorsList() {
                           placeholder={tc.nicknamePlaceholder}
                           value={wsEditLabel}
                           onChange={(e) => setWsEditLabel(e.target.value)}
-                          className="w-full text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full text-[16px] md:text-sm bg-background border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                       </div>
                       <div className="space-y-1">
                         <label className="text-[11px] font-medium text-muted-foreground">{tc.editSensitivityLabel}</label>
                         <Select value={wsEditSensitivity} onValueChange={(v) => { if (v) setWsEditSensitivity(v as SensitivityTier); }}>
-                          <SelectTrigger size="sm" className="text-sm">
+                          <SelectTrigger size="sm" className="text-[16px] md:text-sm">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -4136,13 +4143,13 @@ function ConnectorsList() {
                       <div className="flex justify-end gap-2">
                         <button
                           onClick={() => setWsEditingId(null)}
-                          className="text-xs font-medium border border-border px-4 py-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                          className="text-xs font-medium border border-border px-4 py-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                         >
                           {tc.cancel}
                         </button>
                         <button
                           onClick={() => handleWsSaveDetails(sel)}
-                          className="text-xs font-medium bg-action text-action-foreground px-4 py-1.5 rounded-lg hover:bg-action/90 transition-colors"
+                          className="text-xs font-medium bg-action text-action-foreground px-4 py-1.5 rounded-lg hover:bg-action/90 transition-colors min-h-11 sm:min-h-0"
                         >
                           {tc.saveBtn}
                         </button>
@@ -4238,7 +4245,7 @@ function ConnectorsList() {
             const canRename = !!sel.connectorInstanceId && !sel.custom && !builtin;
             const isRenaming = canRename && renamingId === sel.connectorInstanceId;
             const renameIconBtnCls =
-              "inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+              "inline-flex size-9 sm:size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
             const subtitle =
               sel.connected && sel.connectedEmail
                 ? sel.connectedEmail
@@ -4273,8 +4280,8 @@ function ConnectorsList() {
                                :focus-visible ring (`focus-visible:shadow-none`
                                — `outline-none` alone never silences it; see
                                globals.css → ":focus-visible"). */
-                            className="w-56 max-w-full bg-transparent text-[15px] font-semibold tracking-tight border-b border-border focus:border-primary focus:outline-none focus-visible:shadow-none"
-                            autoFocus
+                            className="w-56 max-w-full bg-transparent text-[16px] md:text-[15px] font-semibold tracking-tight border-b border-border focus:border-primary focus:outline-none focus-visible:shadow-none"
+                            autoFocus={!isPhoneViewport()}
                           />
                           <button
                             type="button"
@@ -4450,7 +4457,7 @@ function ConnectorsList() {
                     <button
                       onClick={() => handleConnect(sel)}
                       disabled={connecting === rid}
-                      className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 transition-colors disabled:opacity-50"
+                      className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 transition-colors disabled:opacity-50 min-h-11 sm:min-h-0"
                     >
                       {connecting === rid ? tc.connectingBtn : tc.connectBtn}
                     </button>
@@ -4465,7 +4472,7 @@ function ConnectorsList() {
                   {sel.connected && sel.addable && sel.isPrimary && (
                     <button
                       onClick={() => handleAddAnother(sel)}
-                      className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
+                      className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors min-h-11 sm:min-h-0"
                     >
                       {tc.addAnother}
                     </button>
@@ -4474,7 +4481,7 @@ function ConnectorsList() {
                     <button
                       onClick={() => void handleSyncLocal(sel)}
                       disabled={connecting === rid}
-                      className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-50"
+                      className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors disabled:opacity-50 min-h-11 sm:min-h-0"
                     >
                       {connecting === rid ? tc.local.syncingBtn : tc.local.syncBtn}
                     </button>
@@ -4490,7 +4497,7 @@ function ConnectorsList() {
                   {(sel.custom || sel.connectorInstanceId) && (
                     <button
                       onClick={() => sel.custom ? handleRemoveCustom(sel) : handleRemove(sel)}
-                      className="text-xs font-medium text-destructive/60 hover:text-destructive transition-colors px-2 py-1"
+                      className="text-xs font-medium text-destructive/60 hover:text-destructive transition-colors px-2 py-1 min-h-11 sm:min-h-0"
                     >
                       {connectorRemovalConfirmationModel(sel).action === "disconnect"
                         ? tc.disconnectBtn
@@ -4517,7 +4524,7 @@ function ConnectorsList() {
                           onClick={open}
                           disabled={isOpening || disabled}
                           title={disabledReason}
-                          className="text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 px-3 py-1 rounded-lg transition-colors disabled:opacity-40"
+                          className="text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 px-3 py-1 rounded-lg transition-colors disabled:opacity-40 min-h-11 sm:min-h-0"
                         >
                           {isOpening ? tc.gdrivePanel.opening : tc.addFilesFromDrive}
                         </button>
@@ -4601,7 +4608,7 @@ function ConnectorsList() {
                           value={gdriveAppId}
                           onChange={(e) => setGdriveAppId(e.target.value)}
                           autoComplete="off"
-                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <input
                           type="password"
@@ -4610,7 +4617,7 @@ function ConnectorsList() {
                           onChange={(e) => setGdriveAppSecret(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") void saveGDriveByoApp(sel); }}
                           autoComplete="off"
-                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <input
                           type="text"
@@ -4619,7 +4626,7 @@ function ConnectorsList() {
                           value={gdriveProjectNumber}
                           onChange={(e) => setGdriveProjectNumber(e.target.value)}
                           autoComplete="off"
-                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <input
                           type="password"
@@ -4628,14 +4635,14 @@ function ConnectorsList() {
                           onChange={(e) => setGdrivePickerApiKey(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") void saveGDriveByoApp(sel); }}
                           autoComplete="off"
-                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         {gdriveConnectError && <p className="text-xs text-destructive">{gdriveConnectError}</p>}
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
                             onClick={() => { setGdriveConnectStep("choice"); setGdriveConnectError(null); }}
-                            className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted"
+                            className="rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-muted min-h-11 sm:min-h-0"
                           >
                             {tc.gdriveConnect.backBtn}
                           </button>
@@ -4649,14 +4656,14 @@ function ConnectorsList() {
                               !gdrivePickerApiKey.trim() ||
                               connecting === rid
                             }
-                            className="rounded-lg bg-action px-3 py-1 text-xs font-medium text-action-foreground hover:bg-action/90 disabled:opacity-50"
+                            className="rounded-lg bg-action px-3 py-1 text-xs font-medium text-action-foreground hover:bg-action/90 disabled:opacity-50 min-h-11 sm:min-h-0"
                           >
                             {connecting === rid ? tc.gdriveConnect.connectingBtn : tc.gdriveConnect.connectBtn}
                           </button>
                           <button
                             type="button"
                             onClick={closeGDriveConnect}
-                            className="px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                            className="px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground min-h-11 sm:min-h-0"
                           >
                             {tc.cancel}
                           </button>
@@ -4691,20 +4698,20 @@ function ConnectorsList() {
                       value={patInput}
                       onChange={(e) => setPatInput(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") handleSavePat(sel); }}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setShowPatInput(null); setPatInput(""); }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSavePat(sel)}
                         disabled={!patInput.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.savingBtn : tc.saveBtn}
                       </button>
@@ -4724,8 +4731,8 @@ function ConnectorsList() {
                       value={wordpressSiteUrl}
                       onChange={(event) => { setWordpressSiteUrl(event.target.value); setWordpressError(null); }}
                       autoComplete="url"
-                      autoFocus
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="text"
@@ -4733,7 +4740,7 @@ function ConnectorsList() {
                       value={wordpressUsername}
                       onChange={(event) => { setWordpressUsername(event.target.value); setWordpressError(null); }}
                       autoComplete="username"
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="password"
@@ -4742,7 +4749,7 @@ function ConnectorsList() {
                       onChange={(event) => { setWordpressApplicationPassword(event.target.value); setWordpressError(null); }}
                       onKeyDown={(event) => { if (event.key === "Enter") handleSaveWordPress(sel); }}
                       autoComplete="off"
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <button
                       onClick={() => setWordpressShowHelp((visible) => !visible)}
@@ -4760,14 +4767,14 @@ function ConnectorsList() {
                     <div className="flex gap-2">
                       <button
                         onClick={closeWordPressForm}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveWordPress(sel)}
                         disabled={!wordpressSiteUrl.trim() || !wordpressUsername.trim() || !wordpressApplicationPassword.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.wordpress.verifyingBtn : tc.wordpress.connectBtn}
                       </button>
@@ -4783,9 +4790,9 @@ function ConnectorsList() {
                       onChange={(event) => { setGscKeyJson(event.target.value); setGscError(null); }}
                       autoComplete="off"
                       spellCheck={false}
-                      autoFocus
+                      autoFocus={!isPhoneViewport()}
                       rows={5}
-                      className="w-full text-xs font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y"
+                      className="w-full text-[16px] md:text-xs font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y"
                     />
                     <input
                       type="text"
@@ -4795,7 +4802,7 @@ function ConnectorsList() {
                       onKeyDown={(event) => { if (event.key === "Enter") handleSaveGsc(sel); }}
                       autoComplete="off"
                       spellCheck={false}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <button
                       onClick={() => setGscShowHelp((visible) => !visible)}
@@ -4814,14 +4821,14 @@ function ConnectorsList() {
                     <div className="flex gap-2">
                       <button
                         onClick={closeGscForm}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveGsc(sel)}
                         disabled={!gscKeyJson.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.gsc.verifyingBtn : tc.gsc.connectBtn}
                       </button>
@@ -4837,8 +4844,8 @@ function ConnectorsList() {
                       value={shopifyDomain}
                       onChange={(e) => handleShopifyDomainChange(e.target.value)}
                       onBlur={handleShopifyDomainBlur}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     {/* Branded-domain resolution feedback: detecting → detected → fallback hint. */}
                     {shopifyResolving ? (
@@ -4859,7 +4866,7 @@ function ConnectorsList() {
                       value={shopifyAppId}
                       onChange={(e) => setShopifyAppId(e.target.value)}
                       autoComplete="off"
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="password"
@@ -4868,7 +4875,7 @@ function ConnectorsList() {
                       onChange={(e) => setShopifyAppSecret(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") startShopifyByoConnect(sel); }}
                       autoComplete="off"
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     {/* Where the credentials come from — the imap
                         passwordHelpTitle disclosure pattern. Needed: the merchant
@@ -4902,14 +4909,14 @@ function ConnectorsList() {
                           setShopifyResolved(null); setShopifyResolving(false); setShopifyResolveFailed(false);
                           setShopifyShowHelp(false); setShopifyShowPaste(false);
                         }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => startShopifyByoConnect(sel)}
                         disabled={!shopifyDomain.trim() || !shopifyAppId.trim() || !shopifyAppSecret.trim() || connecting === rid || shopifyResolving}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.shopify.connectingBtn : tc.shopify.appConnectBtn}
                       </button>
@@ -4933,13 +4940,13 @@ function ConnectorsList() {
                           onChange={(e) => setShopifyToken(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") handleSaveShopifyToken(sel); }}
                           autoComplete="off"
-                          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <p className="text-[11px] text-muted-foreground">{tc.shopify.tokenHelpNotSecret}</p>
                         <button
                           onClick={() => handleSaveShopifyToken(sel)}
                           disabled={!shopifyDomain.trim() || !shopifyToken.trim() || connecting === rid || shopifyResolving}
-                          className="text-xs font-medium border border-border px-3 py-1 rounded-lg hover:bg-muted disabled:opacity-50 transition-colors"
+                          className="text-xs font-medium border border-border px-3 py-1 rounded-lg hover:bg-muted disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                         >
                           {connecting === rid ? tc.shopify.verifyingBtn : tc.shopify.connectBtn}
                         </button>
@@ -4958,22 +4965,22 @@ function ConnectorsList() {
                       value={gcsKey}
                       onChange={(e) => setGcsKey(e.target.value)}
                       rows={4}
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     <input
                       type="text"
                       placeholder={tc.gcs.bucketPlaceholder}
                       value={gcsBucket}
                       onChange={(e) => setGcsBucket(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="text"
                       placeholder={tc.gcs.projectIdPlaceholder}
                       value={gcsProjectId}
                       onChange={(e) => setGcsProjectId(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p className="text-[11px] text-muted-foreground">{tc.gcs.leastPriv}</p>
                     <p className="text-[11px] text-muted-foreground">{tc.gcs.regionNote}</p>
@@ -4981,14 +4988,14 @@ function ConnectorsList() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setShowGcsForm(null); setGcsKey(""); setGcsBucket(""); setGcsProjectId(""); setGcsError(null); }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveGcs(sel)}
                         disabled={!gcsKey.trim() || !gcsBucket.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.gcs.validatingBtn : tc.gcs.connectBtn}
                       </button>
@@ -5007,22 +5014,22 @@ function ConnectorsList() {
                       placeholder={tc.s3.bucketPlaceholder}
                       value={s3Bucket}
                       onChange={(e) => setS3Bucket(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     <input
                       type="text"
                       placeholder={tc.s3.regionPlaceholder}
                       value={s3Region}
                       onChange={(e) => setS3Region(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="text"
                       placeholder={tc.s3.endpointPlaceholder}
                       value={s3Endpoint}
                       onChange={(e) => setS3Endpoint(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="text"
@@ -5030,7 +5037,7 @@ function ConnectorsList() {
                       value={s3AccessKeyId}
                       onChange={(e) => setS3AccessKeyId(e.target.value)}
                       autoComplete="off"
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="password"
@@ -5038,7 +5045,7 @@ function ConnectorsList() {
                       value={s3SecretKey}
                       onChange={(e) => setS3SecretKey(e.target.value)}
                       autoComplete="off"
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p className="text-[11px] text-muted-foreground">{tc.s3.leastPriv}</p>
                     <p className="text-[11px] text-muted-foreground">{tc.s3.endpointNote}</p>
@@ -5046,14 +5053,14 @@ function ConnectorsList() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setShowS3Form(null); setS3Bucket(""); setS3Region(""); setS3Endpoint(""); setS3AccessKeyId(""); setS3SecretKey(""); setS3Error(null); }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveS3(sel)}
                         disabled={!s3Bucket.trim() || !s3AccessKeyId.trim() || !s3SecretKey.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.s3.validatingBtn : tc.s3.connectBtn}
                       </button>
@@ -5069,22 +5076,22 @@ function ConnectorsList() {
                       placeholder={tc.local.pathPlaceholder}
                       value={localDirPath}
                       onChange={(e) => setLocalDirPath(e.target.value)}
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     <p className="text-[11px] text-muted-foreground">{tc.local.pathNote}</p>
                     {localDirError && <p className="text-xs text-destructive">{localDirError}</p>}
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setShowLocalForm(null); setLocalDirPath(""); setLocalDirError(null); }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveLocal(sel)}
                         disabled={!workspaceId || !localDirPath.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.local.scanningBtn : tc.local.connectBtn}
                       </button>
@@ -5100,43 +5107,43 @@ function ConnectorsList() {
                       placeholder={tc.cli.labelPlaceholder}
                       value={newCliLabel}
                       onChange={(e) => setNewCliLabel(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     <input
                       type="text"
                       placeholder={tc.cli.pathPlaceholder}
                       value={newCliBinaryPath}
                       onChange={(e) => setNewCliBinaryPath(e.target.value)}
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="text"
                       placeholder={tc.cli.argsPlaceholder}
                       value={newCliArgs}
                       onChange={(e) => setNewCliArgs(e.target.value)}
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <input
                       type="text"
                       placeholder={tc.cli.cwdPlaceholder}
                       value={newCliCwd}
                       onChange={(e) => setNewCliCwd(e.target.value)}
-                      className="w-full text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm font-mono bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p className="text-[11px] text-muted-foreground">{tc.cli.pathNote}</p>
                     {newCliError && <p className="text-xs text-destructive">{newCliError}</p>}
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setShowCliForm(null); setNewCliLabel(""); setNewCliBinaryPath(""); setNewCliArgs(""); setNewCliCwd(""); setNewCliError(null); }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveCli(sel)}
                         disabled={!newCliLabel.trim() || !newCliBinaryPath.trim() || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.cli.connectingBtn : tc.cli.connectBtn}
                       </button>
@@ -5165,8 +5172,8 @@ function ConnectorsList() {
                       value={imapEmail}
                       onChange={(e) => { setImapEmail(e.target.value); setImapResolved(false); setImapPreset(null); }}
                       onBlur={() => { if (!imapResolved) void handleResolveImapPreset(); }}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     {imapDetecting && <p className="text-[11px] text-muted-foreground">{tc.imap.detecting}</p>}
                     {!imapDetecting && imapPreset?.presetId === "alimail" && (
@@ -5185,7 +5192,7 @@ function ConnectorsList() {
                       onChange={(e) => setImapPassword(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") handleSaveImap(sel); }}
                       autoComplete="off"
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <button
                       onClick={() => setImapShowHelp((v) => !v)}
@@ -5217,7 +5224,7 @@ function ConnectorsList() {
                           placeholder={tc.imap.imapHostPlaceholder}
                           value={imapHostIn}
                           onChange={(e) => setImapHostIn(e.target.value)}
-                          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <input
                           type="text"
@@ -5225,14 +5232,14 @@ function ConnectorsList() {
                           placeholder={tc.imap.imapPortPlaceholder}
                           value={imapPortIn}
                           onChange={(e) => setImapPortIn(e.target.value)}
-                          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <input
                           type="text"
                           placeholder={tc.imap.smtpHostPlaceholder}
                           value={imapSmtpHostIn}
                           onChange={(e) => setImapSmtpHostIn(e.target.value)}
-                          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                         <input
                           type="text"
@@ -5240,7 +5247,7 @@ function ConnectorsList() {
                           placeholder={tc.imap.smtpPortPlaceholder}
                           value={imapSmtpPortIn}
                           onChange={(e) => setImapSmtpPortIn(e.target.value)}
-                          className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                       </div>
                     )}
@@ -5253,14 +5260,14 @@ function ConnectorsList() {
                           setImapShowAdvanced(false); setImapShowHelp(false); setImapError(null);
                           setImapHostIn(""); setImapPortIn("993"); setImapSmtpHostIn(""); setImapSmtpPortIn("465");
                         }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveImap(sel)}
                         disabled={!imapEmail.trim().includes("@") || !imapPassword || connecting === rid}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === rid ? tc.imap.verifyingBtn : tc.imap.connectBtn}
                       </button>
@@ -5278,8 +5285,8 @@ function ConnectorsList() {
                       placeholder={tc.nicknamePlaceholder}
                       value={addLabel}
                       onChange={(e) => setAddLabel(e.target.value)}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      autoFocus
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      autoFocus={!isPhoneViewport()}
                     />
                     <input
                       type="password"
@@ -5287,19 +5294,19 @@ function ConnectorsList() {
                       value={addPat}
                       onChange={(e) => setAddPat(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") handleSaveAddAnother(sel.id); }}
-                      className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <div className="flex gap-2">
                       <button
                         onClick={() => { setAddAnotherFor(null); setAddPat(""); setAddLabel(""); }}
-                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                        className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors min-h-11 sm:min-h-0"
                       >
                         {tc.cancel}
                       </button>
                       <button
                         onClick={() => handleSaveAddAnother(sel.id)}
                         disabled={!addPat.trim() || connecting === `add:${sel.id}`}
-                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+                        className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors min-h-11 sm:min-h-0"
                       >
                         {connecting === `add:${sel.id}` ? tc.savingBtn : tc.addAccountBtn}
                       </button>
@@ -5359,7 +5366,7 @@ function ConnectorsList() {
                           <button
                             type="button"
                             onClick={() => handleRevokeExpose(instanceId)}
-                            className="shrink-0 rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:text-destructive"
+                            className="shrink-0 rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-destructive/30 hover:text-destructive min-h-11 sm:min-h-0"
                           >
                             {tc.exposeRowRevoke}
                           </button>
@@ -5367,7 +5374,7 @@ function ConnectorsList() {
                           <button
                             type="button"
                             onClick={() => handleExpose(instanceId)}
-                            className="shrink-0 rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                            className="shrink-0 rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground min-h-11 sm:min-h-0"
                           >
                             {tc.exposeRowExpose}
                           </button>
@@ -5393,7 +5400,7 @@ function ConnectorsList() {
                             type="button"
                             onClick={() => handleTransfer(sel)}
                             disabled={transferringId === instanceId}
-                            className="shrink-0 rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+                            className="shrink-0 rounded-lg border border-border px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50 min-h-11 sm:min-h-0"
                           >
                             {transferringId === instanceId ? tc.transferringBtn : tc.transferBtn}
                           </button>
@@ -5416,7 +5423,7 @@ function ConnectorsList() {
                           setExpandTab("tools");
                           if (toolKey && !toolsMap[toolKey]) loadTools(sel.id, sel.id === "cli" ? sel.connectorInstanceId : undefined);
                         }}
-                        className={`text-xs font-medium px-3 py-1.5 border-b-2 transition-colors ${expandTab === "tools" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                        className={`text-xs font-medium px-3 py-3 sm:py-1.5 border-b-2 transition-colors ${expandTab === "tools" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                       >
                         {tc.tabTools}
                       </button>
@@ -5430,7 +5437,7 @@ function ConnectorsList() {
                               if (!configMap[cfg.key]) void loadConfig(cfg);
                             }
                           }}
-                          className={`text-xs font-medium px-3 py-1.5 border-b-2 transition-colors ${expandTab === "settings" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                          className={`text-xs font-medium px-3 py-3 sm:py-1.5 border-b-2 transition-colors ${expandTab === "settings" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                         >
                           {tc.tabSettings}
                         </button>

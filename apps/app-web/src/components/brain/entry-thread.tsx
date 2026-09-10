@@ -681,15 +681,17 @@ export function EntryThread({
               }
             }}
             placeholder={review.askInputPlaceholder}
-            className="max-h-40 flex-1 resize-none field-sizing-content bg-transparent text-sm outline-none focus-visible:shadow-none placeholder:text-muted-foreground/60"
+            className="max-h-40 flex-1 resize-none field-sizing-content bg-transparent text-[16px] md:text-sm outline-none focus-visible:shadow-none placeholder:text-muted-foreground/60"
           />
+          {/* The soft keyboard's return inserts a newline, so the tap target
+              is the touch path: `size-11 sm:size-6` (C 16 / M3). */}
           {busy && (
             <button
               type="button"
               onClick={stop}
               aria-label={labels.threadStop}
               title={labels.threadStop}
-              className="mb-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/80 text-background transition-opacity hover:opacity-90"
+              className="mb-0.5 inline-flex size-11 sm:size-6 shrink-0 items-center justify-center rounded-full bg-foreground/80 text-background transition-opacity hover:opacity-90"
             >
               <Square className="size-2.5" fill="currentColor" aria-hidden />
             </button>
@@ -703,7 +705,7 @@ export function EntryThread({
             aria-label={busy ? tQueue.send : review.send}
             title={busy ? tQueue.send : review.send}
             className={cn(
-              "mb-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full transition-colors",
+              "mb-0.5 inline-flex size-11 sm:size-6 shrink-0 items-center justify-center rounded-full transition-colors",
               !canSend
                 ? "bg-muted text-muted-foreground"
                 : busy

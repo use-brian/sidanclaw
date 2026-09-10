@@ -1,15 +1,31 @@
 "use client";
 
-
 import { publicRuntimeConfig } from "@/lib/runtime-public-config";
-/** First-class Project aggregation page. [COMP:app-web/project-detail] */
+/**
+ * First-class Project aggregation page. [COMP:app-web/project-detail]
+ *
+ * Paints from the surface cache (instant-navigation contract N1): the
+ * project row + the workspace member roster load in parallel under
+ * `project:<wid>:<viewer>:<projectId>`, and the assistant list rides the
+ * shared `assistants:<wid>` slot Studio reads (N7: two hooks, no waterfall).
+ * A revisit renders the last-known page on its first frame; a cold entry
+ * paints a geometry-matched skeleton, never a sentence (N4). No spine
+ * primitive names a project, so mount / visibility revalidation and the
+ * `refresh()` each mutation awaits keep it current. The edit drafts seed once
+ * per project id and are never clobbered by a revalidation (editable-draft
+ * rule).
+ */
 import { use, useEffect, useState } from "react";
 import { BackButton } from "@/components/ui/back-button";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { authFetch } from "@/lib/auth-fetch";
 import { useWorkspaceContext } from "@/lib/workspace-context";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { assistantsCacheKey, projectDetailCacheKey } from "@/lib/surface-prefetch";
+import { listAssistants } from "@/lib/api/studio";
 import {
   getContextProject,
   setContextProjectAssistant,
@@ -21,6 +37,18 @@ import {
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 type Member = { userId: string; userName?: string | null; email?: string | null };
 type Assistant = { id: string; name: string };
+type ProjectBundle = { project: ContextProject; members: Member[] };
+
+/** The project row and the member roster it is checked against, in parallel. */
+async function fetchProjectBundle(workspaceId: string, projectId: string): Promise<ProjectBundle> {
+  const [project, workspace] = await Promise.all([
+    getContextProject(workspaceId, projectId),
+    authFetch(`${API_URL}/api/workspaces/${workspaceId}`).then((response) => response.ok ? response.json() : {}),
+  ]);
+  return { project, members: (workspace as { members?: Member[] }).members ?? [] };
+}
+
+const NO_ASSISTANTS: Assistant[] = [];
 
 const AGGREGATE_LABELS = {
   memories: "projectAggregateMemories",
@@ -45,41 +73,35 @@ export default function ProjectDetailPage({
   const t = useT().contextScope;
   const { role } = useWorkspaceContext();
   const canManage = role === "owner" || role === "admin";
-  const [project, setProject] = useState<ContextProject | null | undefined>(undefined);
-  const [members, setMembers] = useState<Member[]>([]);
-  const [assistants, setAssistants] = useState<Assistant[]>([]);
+  const bundleKey = projectDetailCacheKey(workspaceId, projectId);
+  const bundle = useCachedResource<ProjectBundle>(bundleKey, () => fetchProjectBundle(workspaceId, projectId));
+  const assistantList = useCachedResource(assistantsCacheKey(workspaceId), () => listAssistants(workspaceId));
+  const { refresh: refreshBundle } = bundle;
+  const project = bundle.data?.project ?? null;
+  const members = bundle.data?.members ?? [];
+  const assistants: Assistant[] = assistantList.data ?? NO_ASSISTANTS;
   const [error, setError] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editIcon, setEditIcon] = useState("");
+  // Which project the drafts were seeded from: a revalidated row never
+  // overwrites what the user is typing; a different project reseeds.
+  const [draftFor, setDraftFor] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    setProject(undefined);
-    void Promise.all([
-      getContextProject(workspaceId, projectId),
-      authFetch(`${API_URL}/api/workspaces/${workspaceId}`).then((response) => response.ok ? response.json() : {}),
-      authFetch(`${API_URL}/api/assistants?workspaceId=${encodeURIComponent(workspaceId)}`).then((response) => response.ok ? response.json() : {}),
-    ])
-      .then(([row, workspace, assistantBody]) => {
-        if (cancelled) return;
-        setProject(row);
-        setEditName(row.name);
-        setEditDescription(row.description ?? "");
-        setEditIcon(row.icon ?? "");
-        setMembers((workspace as { members?: Member[] }).members ?? []);
-        setAssistants((assistantBody as { assistants?: Assistant[] }).assistants ?? []);
-      })
-      .catch(() => { if (!cancelled) setProject(null); });
-    return () => { cancelled = true; };
-  }, [workspaceId, projectId]);
+    if (!project || draftFor === project.id) return;
+    setDraftFor(project.id);
+    setEditName(project.name);
+    setEditDescription(project.description ?? "");
+    setEditIcon(project.icon ?? "");
+  }, [project, draftFor]);
 
   async function toggleMember(userId: string, enabled: boolean) {
     if (!project) return;
     setError(null);
     try {
       await setContextProjectMember(workspaceId, project.id, userId, enabled);
-      setProject(await getContextProject(workspaceId, project.id));
+      await refreshBundle();
     } catch (cause) { setError(cause instanceof Error ? cause.message : t.updateFailed); }
   }
 
@@ -88,7 +110,7 @@ export default function ProjectDetailPage({
     setError(null);
     try {
       await setContextProjectAssistant(workspaceId, project.id, assistantId, enabled);
-      setProject(await getContextProject(workspaceId, project.id));
+      await refreshBundle();
     } catch (cause) { setError(cause instanceof Error ? cause.message : t.updateFailed); }
   }
 
@@ -101,19 +123,43 @@ export default function ProjectDetailPage({
         description: editDescription.trim() || null,
         icon: editIcon.trim() || null,
       });
-      setProject({ ...project, ...updated });
+      // The user's own write: patch the cached row so the next visit paints
+      // the post-edit name, never the pre-edit one.
+      mutateSurfaceCache<ProjectBundle>(bundleKey, (previous) => ({
+        ...previous,
+        project: { ...previous.project, ...updated },
+      }));
     } catch (cause) { setError(cause instanceof Error ? cause.message : t.updateFailed); }
   }
 
-  if (project === undefined) {
-    return <div className="p-6 text-sm text-muted-foreground">{t.loading}</div>;
-  }
-  if (project === null) {
+  if (!project) {
+    if (bundle.loading) {
+      // Cold entry only: the page's own geometry (header + aggregate cards).
+      return (
+        <div aria-busy="true" data-testid="project-skeleton" className="h-full w-full overflow-y-auto px-4 py-6 md:px-6">
+          <div className="mx-auto max-w-5xl space-y-6">
+            <BackButton href={`/w/${workspaceId}`} label={t.projectDetailBack} />
+            <div className="space-y-2">
+              <Skeleton className="h-7 w-56 max-w-full" />
+              <Skeleton className="h-4 w-80 max-w-full" />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="rounded-xl border border-border p-4">
+                  <Skeleton className="h-7 w-12" />
+                  <Skeleton className="mt-2 h-3 w-20" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
     return <div className="p-6"><BackButton href={`/w/${workspaceId}`} label={t.projectDetailBack} /><p className="mt-8 text-sm text-muted-foreground">{t.projectDetailNotFound}</p></div>;
   }
 
   return (
-    <div className="h-full w-full overflow-y-auto px-6 py-6">
+    <div className="h-full w-full overflow-y-auto px-4 py-6 md:px-6">
       <div className="mx-auto max-w-5xl space-y-6">
         <BackButton href={`/w/${workspaceId}`} label={t.projectDetailBack} />
         <header>
@@ -132,17 +178,17 @@ export default function ProjectDetailPage({
             <label className="grid gap-1 text-xs text-muted-foreground">
               {t.projectNameLabel}
               <input value={editName} onChange={(event) => setEditName(event.target.value)}
-                className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring" />
+                className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] text-foreground outline-none focus-visible:border-ring md:text-sm" />
             </label>
             <label className="grid gap-1 text-xs text-muted-foreground">
               {t.projectIconLabel}
               <input value={editIcon} onChange={(event) => setEditIcon(event.target.value)} placeholder={t.projectIconPlaceholder}
-                className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring" />
+                className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] text-foreground outline-none focus-visible:border-ring md:text-sm" />
             </label>
             <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
               {t.projectDescriptionLabel}
               <input value={editDescription} onChange={(event) => setEditDescription(event.target.value)}
-                className="h-9 rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus-visible:border-ring" />
+                className="h-9 rounded-lg border border-border bg-background px-3 text-[16px] text-foreground outline-none focus-visible:border-ring md:text-sm" />
             </label>
             <Button size="sm" className="self-start" onClick={() => void saveDetails()} disabled={!editName.trim()}>
               {t.saveProjectDetails}

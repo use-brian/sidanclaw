@@ -60,9 +60,11 @@ type HookValue = ReturnType<typeof useRecordingUpload>;
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 let latest: HookValue | null = null;
+let capture: HookValue;
 
 function Harness() {
   latest = useRecordingUpload("workspace-1", "assistant-1");
+  capture = useRecordingUpload("workspace-1", "assistant-1");
   return null;
 }
 
@@ -84,6 +86,22 @@ afterEach(() => {
 });
 
 describe("[COMP:web/recording-upload] operation ownership", () => {
+  it("allows chat attachments while an independent recorder save is uploading", async () => {
+    let failUpload!: (error: Error) => void;
+    api.startRecordingUpload.mockImplementationOnce(() => new Promise((_resolve, reject) => { failUpload = reject; }));
+    api.startRecordingUpload.mockResolvedValueOnce({ recordingId: "attachment-1" });
+    api.estimateRecording.mockResolvedValue({ durationSeconds: 180, surchargeCredits: 1 });
+    let saving!: ReturnType<HookValue["run"]>;
+    await act(async () => { saving = capture.run(new File(["capture"], "recording.webm", { type: "audio/webm" })); });
+    expect(capture.busy).toBe(true);
+    expect(latest!.busy).toBe(false);
+    await act(async () => { await latest!.stage(new File(["attachment"], "attachment.webm", { type: "audio/webm" })); });
+    expect(latest!.status).toBe("done");
+    expect(capture.status).toBe("uploading");
+    await act(async () => { failUpload(new Error("offline")); await saving; });
+    expect(latest!.status).toBe("done");
+  });
+
   it("rejects an overlapping stage without replacing the active upload state", async () => {
     let resolveUpload!: (value: { recordingId: string }) => void;
     api.startRecordingUpload.mockImplementationOnce(

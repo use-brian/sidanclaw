@@ -153,7 +153,7 @@ export function BlockBookmark({ block, readOnly, onChange }: Props) {
               commitUrl();
             }
           }}
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none md:text-sm"
         />
       </div>
     );

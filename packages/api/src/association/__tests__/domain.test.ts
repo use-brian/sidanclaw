@@ -1,19 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
   associationFingerprint,
-  decodeAssociationCursor,
-  encodeAssociationCursor,
+  ListPageSchema,
   EnquiryCreateSchema,
   EventInputSchema,
   mayTransitionRegistration,
   mayTransitionOrder,
   OrderCreateSchema,
+  ProviderEventInputSchema,
 } from '../domain.js'
 
 const CONTACT_ID = '11111111-1111-4111-8111-111111111111'
 const TICKET_ID = '22222222-2222-4222-8222-222222222222'
 
 describe('[COMP:crm/association-domain] bounded domain contracts', () => {
+  it('requires an exact, bounded monetary identity on normalized provider evidence', () => {
+    const event = { provider: 'fixture', providerReference: 'fictional-object', amountMinor: 1000, currency: 'USD', eventId: 'fictional-event', targetStatus: 'paid', occurredAt: '2026-09-01T00:00:00Z' }
+    expect(ProviderEventInputSchema.safeParse(event).success).toBe(true)
+    for (const patch of [{ amountMinor: undefined }, { amountMinor: -1 }, { amountMinor: Number.MAX_SAFE_INTEGER + 1 }, { currency: 'usd' }, { providerReference: undefined }, { redirectPaid: true }])
+      expect(ProviderEventInputSchema.safeParse({ ...event, ...patch }).success).toBe(false)
+  })
   it('applies deterministic intake defaults', () => {
     const parsed = EnquiryCreateSchema.parse({
       contactId: CONTACT_ID,
@@ -86,12 +92,10 @@ describe('[COMP:crm/association-domain] bounded domain contracts', () => {
     expect(EventInputSchema.safeParse({ ...base, timezone: 'Hong Kong time' }).success).toBe(false)
   })
 
-  it('round-trips opaque list cursors and rejects malformed values', () => {
-    const cursor = {
-      createdAt: '2027-02-02T10:00:00.000Z',
-      id: CONTACT_ID,
-    }
-    expect(decodeAssociationCursor(encodeAssociationCursor(cursor))).toEqual(cursor)
-    expect(decodeAssociationCursor('not-a-cursor')).toBeNull()
+  it('bounds page inputs while leaving query binding to the authoritative store', () => {
+    expect(ListPageSchema.parse({ limit: 7, cursor: 'opaque', createdAfter: '2026-01-01T00:00:00Z' }))
+      .toEqual({ limit: 7, cursor: 'opaque', createdAfter: '2026-01-01T00:00:00Z' })
+    expect(ListPageSchema.safeParse({ limit: 101 }).success).toBe(false)
+    expect(ListPageSchema.safeParse({ cursor: 'x'.repeat(4097) }).success).toBe(false)
   })
 })

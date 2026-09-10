@@ -213,7 +213,9 @@ const MentionPopupImpl: ForwardRefRenderFunction<MentionPopupRef, MentionPopupPr
     <div
       role="listbox"
       aria-label={resolved.aria}
-      className="z-50 w-80 overflow-hidden rounded-md border border-border bg-popover text-sm shadow-lg"
+      // Never wider than a 360px phone minus the clamp margins (responsive
+      // contract M5); the host positions it through `clampPopupRect`.
+      className="z-50 w-[min(20rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border bg-popover text-sm shadow-lg"
       data-mention-popup="root"
     >
       {/* ── Tabs ─────────────────────────────────────────────────── */}

@@ -1,129 +1,200 @@
 // @vitest-environment jsdom
-/**
- * [COMP:app-web/recording-detail] — the standalone recording route.
- *
- * It is a thin composition of the chrome's tested parts, so what is worth
- * asserting here is the composition itself: that it is NOT a second
- * implementation of the player (two copies would drift), that it survives a
- * recording that does not exist, and that it still shows the transcript and
- * action items for a recording with no brief page — which is the only reason
- * this route exists at all, since synthesis is opt-in on `blueprintSlug`.
- */
-
+/** [COMP:app-web/recording-detail] navigation and lifecycle through the shared chrome. */
 import { describe, expect, it, afterEach, beforeEach, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { en } from "@/lib/i18n/dictionaries/en";
+import { dispatchRecordingParticipantsUpdated } from "@/lib/recordings/recording-events";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const getRecording = vi.fn();
+const updateRecordingParticipants = vi.fn();
+const promptDialog = vi.fn();
+let recordingId = "rec-1";
+let search = "";
 vi.mock("@/lib/api/recordings", () => ({
-  getRecording: (...a: unknown[]) => getRecording(...a),
+  getRecording: (...args: unknown[]) => getRecording(...args),
+  updateRecordingParticipants: (...args: unknown[]) => updateRecordingParticipants(...args),
 }));
-
+vi.mock("@/components/ui/prompt-dialog", () => ({
+  promptDialog: (...args: unknown[]) => promptDialog(...args),
+}));
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ workspaceId: "ws-1", recordingId: "rec-1" }),
+  useParams: () => ({ workspaceId: "ws-1", recordingId }),
+  useSearchParams: () => new URLSearchParams(search),
 }));
-
 vi.mock("@/lib/recordings/recording-player-context", () => ({
-  RecordingPlayerProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useRecordingPlayer: () => ({ seekTo: vi.fn(), recordingId: "rec-1" }),
+  RecordingPlayerProvider: ({ children, recordingId }: { children: React.ReactNode; recordingId: string | null }) => (
+    <div data-player-recording={recordingId}>{children}</div>
+  ),
+  useRecordingPlayer: () => ({ seekTo: vi.fn(), recordingId: "rec-1", transcriptFocus: null }),
   RecordingVideoStage: () => <div data-testid="video-stage" />,
 }));
-
-// The shared pieces are asserted by [COMP:app-web/recording-chrome]; here we
-// only care that the route mounts THOSE rather than its own copies.
 vi.mock("@/components/recordings/recording-player-bar", () => ({
   RecordingPlayerBar: () => <div data-testid="player" />,
 }));
 vi.mock("@/components/recordings/transcript-pane", () => ({
-  TranscriptPane: () => <div data-testid="transcript" />,
+  TranscriptPane: ({ participants, onRenameSpeaker }: {
+    participants: { speaker: string; name?: string }[];
+    onRenameSpeaker: (speaker: string) => void;
+  }) => <div data-testid="transcript">
+    {participants.map((p) => <span key={p.speaker}>{p.name ?? p.speaker}</span>)}
+    <button onClick={() => onRenameSpeaker("Speaker 1")}>Rename speaker</button>
+  </div>,
 }));
 vi.mock("@/components/recordings/action-items-rail", () => ({
   ActionItemsRail: () => <div data-testid="actions" />,
 }));
-vi.mock("@/components/recordings/recording-chrome", () => ({
-  HashSeek: () => null,
-}));
 vi.mock("@/components/context/reclassify-context-dialog", () => ({
   ReclassifyContextButton: () => <div data-testid="context-scope" />,
 }));
-
-vi.mock("@/lib/i18n/client", () => ({
-  useT: () => ({
-    recordings: {
-      detailBack: "Back",
-      detailNotFound: "That recording does not exist, or you do not have access to it.",
-      detailTranscript: "Transcript",
-      detailTruncated: "Only part of this recording could be transcribed.",
-      detailStatusQueued: "Queued for transcription",
-      detailStatusProcessing: "Transcribing...",
-      detailStatusFailed: "Transcription failed",
-      actionItemsTitle: "Action items",
-    },
-  }),
-}));
+vi.mock("@/lib/i18n/client", () => ({ useT: () => en }));
 
 import RecordingDetailPage from "../page";
-
 const REC = {
-  recordingId: "rec-1",
-  title: "Client call",
-  fileName: "call.m4a",
-  status: "processed" as const,
-  durationMs: 51_252,
-  truncated: false,
+  recordingId: "rec-1", title: "Team call", fileName: "call.m4a",
+  status: "processed", durationMs: 51_252, truncated: false, lastError: null,
+  participants: [{ speaker: "Speaker 1", name: "Alex Example" }],
 };
-
-let root: Root | null = null;
-let container: HTMLElement | null = null;
-
-async function mount() {
+let root: Root;
+let container: HTMLDivElement;
+async function render() {
+  await act(async () => root.render(<RecordingDetailPage />));
+}
+async function poll() {
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+}
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.clearAllMocks();
+  getRecording.mockReset().mockResolvedValue(REC);
+  recordingId = "rec-1";
+  search = "";
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root!.render(<RecordingDetailPage />));
-}
-
-beforeEach(() => vi.clearAllMocks());
-
+});
 afterEach(() => {
-  act(() => root?.unmount());
-  container?.remove();
-  root = null;
-  container = null;
+  act(() => root.unmount());
+  container.remove();
+  vi.useRealTimers();
 });
 
 describe("[COMP:app-web/recording-detail] recording detail route", () => {
-  it("composes the SHARED player, action items and transcript", async () => {
-    getRecording.mockResolvedValue(REC);
-    await mount();
-    // A second implementation of any of these would drift from the brief
-    // page's chrome — that is why they are mocked module-level here.
-    expect(container?.querySelector('[data-testid="player"]')).toBeTruthy();
-    expect(container?.querySelector('[data-testid="actions"]')).toBeTruthy();
-    expect(container?.querySelector('[data-testid="transcript"]')).toBeTruthy();
+  it("opens the transcript and participant names without a self-link", async () => {
+    await render();
+    expect(container.querySelector('[data-testid="player"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="actions"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="transcript"]')).toBeTruthy();
+    expect(container.textContent).toContain("Alex Example");
+    expect(container.textContent).not.toContain(en.recordings.chromeOpenRecording);
+    await poll();
+    expect(getRecording).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the transcript + action items for a recording with NO brief", async () => {
-    // The whole reason the route exists: an ingest-only upload (no
-    // `blueprintSlug`) produces no doc page, so this is its only home.
+  it("links to the recordings board and originating workspace page", async () => {
+    search = "page=page-1";
+    await render();
+    expect(container.querySelector(`a[href="/w/ws-1/p?panel=recordings"]`)).toBeTruthy();
+    expect(container.querySelector(`a[href="/w/ws-1/p/page-1"]`)?.textContent).toBe(en.common.back);
+  });
+
+  it("keeps an ingest-only recording accessible by its filename", async () => {
     getRecording.mockResolvedValue({ ...REC, title: null });
-    await mount();
-    expect(container?.querySelector('[data-testid="transcript"]')).toBeTruthy();
-    expect(container?.textContent).toContain("Action items");
+    await render();
+    expect(container.querySelector("h1")?.textContent).toBe("call.m4a");
+    expect(container.querySelector('[data-testid="transcript"]')).toBeTruthy();
   });
 
-  it("shows a not-found rather than a broken player when the recording is gone", async () => {
+  it("keeps navigation available for a missing recording", async () => {
     getRecording.mockRejectedValue(new Error("404"));
-    await mount();
-    expect(container?.textContent).toContain("does not exist");
-    expect(container?.querySelector('[data-testid="player"]')).toBeFalsy();
+    await render();
+    expect(container.textContent).toContain(en.recordings.detailNotFound);
+    expect(container.querySelector('[data-testid="player"]')).toBeFalsy();
+    expect(container.querySelector('a[href="/w/ws-1/p?panel=recordings"]')).toBeTruthy();
   });
 
-  it("says the recording is still transcribing instead of offering an empty player", async () => {
-    getRecording.mockResolvedValue({ ...REC, status: "processing", durationMs: null });
-    await mount();
-    expect(container?.textContent).toContain("Transcribing");
+  it.each(["queued", "processing"])("refreshes %s into a complete view without empty final sections", async (status) => {
+    getRecording.mockResolvedValueOnce({ ...REC, status });
+    await render();
+    expect(container.textContent).toContain(en.recordings.statusProcessingTitle);
+    expect(container.querySelector('[data-testid="player"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="actions"]')).toBeFalsy();
+    expect(container.querySelector('[data-testid="transcript"]')).toBeFalsy();
+    await poll();
+    expect(container.querySelector('[data-testid="actions"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="transcript"]')).toBeTruthy();
+    await poll();
+    expect(getRecording).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for uploaded media before offering playback", async () => {
+    getRecording.mockResolvedValueOnce({ ...REC, status: "awaiting_upload", durationMs: null });
+    await render();
+    expect(container.querySelector('[data-testid="player"]')).toBeFalsy();
+    expect(container.querySelector('[data-player-recording]')).toBeFalsy();
+    await poll();
+    expect(container.querySelector('[data-player-recording="rec-1"]')).toBeTruthy();
+  });
+
+  it("retains processing state and retries after a transient poll error", async () => {
+    getRecording.mockResolvedValueOnce({ ...REC, status: "processing" }).mockRejectedValueOnce(new Error("offline"));
+    await render();
+    await poll();
+    expect(container.textContent).toContain(en.recordings.statusProcessingTitle);
+    expect(container.querySelector('[data-testid="transcript"]')).toBeFalsy();
+    await poll();
+    expect(container.querySelector('[data-testid="transcript"]')).toBeTruthy();
+  });
+
+  it("shows failure details while preserving playable audio", async () => {
+    getRecording.mockResolvedValue({ ...REC, status: "failed", lastError: "Provider unavailable" });
+    await render();
+    expect(container.textContent).toContain("Provider unavailable");
+    expect(container.querySelector('[data-testid="player"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="actions"]')).toBeFalsy();
+  });
+
+  it("preserves the partial-transcript warning", async () => {
+    getRecording.mockResolvedValue({ ...REC, truncated: true });
+    await render();
+    expect(container.textContent).toContain(en.recordings.detailTruncated);
+  });
+
+  it("renames speakers through the canonical write and re-reads participant metadata", async () => {
+    await render();
+    promptDialog.mockResolvedValue("Taylor Example");
+    updateRecordingParticipants.mockResolvedValue(undefined);
+    getRecording.mockResolvedValue({ ...REC, participants: [{ speaker: "Speaker 1", name: "Taylor Example" }] });
+    await act(async () => { (container.querySelector('[data-testid="transcript"] button') as HTMLButtonElement).click(); });
+    expect(updateRecordingParticipants).toHaveBeenCalledWith("rec-1", [{ speaker: "Speaker 1", name: "Taylor Example" }]);
+    expect(container.textContent).toContain("Taylor Example");
+  });
+
+  it("refreshes participant names after Brian's assignment event", async () => {
+    await render();
+    getRecording.mockResolvedValue({ ...REC, participants: [{ speaker: "Speaker 1", name: "Taylor Example" }] });
+    await act(async () => dispatchRecordingParticipantsUpdated({ recordingId: "rec-1" }));
+    expect(container.textContent).toContain("Taylor Example");
+  });
+
+  it("ignores late responses when switching recordings", async () => {
+    let resolveFirst!: (value: typeof REC) => void;
+    getRecording.mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }));
+    await render();
+    recordingId = "rec-2";
+    getRecording.mockResolvedValue({ ...REC, recordingId, title: "Second call" });
+    await render();
+    await act(async () => resolveFirst(REC));
+    expect(container.querySelector("h1")?.textContent).toBe("Second call");
+  });
+
+  it("clears a previous missing state on navigation", async () => {
+    getRecording.mockRejectedValueOnce(new Error("404"));
+    await render();
+    recordingId = "rec-2";
+    await render();
+    expect(container.textContent).not.toContain(en.recordings.detailNotFound);
+    expect(container.querySelector('[data-testid="transcript"]')).toBeTruthy();
   });
 });

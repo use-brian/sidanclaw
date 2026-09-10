@@ -12,24 +12,24 @@
 
 import {
   stitchMailboxThreads,
+  CRM_CUSTOM_FIELD_TYPES, CRM_CONFIG_ENTITY_KINDS, CRM_PIPELINE_STAGE_CATEGORIES, CrmOperationsError,
   type AccessContext,
   type EntityRecord,
   type MailboxSearchHit,
+  type CrmConfigCommand,
+  type CrmOperationsCommandResult,
 } from '@use-brian/core'
 import type { PoolClient } from 'pg'
 import { buildAccessPredicate } from './access-predicate.js'
 import { applyRLSGucs, getPool, query, queryGated, queryWithRLS } from './client.js'
 import { getEntityById, updateEntity } from './entities-store.js'
 
-export const CRM_FIELD_TYPES = [
-  'text', 'number', 'date', 'boolean', 'single_select', 'multi_select',
-  'entity_reference',
-] as const
+export const CRM_FIELD_TYPES = CRM_CUSTOM_FIELD_TYPES
 export type CrmFieldType = (typeof CRM_FIELD_TYPES)[number]
 export type CrmEntityKind = 'person' | 'company' | 'deal'
-export type CrmStageCategory = 'open' | 'won' | 'lost'
+export type CrmStageCategory = (typeof CRM_PIPELINE_STAGE_CATEGORIES)[number]
 
-export const CRM_REFERENCE_KINDS = ['person', 'company', 'deal'] as const
+export const CRM_REFERENCE_KINDS = CRM_CONFIG_ENTITY_KINDS
 export type CrmReferenceKind = (typeof CRM_REFERENCE_KINDS)[number]
 
 export type CrmPipelineStage = {
@@ -116,26 +116,30 @@ export async function ensureCrmDefaultPipeline(workspaceId: string): Promise<str
     [workspaceId],
   )
   if (existing.rows[0]) return existing.rows[0].id
-
   const client = await getPool().connect()
   try {
     await client.query('BEGIN')
+    await lockCrmConfiguration(client, workspaceId)
+    const current = await client.query<{ id: string; name: string; isDefault: boolean }>(
+      `SELECT id,name,is_default AS "isDefault" FROM crm_pipelines WHERE workspace_id=$1 AND archived_at IS NULL`, [workspaceId],
+    )
+    const found = current.rows.find((row) => row.isDefault)
+    if (found) { await client.query('COMMIT'); return found.id }
+    const names = new Set(current.rows.map((row) => row.name))
+    let name = 'Sales', suffix = 1
+    while (names.has(name)) name = `Sales (default ${suffix++})`
     const pipeline = await client.query<{ id: string }>(
-      `INSERT INTO crm_pipelines (workspace_id, name, is_default, position)
-       VALUES ($1, 'Sales', true, 0)
-       ON CONFLICT (workspace_id) WHERE is_default AND archived_at IS NULL DO UPDATE
-         SET is_default = EXCLUDED.is_default
-       RETURNING id`,
-      [workspaceId],
+      `INSERT INTO crm_pipelines (workspace_id,name,is_default,position)
+       VALUES ($1,$2,true,COALESCE((SELECT MAX(position)+1 FROM crm_pipelines
+         WHERE workspace_id=$1 AND archived_at IS NULL),0)) RETURNING id`, [workspaceId, name],
     )
     const pipelineId = pipeline.rows[0].id
-    for (const [name, legacyKey, category, position, probability] of DEFAULT_STAGES) {
+    for (const [stageName, legacyKey, category, position, probability] of DEFAULT_STAGES) {
       await client.query(
         `INSERT INTO crm_pipeline_stages
-           (workspace_id, pipeline_id, name, legacy_key, category, position, probability)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (pipeline_id, name) DO NOTHING`,
-        [workspaceId, pipelineId, name, legacyKey, category, position, probability],
+           (workspace_id,pipeline_id,name,legacy_key,category,position,probability)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [workspaceId, pipelineId, stageName, legacyKey, category, position, probability],
       )
     }
     await client.query('COMMIT')
@@ -143,9 +147,7 @@ export async function ensureCrmDefaultPipeline(workspaceId: string): Promise<str
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {})
     throw err
-  } finally {
-    client.release()
-  }
+  } finally { client.release() }
 }
 
 type ConfigStageRow = Omit<CrmPipelineStage, 'requiredFields' | 'archivedAt'> & {
@@ -220,24 +222,27 @@ export async function getCrmConfig(
 }
 
 export async function createCrmPipeline(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   name: string
 }): Promise<CrmPipeline> {
-  const inserted = await queryWithRLS<{ id: string; name: string; isDefault: boolean; position: number }>(
-    input.userId,
-    `INSERT INTO crm_pipelines (workspace_id, name, is_default, position, created_by)
-     VALUES ($1,$2,false,
-       COALESCE((SELECT MAX(position) + 1 FROM crm_pipelines
-                  WHERE workspace_id = $1 AND archived_at IS NULL), 0),$3)
-     RETURNING id, name, is_default AS "isDefault", position, NULL::timestamptz AS "archivedAt"`,
-    [input.workspaceId, input.name, input.userId],
-  )
-  return { ...inserted.rows[0], stages: [] }
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
+    const inserted = await client.query<{ id: string; name: string; isDefault: boolean; position: number }>(
+      `INSERT INTO crm_pipelines (workspace_id, name, is_default, position, created_by)
+       VALUES ($1,$2,false,
+         COALESCE((SELECT MAX(position) + 1 FROM crm_pipelines
+                    WHERE workspace_id = $1 AND archived_at IS NULL), 0),$3)
+       RETURNING id, name, is_default AS "isDefault", position, NULL::timestamptz AS "archivedAt"`,
+      [input.workspaceId, input.name, input.userId],
+    )
+    return { ...inserted.rows[0], stages: [] }
+  }, input.client)
 }
 
 export async function createCrmStage(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   pipelineId: string
   name: string
@@ -245,31 +250,33 @@ export async function createCrmStage(input: {
   probability: number
   requiredFields?: string[]
 }): Promise<CrmPipelineStage | null> {
-  const inserted = await queryWithRLS<ConfigStageRow>(
-    input.userId,
-    `INSERT INTO crm_pipeline_stages
-       (workspace_id, pipeline_id, name, category, position, probability, required_fields)
-     SELECT $1,$2,$3,$4,
-       COALESCE((SELECT MAX(position) + 1 FROM crm_pipeline_stages
-                  WHERE pipeline_id = $2 AND archived_at IS NULL),0),
-       $5,$6
-     WHERE EXISTS (SELECT 1 FROM crm_pipelines
-                    WHERE id = $2 AND workspace_id = $1 AND archived_at IS NULL)
-     RETURNING id, pipeline_id AS "pipelineId", name, legacy_key AS "legacyKey",
-       category, position, probability, required_fields AS "requiredFields",
-       NULL::timestamptz AS "archivedAt"`,
-    [input.workspaceId, input.pipelineId, input.name, input.category, input.probability, input.requiredFields ?? []],
-  )
-  const row = inserted.rows[0]
-  return row ? {
-    ...row,
-    requiredFields: row.requiredFields ?? [],
-    archivedAt: row.archivedAt?.toISOString() ?? null,
-  } : null
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
+    const inserted = await client.query<ConfigStageRow>(
+      `INSERT INTO crm_pipeline_stages
+         (workspace_id, pipeline_id, name, category, position, probability, required_fields)
+       SELECT $1,$2,$3,$4,
+         COALESCE((SELECT MAX(position) + 1 FROM crm_pipeline_stages
+                    WHERE pipeline_id = $2 AND archived_at IS NULL),0),
+         $5,$6
+       WHERE EXISTS (SELECT 1 FROM crm_pipelines
+                      WHERE id = $2 AND workspace_id = $1 AND archived_at IS NULL)
+       RETURNING id, pipeline_id AS "pipelineId", name, legacy_key AS "legacyKey",
+         category, position, probability, required_fields AS "requiredFields",
+         NULL::timestamptz AS "archivedAt"`,
+      [input.workspaceId, input.pipelineId, input.name, input.category, input.probability, input.requiredFields ?? []],
+    )
+    const row = inserted.rows[0]
+    return row ? {
+      ...row,
+      requiredFields: row.requiredFields ?? [],
+      archivedAt: row.archivedAt?.toISOString() ?? null,
+    } : null
+  }, input.client)
 }
 
 export async function updateCrmStage(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   stageId: string
   name?: string
@@ -277,36 +284,64 @@ export async function updateCrmStage(input: {
   probability?: number
   requiredFields?: string[]
 }): Promise<CrmPipelineStage | null> {
-  const updated = await queryWithRLS<ConfigStageRow>(
-    input.userId,
-    `UPDATE crm_pipeline_stages SET
-       name = COALESCE($4, name),
-       category = COALESCE($5, category),
-       probability = COALESCE($6, probability),
-       required_fields = COALESCE($7, required_fields)
-     WHERE id = $2 AND workspace_id = $1 AND archived_at IS NULL
-     RETURNING id, pipeline_id AS "pipelineId", name, legacy_key AS "legacyKey",
-       category, position, probability, required_fields AS "requiredFields",
-       archived_at AS "archivedAt"`,
-    [input.workspaceId, input.stageId, input.userId, input.name ?? null,
-      input.category ?? null, input.probability ?? null, input.requiredFields ?? null],
-  )
-  const row = updated.rows[0]
-  return row ? {
-    ...row,
-    requiredFields: row.requiredFields ?? [],
-    archivedAt: row.archivedAt?.toISOString() ?? null,
-  } : null
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
+    const updated = await client.query<ConfigStageRow>(
+      `UPDATE crm_pipeline_stages SET
+         name = COALESCE($3, name),
+         category = COALESCE($4, category),
+         probability = COALESCE($5, probability),
+         required_fields = COALESCE($6, required_fields)
+       WHERE id = $2 AND workspace_id = $1 AND archived_at IS NULL
+       RETURNING id, pipeline_id AS "pipelineId", name, legacy_key AS "legacyKey",
+         category, position, probability, required_fields AS "requiredFields",
+         archived_at AS "archivedAt"`,
+      [input.workspaceId, input.stageId, input.name ?? null,
+        input.category ?? null, input.probability ?? null, input.requiredFields ?? null],
+    )
+    const row = updated.rows[0]
+    return row ? {
+      ...row,
+      requiredFields: row.requiredFields ?? [],
+      archivedAt: row.archivedAt?.toISOString() ?? null,
+    } : null
+  }, input.client)
+}
+
+/** All configuration entry points share allocation and lifecycle serialization. */
+export async function lockCrmConfiguration(client: PoolClient, workspaceId: string): Promise<void> {
+  const isolation = await client.query<{ transaction_isolation: string }>('SHOW transaction_isolation')
+  if (isolation.rows[0]?.transaction_isolation !== 'read committed') {
+    throw new CrmOperationsError('invalid_input', 'CRM configuration requires a READ COMMITTED transaction so allocation rechecks see commits after a lock wait.')
+  }
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended('crm-config:' || $1::text, 0))", [workspaceId])
+}
+
+export async function lockCrmConfigurationMember(client: PoolClient, workspaceId: string, userId: string | null): Promise<void> {
+  if (!userId) throw new CrmOperationsError('not_authorized', 'Configuration requires a current workspace owner or admin member.')
+  const membership = await client.query<{ role: string }>(`SELECT role FROM workspace_members
+    WHERE workspace_id=$1 AND user_id=$2 FOR SHARE`, [workspaceId, userId])
+  if (!['owner', 'admin'].includes(membership.rows[0]?.role ?? '')) {
+    throw new CrmOperationsError('not_authorized', 'Configuration requires a current workspace owner or admin member.')
+  }
 }
 
 async function withCrmConfigTransaction<T>(
-  userId: string,
+  userId: string | null,
+  workspaceId: string,
   work: (client: PoolClient) => Promise<T>,
+  transactionClient?: PoolClient,
 ): Promise<T> {
+  if (transactionClient) {
+    await lockCrmConfiguration(transactionClient, workspaceId)
+    return work(transactionClient)
+  }
+  if (!userId) throw new CrmOperationsError('not_authorized', 'Machine configuration requires a canonical transaction.')
   const client = await getPool().connect()
   try {
     await client.query('BEGIN')
     await applyRLSGucs(client, userId)
+    await lockCrmConfigurationMember(client, workspaceId, userId)
+    await lockCrmConfiguration(client, workspaceId)
     const value = await work(client)
     await client.query('COMMIT')
     return value
@@ -323,19 +358,20 @@ function assertExactOrder(actual: string[], requested: string[]): void {
     || new Set(actual).size !== actual.length
     || new Set(requested).size !== requested.length
     || actual.some((id) => !requested.includes(id))) {
-    throw new Error('orderedIds must contain every live row exactly once')
+    throw new CrmOperationsError('conflict', 'orderedIds must contain every live row exactly once')
   }
 }
 
 export async function updateCrmPipeline(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   pipelineId: string
   name?: string
   isDefault?: boolean
   archived?: boolean
 }): Promise<boolean> {
-  return withCrmConfigTransaction(input.userId, async (client) => {
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
     const selected = await client.query<{ isDefault: boolean; archivedAt: Date | null }>(
       `SELECT is_default AS "isDefault", archived_at AS "archivedAt"
          FROM crm_pipelines
@@ -345,7 +381,7 @@ export async function updateCrmPipeline(input: {
     const pipeline = selected.rows[0]
     if (!pipeline) return false
     if (input.archived === true) {
-      if (pipeline.isDefault) throw new Error('The default pipeline cannot be archived')
+      if (pipeline.isDefault) throw new CrmOperationsError('conflict', 'The default pipeline cannot be archived')
       const used = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM entities
           WHERE workspace_id = $1 AND kind = 'deal' AND valid_to IS NULL
@@ -354,10 +390,10 @@ export async function updateCrmPipeline(input: {
         [input.workspaceId, input.pipelineId],
       )
       const count = Number(used.rows[0]?.count ?? 0)
-      if (count > 0) throw new Error(`Move ${count} live deal${count === 1 ? '' : 's'} before archiving this pipeline`)
+      if (count > 0) throw new CrmOperationsError('conflict', `Move ${count} live deal${count === 1 ? '' : 's'} before archiving this pipeline`)
     }
     if (input.isDefault === true && input.archived === true) {
-      throw new Error('An archived pipeline cannot be the default')
+      throw new CrmOperationsError('conflict', 'An archived pipeline cannot be the default')
     }
     if (input.archived === false && pipeline.archivedAt) {
       await client.query(
@@ -378,7 +414,7 @@ export async function updateCrmPipeline(input: {
     if (input.isDefault === true) {
       await client.query(
         `UPDATE crm_pipelines SET is_default = false
-          WHERE workspace_id = $1 AND archived_at IS NULL`,
+          WHERE workspace_id = $1 AND archived_at IS NULL AND is_default`,
         [input.workspaceId],
       )
       await client.query(
@@ -409,15 +445,16 @@ export async function updateCrmPipeline(input: {
       )
     }
     return true
-  })
+  }, input.client)
 }
 
 export async function reorderCrmPipelines(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   orderedIds: string[]
 }): Promise<void> {
-  await withCrmConfigTransaction(input.userId, async (client) => {
+  await withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
     const current = await client.query<{ id: string }>(
       `SELECT id FROM crm_pipelines
         WHERE workspace_id = $1 AND archived_at IS NULL ORDER BY position FOR UPDATE`,
@@ -436,16 +473,17 @@ export async function reorderCrmPipelines(input: {
         [id, input.workspaceId, position],
       )
     }
-  })
+  }, input.client)
 }
 
 export async function setCrmStageArchived(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   stageId: string
   archived: boolean
 }): Promise<boolean> {
-  return withCrmConfigTransaction(input.userId, async (client) => {
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
     const selected = await client.query<{ pipelineId: string; archivedAt: Date | null }>(
       `SELECT pipeline_id AS "pipelineId", archived_at AS "archivedAt"
          FROM crm_pipeline_stages
@@ -463,7 +501,7 @@ export async function setCrmStageArchived(input: {
         [input.workspaceId, input.stageId],
       )
       const count = Number(used.rows[0]?.count ?? 0)
-      if (count > 0) throw new Error(`Move ${count} live deal${count === 1 ? '' : 's'} before archiving this stage`)
+      if (count > 0) throw new CrmOperationsError('conflict', `Move ${count} live deal${count === 1 ? '' : 's'} before archiving this stage`)
       await client.query(
         `UPDATE crm_pipeline_stages SET archived_at = now()
           WHERE id = $1 AND workspace_id = $2`,
@@ -493,16 +531,17 @@ export async function setCrmStageArchived(input: {
       [stage.pipelineId],
     )
     return true
-  })
+  }, input.client)
 }
 
 export async function reorderCrmStages(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   pipelineId: string
   orderedIds: string[]
 }): Promise<void> {
-  await withCrmConfigTransaction(input.userId, async (client) => {
+  await withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
     const current = await client.query<{ id: string }>(
       `SELECT id FROM crm_pipeline_stages
         WHERE workspace_id = $1 AND pipeline_id = $2 AND archived_at IS NULL
@@ -523,11 +562,12 @@ export async function reorderCrmStages(input: {
         [id, input.workspaceId, input.pipelineId, position],
       )
     }
-  })
+  }, input.client)
 }
 
 export async function createCrmFieldDefinition(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   entityKind: CrmEntityKind
   fieldKey: string
@@ -536,38 +576,40 @@ export async function createCrmFieldDefinition(input: {
   options?: string[]
   isRequired?: boolean
 }): Promise<CrmFieldDefinition | null> {
-  const inserted = await queryWithRLS<ConfigFieldRow>(
-    input.userId,
-    `INSERT INTO crm_field_definitions
-       (workspace_id, entity_kind, field_key, label, field_type, options,
-        is_required, position, created_by)
-     SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,
-       COALESCE((SELECT MAX(position) + 1 FROM crm_field_definitions
-                 WHERE workspace_id = $1 AND entity_kind = $2),0),$8
-     WHERE (SELECT COUNT(*) FROM crm_field_definitions
-             WHERE workspace_id = $1 AND entity_kind = $2 AND archived_at IS NULL) < 50
-     RETURNING id, entity_kind AS "entityKind", field_key AS "fieldKey", label,
-       field_type AS "fieldType", options, is_required AS "isRequired", position,
-       NULL::timestamptz AS "archivedAt"`,
-    [input.workspaceId, input.entityKind, input.fieldKey, input.label, input.fieldType,
-      JSON.stringify(input.options ?? []), input.isRequired ?? false, input.userId],
-  )
-  const row = inserted.rows[0]
-  return row ? {
-    ...row,
-    archivedAt: null,
-    options: Array.isArray(row.options)
-      ? row.options.filter((v): v is string => typeof v === 'string')
-      : [],
-  } : null
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
+    const inserted = await client.query<ConfigFieldRow>(
+      `INSERT INTO crm_field_definitions
+         (workspace_id, entity_kind, field_key, label, field_type, options,
+          is_required, position, created_by)
+       SELECT $1,$2,$3,$4,$5,$6::jsonb,$7,
+         COALESCE((SELECT MAX(position) + 1 FROM crm_field_definitions
+                   WHERE workspace_id = $1 AND entity_kind = $2),0),$8
+       WHERE (SELECT COUNT(*) FROM crm_field_definitions
+               WHERE workspace_id = $1 AND entity_kind = $2 AND archived_at IS NULL) < 50
+       RETURNING id, entity_kind AS "entityKind", field_key AS "fieldKey", label,
+         field_type AS "fieldType", options, is_required AS "isRequired", position,
+         NULL::timestamptz AS "archivedAt"`,
+      [input.workspaceId, input.entityKind, input.fieldKey, input.label, input.fieldType,
+        JSON.stringify(input.options ?? []), input.isRequired ?? false, input.userId],
+    )
+    const row = inserted.rows[0]
+    return row ? {
+      ...row,
+      archivedAt: null,
+      options: Array.isArray(row.options)
+        ? row.options.filter((v): v is string => typeof v === 'string')
+        : [],
+    } : null
+  }, input.client)
 }
 
 export async function archiveCrmFieldDefinition(
-  userId: string,
+  userId: string | null,
   workspaceId: string,
   fieldId: string,
+  transactionClient?: PoolClient,
 ): Promise<boolean> {
-  return withCrmConfigTransaction(userId, async (client) => {
+  return withCrmConfigTransaction(userId, workspaceId, async (client) => {
     const result = await client.query<{ entityKind: CrmEntityKind }>(
       `UPDATE crm_field_definitions SET archived_at = now()
         WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
@@ -592,93 +634,94 @@ export async function archiveCrmFieldDefinition(
       [workspaceId, row.entityKind],
     )
     return true
-  })
+  }, transactionClient)
 }
 
 export async function updateCrmFieldDefinition(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   fieldId: string
   label?: string
   options?: string[]
   isRequired?: boolean
 }): Promise<CrmFieldDefinition | null> {
-  const existing = await queryWithRLS<ConfigFieldRow>(
-    input.userId,
-    `SELECT id, entity_kind AS "entityKind", field_key AS "fieldKey", label,
-            field_type AS "fieldType", options, is_required AS "isRequired", position,
-            archived_at AS "archivedAt"
-       FROM crm_field_definitions
-      WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL`,
-    [input.fieldId, input.workspaceId],
-  )
-  const before = existing.rows[0]
-  if (!before) return null
-  const currentOptions = Array.isArray(before.options)
-    ? before.options.filter((value): value is string => typeof value === 'string')
-    : []
-  if (input.options && (before.fieldType === 'single_select' || before.fieldType === 'multi_select')
-    && input.options.length === 0) {
-    throw new Error('Select fields require at least one option')
-  }
-  if (input.options && before.fieldType === 'entity_reference'
-    && (input.options.length === 0
-      || input.options.some((kind) => !(CRM_REFERENCE_KINDS as readonly string[]).includes(kind)))) {
-    throw new Error('Reference fields require at least one valid target kind')
-  }
-  if (input.options && (before.fieldType === 'single_select' || before.fieldType === 'multi_select')) {
-    const removed = currentOptions.filter((option) => !input.options!.includes(option))
-    if (removed.length > 0) {
-      const usage = await queryWithRLS<{ count: string }>(
-        input.userId,
-        before.fieldType === 'single_select'
-          ? `SELECT COUNT(*)::text AS count FROM entities
-              WHERE workspace_id = $1 AND kind = $2 AND valid_to IS NULL
-                AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
-                AND attributes->'custom_fields'->>$3 = ANY($4::text[])`
-          : `SELECT COUNT(*)::text AS count FROM entities
-              WHERE workspace_id = $1 AND kind = $2 AND valid_to IS NULL
-                AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
-                AND EXISTS (
-                  SELECT 1 FROM jsonb_array_elements_text(
-                    COALESCE(attributes->'custom_fields'->$3, '[]'::jsonb)
-                  ) value WHERE value = ANY($4::text[])
-                )`,
-        [input.workspaceId, before.entityKind, before.fieldKey, removed],
-      )
-      const count = Number(usage.rows[0]?.count ?? 0)
-      if (count > 0) throw new Error(`Cannot remove options used by ${count} live record${count === 1 ? '' : 's'}`)
+  return withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
+    const existing = await client.query<ConfigFieldRow>(
+      `SELECT id, entity_kind AS "entityKind", field_key AS "fieldKey", label,
+              field_type AS "fieldType", options, is_required AS "isRequired", position,
+              archived_at AS "archivedAt"
+         FROM crm_field_definitions
+        WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL`,
+      [input.fieldId, input.workspaceId],
+    )
+    const before = existing.rows[0]
+    if (!before) return null
+    const currentOptions = Array.isArray(before.options)
+      ? before.options.filter((value): value is string => typeof value === 'string')
+      : []
+    if (input.options && (before.fieldType === 'single_select' || before.fieldType === 'multi_select')
+      && input.options.length === 0) {
+      throw new CrmOperationsError('conflict', 'Select fields require at least one option')
     }
-  }
-  const updated = await queryWithRLS<ConfigFieldRow>(
-    input.userId,
-    `UPDATE crm_field_definitions SET
-       label = COALESCE($3, label),
-       options = COALESCE($4::jsonb, options),
-       is_required = COALESCE($5, is_required)
-     WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
-     RETURNING id, entity_kind AS "entityKind", field_key AS "fieldKey", label,
-       field_type AS "fieldType", options, is_required AS "isRequired", position,
-       archived_at AS "archivedAt"`,
-    [input.fieldId, input.workspaceId, input.label ?? null,
-      input.options ? JSON.stringify(input.options) : null, input.isRequired ?? null],
-  )
-  const row = updated.rows[0]
-  return row ? {
-    ...row,
-    options: Array.isArray(row.options)
-      ? row.options.filter((value): value is string => typeof value === 'string')
-      : [],
-    archivedAt: row.archivedAt?.toISOString() ?? null,
-  } : null
+    if (input.options && before.fieldType === 'entity_reference'
+      && (input.options.length === 0
+        || input.options.some((kind) => !(CRM_REFERENCE_KINDS as readonly string[]).includes(kind)))) {
+      throw new CrmOperationsError('conflict', 'Reference fields require at least one valid target kind')
+    }
+    if (input.options && (before.fieldType === 'single_select' || before.fieldType === 'multi_select')) {
+      const removed = currentOptions.filter((option) => !input.options!.includes(option))
+      if (removed.length > 0) {
+        const usage = await client.query<{ count: string }>(
+          before.fieldType === 'single_select'
+            ? `SELECT COUNT(*)::text AS count FROM entities
+                WHERE workspace_id = $1 AND kind = $2 AND valid_to IS NULL
+                  AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
+                  AND attributes->'custom_fields'->>$3 = ANY($4::text[])`
+            : `SELECT COUNT(*)::text AS count FROM entities
+                WHERE workspace_id = $1 AND kind = $2 AND valid_to IS NULL
+                  AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
+                  AND EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(
+                      COALESCE(attributes->'custom_fields'->$3, '[]'::jsonb)
+                    ) value WHERE value = ANY($4::text[])
+                  )`,
+          [input.workspaceId, before.entityKind, before.fieldKey, removed],
+        )
+        const count = Number(usage.rows[0]?.count ?? 0)
+        if (count > 0) throw new CrmOperationsError('conflict', `Cannot remove options used by ${count} live record${count === 1 ? '' : 's'}`)
+      }
+    }
+    const updated = await client.query<ConfigFieldRow>(
+      `UPDATE crm_field_definitions SET
+         label = COALESCE($3, label),
+         options = COALESCE($4::jsonb, options),
+         is_required = COALESCE($5, is_required)
+       WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
+       RETURNING id, entity_kind AS "entityKind", field_key AS "fieldKey", label,
+         field_type AS "fieldType", options, is_required AS "isRequired", position,
+         archived_at AS "archivedAt"`,
+      [input.fieldId, input.workspaceId, input.label ?? null,
+        input.options ? JSON.stringify(input.options) : null, input.isRequired ?? null],
+    )
+    const row = updated.rows[0]
+    return row ? {
+      ...row,
+      options: Array.isArray(row.options)
+        ? row.options.filter((value): value is string => typeof value === 'string')
+        : [],
+      archivedAt: row.archivedAt?.toISOString() ?? null,
+    } : null
+  }, input.client)
 }
 
 export async function restoreCrmFieldDefinition(
-  userId: string,
+  userId: string | null,
   workspaceId: string,
   fieldId: string,
+  transactionClient?: PoolClient,
 ): Promise<boolean> {
-  return withCrmConfigTransaction(userId, async (client) => {
+  return withCrmConfigTransaction(userId, workspaceId, async (client) => {
     const selected = await client.query<{ entityKind: CrmEntityKind }>(
       `SELECT entity_kind AS "entityKind" FROM crm_field_definitions
         WHERE id = $1 AND workspace_id = $2 AND archived_at IS NOT NULL FOR UPDATE`,
@@ -692,7 +735,7 @@ export async function restoreCrmFieldDefinition(
       [workspaceId, row.entityKind],
     )
     if (Number(live.rows[0]?.count ?? 0) >= 50) {
-      throw new Error('Custom field limit reached')
+      throw new CrmOperationsError('conflict', 'Custom field limit reached')
     }
     await client.query(
       `UPDATE crm_field_definitions SET archived_at = NULL,
@@ -702,16 +745,17 @@ export async function restoreCrmFieldDefinition(
       [fieldId, workspaceId, row.entityKind],
     )
     return true
-  })
+  }, transactionClient)
 }
 
 export async function reorderCrmFields(input: {
-  userId: string
+  userId: string | null
+  client?: PoolClient
   workspaceId: string
   entityKind: CrmEntityKind
   orderedIds: string[]
 }): Promise<void> {
-  await withCrmConfigTransaction(input.userId, async (client) => {
+  await withCrmConfigTransaction(input.userId, input.workspaceId, async (client) => {
     const current = await client.query<{ id: string }>(
       `SELECT id FROM crm_field_definitions
         WHERE workspace_id = $1 AND entity_kind = $2 AND archived_at IS NULL
@@ -732,7 +776,7 @@ export async function reorderCrmFields(input: {
         [id, input.workspaceId, input.entityKind, position],
       )
     }
-  })
+  }, input.client)
 }
 
 function sameFieldShape(existing: Pick<CrmFieldDefinition, 'fieldType' | 'options'>, preset: CrmPresetField): boolean {
@@ -753,6 +797,7 @@ export async function applyCrmFieldPreset(input: {
   userId: string
   workspaceId: string
   presetId: CrmPresetId
+  execute: (command: CrmConfigCommand) => Promise<CrmOperationsCommandResult>
 }): Promise<CrmPresetApplyResult> {
   const fields = CRM_FIELD_PRESETS[input.presetId]
   const result: CrmPresetApplyResult = { created: [], skipped: [], revived: [], conflicts: [] }
@@ -783,27 +828,21 @@ export async function applyCrmFieldPreset(input: {
         result.skipped.push(field.fieldKey)
         continue
       }
-      const revived = await queryWithRLS(
-        input.userId,
-        `UPDATE crm_field_definitions SET archived_at = NULL
-          WHERE id = $1 AND workspace_id = $2 AND
-            (SELECT COUNT(*) FROM crm_field_definitions
-              WHERE workspace_id = $2 AND entity_kind = $3 AND archived_at IS NULL) < 50`,
-        [existing.id, input.workspaceId, field.entityKind],
-      )
-      if ((revived.rowCount ?? 0) > 0) result.revived.push(field.fieldKey)
-      else result.conflicts.push(field.fieldKey)
+      try {
+        await input.execute({ kind: 'set_record_field_archived', fieldId: existing.id, archived: false })
+        result.revived.push(field.fieldKey)
+      } catch (error) {
+        if (!(error instanceof CrmOperationsError) || error.code !== 'conflict') throw error
+        result.conflicts.push(field.fieldKey)
+      }
       continue
     }
     try {
-      const created = await createCrmFieldDefinition({
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        ...field,
-      })
+      const created = await input.execute({ kind: 'create_record_field', ...field })
       if (created) result.created.push(field.fieldKey)
       else result.conflicts.push(field.fieldKey)
-    } catch {
+    } catch (error) {
+      if (!(error instanceof CrmOperationsError) || error.code !== 'conflict') throw error
       // A concurrent application may have created the key. Report the race as
       // a conflict rather than overwriting or claiming success.
       result.conflicts.push(field.fieldKey)
@@ -887,6 +926,7 @@ async function listRelatedKind(
     kind: row.kind,
     name: row.name,
     attributes: row.attributes ?? {},
+    aliases: row.aliases ?? [],
     archivedAt: row.archivedAt?.toISOString() ?? null,
     updatedAt: row.updatedAt.toISOString(),
   }))
@@ -1116,7 +1156,7 @@ export async function listCrmRecordPage(
   if (options.search?.trim()) {
     const pattern = `%${options.search.trim()}%`
     add((index) => options.kind === 'person'
-      ? `(e.display_name ILIKE $${index} OR e.attributes->>'email' ILIKE $${index}
+      ? `(e.display_name ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${index}) OR e.attributes->>'email' ILIKE $${index}
           OR e.attributes->>'phone' ILIKE $${index}
           OR (e.attributes->'tags')::text ILIKE $${index}
           OR EXISTS (
@@ -1131,7 +1171,7 @@ export async function listCrmRecordPage(
                  ) item WHERE item ILIKE $${index}))
           ))`
       : options.kind === 'company'
-        ? `(e.display_name ILIKE $${index} OR e.attributes->>'domain' ILIKE $${index}
+        ? `(e.display_name ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${index}) OR e.attributes->>'domain' ILIKE $${index}
             OR (e.attributes->'tags')::text ILIKE $${index}
             OR EXISTS (
               SELECT 1 FROM crm_field_definitions f
@@ -1144,7 +1184,7 @@ export async function listCrmRecordPage(
                        THEN e.attributes->'custom_fields'->f.field_key ELSE '[]'::jsonb END
                    ) item WHERE item ILIKE $${index}))
             ))`
-        : `(e.display_name ILIKE $${index} OR e.attributes->>'source' ILIKE $${index}
+        : `(e.display_name ILIKE $${index} OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${index}) OR e.attributes->>'source' ILIKE $${index}
             OR EXISTS (SELECT 1 FROM entities related
               WHERE related.workspace_id = e.workspace_id
                 AND related.valid_to IS NULL AND related.retracted_at IS NULL
@@ -1242,11 +1282,12 @@ export async function listCrmRecordPage(
     kind: CrmEntityKind
     name: string
     attributes: Record<string, unknown> | null
+    aliases: string[] | null
     archivedAt: Date | null
     updatedAt: Date
     sortValue: Date | string | number | null
   }>(ctx,
-    `SELECT e.id, e.kind, e.display_name AS name, e.attributes,
+    `SELECT e.id, e.kind, e.display_name AS name, e.attributes, e.aliases,
             NULLIF(e.attributes->>'crm_archived_at','')::timestamptz AS "archivedAt",
             e.updated_at AS "updatedAt", ${sort.sql} AS "sortValue"
        FROM entities e
@@ -1262,6 +1303,7 @@ export async function listCrmRecordPage(
     kind: row.kind,
     name: row.name,
     attributes: row.attributes ?? {},
+    aliases: row.aliases ?? [],
     archivedAt: row.archivedAt?.toISOString() ?? null,
     updatedAt: row.updatedAt.toISOString(),
   }))
@@ -1383,6 +1425,7 @@ export async function lookupCrmRecords(input: {
   if (input.query?.trim()) {
     values.push(`%${input.query.trim()}%`)
     search = `AND (e.display_name ILIKE $${values.length}
+      OR EXISTS (SELECT 1 FROM unnest(e.aliases) alias WHERE alias ILIKE $${values.length})
       OR COALESCE(e.canonical_id,'') ILIKE $${values.length})`
   }
   values.push(limit)
@@ -1480,14 +1523,23 @@ export function validateCustomFieldValue(
   }
 }
 
+async function customDefinitionsForWrite(ctx: AccessContext, entityKind: CrmEntityKind, client?: PoolClient): Promise<CrmFieldDefinition[]> {
+  if (!client) return (await getCrmConfig(ctx.userId, ctx.workspaceId)).fields.filter((field) => field.entityKind === entityKind)
+  const fields = await client.query<ConfigFieldRow>(`SELECT id, entity_kind AS "entityKind",field_key AS "fieldKey",label,
+    field_type AS "fieldType",options,is_required AS "isRequired",position,archived_at AS "archivedAt"
+    FROM crm_field_definitions WHERE workspace_id=$1 AND entity_kind=$2 AND archived_at IS NULL
+    ORDER BY id FOR SHARE`, [ctx.workspaceId, entityKind])
+  return fields.rows.map((field) => ({ ...field, archivedAt: null,
+    options: Array.isArray(field.options) ? field.options.filter((item): item is string => typeof item === 'string') : [] }))
+}
+
 export async function validateCrmCustomFieldValues(input: {
   ctx: AccessContext
   entityKind: CrmEntityKind
   values: Record<string, unknown>
   requireAll?: boolean
-}): Promise<CrmFieldDefinition[]> {
-  const config = await getCrmConfig(input.ctx.userId, input.ctx.workspaceId)
-  const definitions = config.fields.filter((field) => field.entityKind === input.entityKind)
+}, transactionClient?: PoolClient): Promise<CrmFieldDefinition[]> {
+  const definitions = await customDefinitionsForWrite(input.ctx, input.entityKind, transactionClient)
   const byKey = new Map(definitions.map((field) => [field.fieldKey, field]))
   for (const [key, value] of Object.entries(input.values)) {
     const definition = byKey.get(key)
@@ -1499,7 +1551,7 @@ export async function validateCrmCustomFieldValues(input: {
       throw new Error(`Invalid ${definition.fieldType} value for custom field '${key}'`)
     }
     if (definition.fieldType === 'entity_reference' && value !== null && value !== undefined && value !== '') {
-      const target = await getEntityById(input.ctx, value as string)
+      const target = transactionClient ? await getEntityById(input.ctx, value as string, {}, transactionClient) : await getEntityById(input.ctx, value as string)
       if (!target || target.attributes.crm_archived_at || !definition.options.includes(target.kind)
         || (target.kind === 'person' && target.attributes.self === true)) {
         throw new Error(`Reference for custom field '${key}' must be a visible ${definition.options.join(' or ')}`)
@@ -1520,16 +1572,14 @@ export async function updateCrmCustomFields(input: {
   ctx: AccessContext
   entityId: string
   values: Record<string, unknown>
-}): Promise<EntityRecord | null> {
-  const old = await getEntityById(input.ctx, input.entityId)
+}, transactionClient?: PoolClient): Promise<EntityRecord | null> {
+  const old = transactionClient ? await getEntityById(input.ctx, input.entityId, {}, transactionClient) : await getEntityById(input.ctx, input.entityId)
   if (!old || !['person', 'company', 'deal'].includes(old.kind)) return null
-  const config = await getCrmConfig(input.ctx.userId, input.ctx.workspaceId)
-  const definitions = config.fields.filter((f) => f.entityKind === old.kind)
-  await validateCrmCustomFieldValues({
+  const definitions = await validateCrmCustomFieldValues({
     ctx: input.ctx,
     entityKind: old.kind as CrmEntityKind,
     values: input.values,
-  })
+  }, transactionClient)
   const current = old.attributes.custom_fields
   const custom = current && typeof current === 'object' && !Array.isArray(current)
     ? { ...(current as Record<string, unknown>) }
@@ -1544,7 +1594,7 @@ export async function updateCrmCustomFields(input: {
     }
   }
   const attributes = { ...old.attributes, custom_fields: custom }
-  return updateEntity(input.ctx.userId, input.entityId, { attributes }, input.ctx)
+  return updateEntity(input.ctx.userId, input.entityId, { attributes }, input.ctx, transactionClient)
 }
 
 export type CrmDealParticipant = {

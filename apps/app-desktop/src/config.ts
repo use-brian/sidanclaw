@@ -3,7 +3,7 @@
  *
  * Pure: `resolveConfig` takes an env bag and returns a frozen config, so it
  * unit-tests with no Electron and no real `process.env`. The Electron wiring
- * in `main.ts` calls `resolveConfig()` once at startup.
+ * in `main.ts` calls `resolveConfig()` at startup and on an account deployment switch.
  *
  * Spec: docs/architecture/features/app-desktop.md → "config.ts"
  * [COMP:app-desktop/config]
@@ -46,7 +46,7 @@ export interface DesktopConfig {
    * Which brain this launch fronts (docs/plans/consumer-local-experience.md
    * §2). Resolved once at startup from the persisted `target.json` record
    * (`target-store.ts`); the env override keeps today's cloud/dev semantics.
-   * Switching targets rewrites the record and relaunches the shell.
+   * Switching targets rewrites the record and replaces the account window.
    */
   readonly target: TargetKind;
   /** The target's auth strategy: system-browser PKCE (cloud) or the local-owner session mint. */

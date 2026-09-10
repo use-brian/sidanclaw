@@ -37,6 +37,7 @@ import type {
   WorkflowTriggerKind,
 } from '@use-brian/core'
 import { query, queryWithRLS } from './client.js'
+import { readWorkflowOutcomeWithLineage } from '../crm-operations/workflow-copy-store.js'
 import { notifyWorkspaceChange } from '../brain-stream/notify.js'
 
 // ── workflows ───────────────────────────────────────────────────────────
@@ -728,50 +729,7 @@ export function createDbWorkflowRunStore(): WorkflowRunStore {
       return result.rows.map(rowToRun)
     },
     async getLatestOutcomeForWorkflowSystem(workflowId, excludeRunId) {
-      // System read (no RLS) — the executor calls this on every advance to
-      // build the `{{lastRun.*}}` scope. Most recent TERMINAL run's distilled
-      // outcome, excluding the run currently executing. `finished_at DESC
-      // NULLS LAST` orders by terminal time; `started_at` breaks ties and
-      // covers any terminal row whose finished_at was never stamped.
-      const result = await query<{ id: string; outcome: WorkflowRunOutcome | null }>(
-        `SELECT id, outcome FROM workflow_runs
-          WHERE workflow_id = $1
-            AND id <> $2
-            AND status IN ('completed', 'failed', 'timeout')
-          ORDER BY finished_at DESC NULLS LAST, started_at DESC
-          LIMIT 1`,
-        [workflowId, excludeRunId],
-      )
-      const row = result.rows[0]
-      if (!row?.outcome) return row?.outcome ?? null
-      // Blueprint output-contract: when that run saved a blueprint RECORD,
-      // surface its typed fields as `lastRun.output.*` (+ `outputStatus` so a
-      // condition can gate on completeness). Two producers stamp the run id:
-      // a direct `saveBlueprintRecord` in the consult (source_kind='workflow')
-      // and the research-synthesis arm of an anchored research step (the
-      // engine stamps its SOURCE kind, 'research', with sourceRef=runId) —
-      // match both. Read-time enrichment keeps the core executor
-      // record-agnostic and works for any historical run. Failure degrades to
-      // the plain outcome.
-      try {
-        const rec = await query<{ fields: Record<string, unknown>; status: string }>(
-          `SELECT fields, status FROM blueprint_records
-            WHERE source_kind IN ('workflow', 'research') AND source_id = $1
-            ORDER BY updated_at DESC
-            LIMIT 1`,
-          [row.id],
-        )
-        if (rec.rows[0]) {
-          return {
-            ...row.outcome,
-            output: rec.rows[0].fields ?? {},
-            outputStatus: rec.rows[0].status,
-          } as WorkflowRunOutcome
-        }
-      } catch (err) {
-        console.warn('[workflow-store] lastRun.output enrichment failed:', err)
-      }
-      return row.outcome
+      return readWorkflowOutcomeWithLineage(workflowId,excludeRunId)
     },
     async listRunsForPage(userId, pageId, opts) {
       const limit = Math.min(opts?.limit ?? 20, 100)

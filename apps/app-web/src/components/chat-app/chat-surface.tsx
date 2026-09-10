@@ -103,12 +103,14 @@ import {
   Plus,
   Reply,
   RotateCw,
+  Route,
   Sparkles,
   Square,
   User,
   Users,
   X,
 } from "lucide-react";
+import { auditTurnUrl } from "@/lib/turn-audit";
 import { createSSEBuffer, parseSSEStream } from "@use-brian/chat-ui";
 import {
   useMidTurnQueue,
@@ -156,12 +158,17 @@ import { describeToolFromInput } from "@/lib/tool-narration";
 import { authFetch } from "@/lib/auth-fetch";
 import { useT, useLocale, format } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
+import { Skeleton } from "@/components/skeleton";
+import { type WorkspaceAssistantSummary } from "@/lib/api/views";
 import {
-  listWorkspaceAssistants,
-  type WorkspaceAssistantSummary,
-} from "@/lib/api/views";
+  loadTranscriptCache,
+  patchSharedChatSessions,
+  readCachedTranscript,
+  useChatSessionsData,
+  writeTranscriptCache,
+} from "@/lib/chat-surface-data";
 import {
-  CHAT_SESSIONS_REFRESH_EVENT,
   dispatchChatSessionActivity,
   dispatchChatSessionsRefresh,
   shouldAcceptRoomMirror,
@@ -174,8 +181,6 @@ import {
   extractMessageText,
   extractPresentedDocuments,
   extractToolUses,
-  listSessionsForAssistants,
-  listWorkspaceSessions,
   fetchSessionMessages,
   parseMessageAttachments,
   parsePresentedDocumentPayload,
@@ -186,6 +191,7 @@ import {
   postSessionTyping,
   type MessageAttachmentRef,
   type DocSession,
+  type DocSessionMessage,
   type WorkspaceSession,
   type UnreachableMention,
 } from "@/lib/api/sessions";
@@ -290,6 +296,10 @@ import {
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 const REMARK_PLUGINS = [remarkGfm];
 const CHAT_MARKDOWN_COMPONENTS = { pre: ChatCodeBlock };
+/** Stable empties for the cold-cache case, so memoised derivations keyed on
+ *  the lists do not recompute every render. */
+const EMPTY_PERSONAL: DocSession[] = [];
+const EMPTY_SHARED: WorkspaceSession[] = [];
 
 /** The surface tag stamped on sessions minted here (migration 255). */
 const APP_ORIGIN = "chat";
@@ -373,8 +383,17 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     isPaid: boolean;
   } | null>(null);
   const [researchExhausted, setResearchExhausted] = useState(false);
-  const [assistants, setAssistants] = useState<WorkspaceAssistantSummary[]>([]);
-  const [assistantsLoaded, setAssistantsLoaded] = useState(false);
+  // The roster and both session lists come from the cache the sidebar panel
+  // reads too (`lib/chat-surface-data.ts`): a revisit paints them on the
+  // first frame, the spine and the same-tab refresh signal mark them stale,
+  // and this surface carries no list fetch of its own.
+  const {
+    assistants,
+    assistantsLoaded,
+    personal: cachedPersonalSessions,
+    shared: cachedSharedSessions,
+    refreshShared,
+  } = useChatSessionsData(workspaceId);
   /** The room's clearance-filtered `@mention` roster (T-H4) — assistants plus
    *  ONLY the members who can read THIS room. Null until fetched (a fresh
    *  Workspace pane with no session yet, or the fetch hasn't landed); the
@@ -407,12 +426,12 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   /** Personal rows across every assistant — resolves an open thread's binding
    *  (each row carries the `assistantId` it was fetched under). */
-  const [personalSessions, setPersonalSessions] = useState<DocSession[]>([]);
+  const personalSessions: DocSession[] = cachedPersonalSessions ?? EMPTY_PERSONAL;
   /** Sessions adopted mid-turn this mount: id → the assistant they were minted
    *  with, so the SECOND turn of a fresh chat resolves correctly before the
    *  rail refetch lands. */
   const sessionAssistantRef = useRef<Map<string, string>>(new Map());
-  const [sharedSessions, setSharedSessions] = useState<WorkspaceSession[]>([]);
+  const sharedSessions: WorkspaceSession[] = cachedSharedSessions ?? EMPTY_SHARED;
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [startingShared, setStartingShared] = useState(false);
@@ -889,27 +908,8 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
   // interlocutor in the composer chip and the session sticks to it; an open
   // thread resolves its bound assistant and never switches mid-thread.
   // A room binds the assistant picked at creation (default the primary).
-  useEffect(() => {
-    if (!workspaceId) return;
-    let cancelled = false;
-    setAssistantsLoaded(false);
-    listWorkspaceAssistants(workspaceId)
-      .then((list) => {
-        if (!cancelled) {
-          setAssistants(list);
-          setAssistantsLoaded(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setAssistants([]);
-          setAssistantsLoaded(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
+  // The roster itself is `assistants` from the cached `chat-roster:` key
+  // above; nothing fetches it here.
 
   useEffect(() => {
     let cancelled = false;
@@ -1018,7 +1018,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         sessionAssistantRef.current.get(sessionId) ?? activeShared.assistantId;
       if (previous === assistantId) return;
       sessionAssistantRef.current.set(sessionId, assistantId);
-      setSharedSessions((rows) =>
+      patchSharedChatSessions(workspaceId, (rows) =>
         rows.map((row) => (row.id === sessionId ? { ...row, assistantId } : row)),
       );
       setError(null);
@@ -1029,7 +1029,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
       } catch (err) {
         if (previous) sessionAssistantRef.current.set(sessionId, previous);
         else sessionAssistantRef.current.delete(sessionId);
-        setSharedSessions((rows) =>
+        patchSharedChatSessions(workspaceId, (rows) =>
           rows.map((row) =>
             row.id === sessionId ? { ...row, assistantId: previous } : row,
           ),
@@ -1078,56 +1078,19 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
   // ── Shared sessions ─────────────────────────────────────────────────
   // The rail itself lives in the sidebar panel; the surface still needs the
   // shared list to know whether the OPEN thread is shared (the header badge
-  // and the live-read subscription hang off that).
-  const reloadShared = useCallback(async () => {
-    try {
-      setSharedSessions(await listWorkspaceSessions({ workspaceId }));
-    } catch {
-      // Keep the last known list — a transient failure must not flip a
-      // shared thread's badge off.
-    }
-  }, [workspaceId]);
-
-  useEffect(() => {
-    void reloadShared();
-  }, [reloadShared]);
-
-  /** The merged personal rail — the surface's copy exists to resolve an open
-   *  thread's assistant binding (deep links included), not to render a list. */
-  const reloadPersonal = useCallback(async () => {
-    if (assistants.length === 0) return;
-    setPersonalSessions(
-      await listSessionsForAssistants({
-        workspaceId,
-        assistantIds: assistants.map((a) => a.id),
-      }),
-    );
-  }, [assistants, workspaceId]);
-
-  useEffect(() => {
-    void reloadPersonal();
-  }, [reloadPersonal]);
-
-  // The sidebar panel signals list changes (its rename / delete) here; the
-  // surface re-fetches both copies so the shared badge and thread→assistant
-  // resolution never go stale. Signals, never data.
-  useEffect(() => {
-    const handler = () => {
-      void reloadShared();
-      void reloadPersonal();
-    };
-    window.addEventListener(CHAT_SESSIONS_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(CHAT_SESSIONS_REFRESH_EVENT, handler);
-  }, [reloadShared, reloadPersonal]);
+  // and the live-read subscription hang off that). Both lists are the cached
+  // ones from `useChatSessionsData` above; the panel's rename / delete and
+  // this surface's own writes patch the cache and dispatch the refresh
+  // signal, which marks the keys stale - no listener or refetch lives here.
+  // `reloadShared` is the forced revalidation of the shared list (rows stay
+  // painted), kept under its old name for the room stream's settle path.
+  const reloadShared = refreshShared;
 
   // ── Hydrate the open thread ─────────────────────────────────────────
-  /** Load a thread's persisted transcript into the reducer. Assistant rows
-   *  restore their `tool_use` blocks as a done-status receipt (re-narrated
-   *  from each call's input, no timings — same as the dock's history
-   *  restore). Also the refetch the live-read path runs when a teammate's
-   *  turn lands — the SSE payload is a SIGNAL, never the data. */
-  const loadTranscript = useCallback(async (sessionId: string) => {
-    const rows = await fetchSessionMessages(sessionId);
+  /** Map persisted rows into transcript messages. Assistant rows restore
+   *  their `tool_use` blocks as a done-status receipt (re-narrated from each
+   *  call's input, no timings — same as the dock's history restore). */
+  const mapTranscriptRows = useCallback((rows: DocSessionMessage[]): SurfaceMessage[] => {
     const persistedRows: SurfaceMessage[] = rows
       .filter((r) => r.role === "user" || r.role === "assistant")
       .map((r) => {
@@ -1183,10 +1146,46 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           (m.fileAttachments?.length ?? 0) > 0 ||
           (m.documents?.length ?? 0) > 0,
       );
-    chat.loadMessages(coalesceAssistantRunMessages(persistedRows));
+    return coalesceAssistantRunMessages(persistedRows);
+  }, [tChat.toolNarration]);
+
+  /** Load a thread's persisted transcript into the reducer through the
+   *  per-session `chat-transcript:` cache key. `force` is the refetch the
+   *  live-read path runs when a teammate's turn lands (the SSE payload is a
+   *  SIGNAL, never the data) - it bypasses the in-flight dedupe so it cannot
+   *  join a hydrate request that started before the turn ended. A failed
+   *  fetch with nothing cached leaves the reducer alone. */
+  const loadTranscript = useCallback(
+    async (sessionId: string, options?: { force?: boolean }) => {
+      const rows = await loadTranscriptCache<SurfaceMessage>(
+        sessionId,
+        () => fetchSessionMessages(sessionId).then(mapTranscriptRows),
+        options,
+      );
+      if (rows) chat.loadMessages(rows);
+      return rows;
+    },
     // `chat.loadMessages` is a stable useCallback from the hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tChat.toolNarration]);
+    [mapTranscriptRows],
+  );
+
+  /** True from a switch onto a session with NO cached transcript until its
+   *  fetch settles: the transcript pane paints the skeleton rather than the
+   *  previous thread's rows or a premature "ask anything" (N4). */
+  const [transcriptCold, setTranscriptCold] = useState(false);
+
+  // Write-through (N1): every reducer change on the open session - the
+  // optimistic user row, a turn streaming in, a teammate's post - lands on
+  // the session's cache key, so a revisit paints them before the refetch.
+  // Guarded on `hydratedRef` so a frame from the thread being LEFT never
+  // writes under the thread being entered.
+  useEffect(() => {
+    if (!activeSessionId || hydratedRef.current !== activeSessionId) return;
+    const messages = chat.state.messages as SurfaceMessage[];
+    if (messages.length === 0) return;
+    writeTranscriptCache(activeSessionId, messages);
+  }, [activeSessionId, chat.state.messages]);
 
   useEffect(() => {
     if (activeSessionId === hydratedRef.current) return;
@@ -1219,14 +1218,23 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     setReconnectSessionId(activeSessionId && !activeShared ? activeSessionId : null);
     if (!activeSessionId) {
       chat.loadMessages([]);
+      setTranscriptCold(false);
       // Back on a fresh pane: the assistant pick is per chat, so it resets
       // to the primary default rather than sticking as a preference.
       setPickedAssistantId(null);
       return;
     }
+    // Paint what the cache holds for THIS session synchronously (its own
+    // last transcript, never the previous thread's), then revalidate. A cold
+    // session clears the pane and shows the transcript skeleton until the
+    // fetch settles.
+    const cached = readCachedTranscript<SurfaceMessage>(activeSessionId);
+    chat.loadMessages(cached ?? []);
+    setTranscriptCold(!cached);
     let cancelled = false;
     void loadTranscript(activeSessionId).then(() => {
       if (cancelled) return;
+      setTranscriptCold(false);
     });
     return () => {
       cancelled = true;
@@ -1271,8 +1279,15 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
    *  refetches through its own loader (signals, never data). */
   const [pinsEpoch, setPinsEpoch] = useState(0);
   /** The room's working frame is a persistent right rail. Expanded is the
-   *  remembered resizable drawer; collapsed is one icon-only column. */
+   *  remembered resizable drawer; collapsed is one icon-only column. Seeded
+   *  expanded (the desktop default, and the SSR-safe value); the mount effect
+   *  below collapses it on a phone, where an expanded bench is a full-pane
+   *  overlay that would otherwise open OVER the transcript the user came for
+   *  (responsive contract M1 / M5). */
   const [workBenchExpanded, setWorkBenchExpanded] = useState(true);
+  useEffect(() => {
+    if (isPhoneViewport()) setWorkBenchExpanded(false);
+  }, []);
   const isSharedOpen = !!activeShared;
 
   const resetRemoteTurn = useCallback(() => {
@@ -1391,7 +1406,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         }
         case "user_message_saved": {
           if (!acceptsMirror) break;
-          void loadTranscript(sessionId);
+          void loadTranscript(sessionId, { force: true });
           markRoomSeen(workspaceId, sessionId);
           break;
         }
@@ -1576,7 +1591,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
             typeof payload.assistantId === "string" ? payload.assistantId : null;
           if (!nextId) break;
           sessionAssistantRef.current.set(sessionId, nextId);
-          setSharedSessions((rows) =>
+          patchSharedChatSessions(workspaceId, (rows) =>
             rows.map((row) =>
               row.id === sessionId ? { ...row, assistantId: nextId } : row,
             ),
@@ -1643,7 +1658,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           resetRemoteTurn();
           setRemoteConfirmation(null);
           setQueuedNotice(false);
-          void loadTranscript(sessionId);
+          void loadTranscript(sessionId, { force: true });
           void reloadShared();
           dispatchChatSessionsRefresh(workspaceId);
           if (isSharedOpen) markRoomSeen(workspaceId, sessionId);
@@ -1669,7 +1684,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           // landing. Only a `done` after `running` with no `turn_completed`
           // in between still owes the refetch.
           if (sawRunning && !sawTurnCompleted) {
-            void loadTranscript(sessionId);
+            void loadTranscript(sessionId, { force: true });
             dispatchChatSessionsRefresh(workspaceId);
             refreshPendingInput(sessionId);
           }
@@ -1853,7 +1868,11 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         },
       );
       resetPane();
-      setSharedSessions((rows) => [created, ...rows]);
+      patchSharedChatSessions(
+        workspaceId,
+        (rows) => [created, ...rows.filter((row) => row.id !== created.id)],
+        { seed: true },
+      );
       hydratedRef.current = created.id;
       sessionIdRef.current = created.id;
       if (created.assistantId) {
@@ -1964,12 +1983,17 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
   );
 
   /**
-   * Offer the floating pill when a pointer-drag settles on a selection inside
-   * ONE message. Bound to mouseup rather than `selectionchange` because the
-   * latter fires per character while the drag is still moving, and a pill
-   * that jumps under a moving cursor is unusable.
+   * Offer the floating pill when a selection gesture settles on text inside
+   * ONE message. Bound to the gesture's END (`pointerup` / `keyup`, scheduled
+   * on the next frame) rather than to every `selectionchange`, because the
+   * latter fires per character while a drag is still moving, and a pill that
+   * jumps under a moving cursor is unusable. `pointerup` rather than `mouseup`
+   * because browsers synthesise no `mouseup` for a long-press selection, so
+   * the pill never appeared on a phone; `selectionchange` is listened to only
+   * for the collapse, which dismisses the pill at once (the
+   * `guest-selection-comment.tsx` shape).
    */
-  const handleTranscriptMouseUp = useCallback(() => {
+  const handleTranscriptSelectionSettled = useCallback(() => {
     if (typeof window === "undefined") return;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
@@ -1996,6 +2020,44 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     }
     setSelectionQuote(null);
   }, []);
+
+  // Bind the selection gesture's end on the document and scope it to the
+  // transcript container by target: the container mounts and unmounts with
+  // the hero / transcript swap, so a listener on the element itself would
+  // need re-binding on every swap; a document listener does not.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let raf = 0;
+    const schedule = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        handleTranscriptSelectionSettled();
+      });
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      const root = scrollRef.current;
+      if (!root || !(event.target instanceof Node) || !root.contains(event.target)) return;
+      schedule();
+    };
+    const onKeyUp = () => {
+      if (!scrollRef.current) return;
+      schedule();
+    };
+    const onSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) setSelectionQuote(null);
+    };
+    document.addEventListener("pointerup", onPointerUp);
+    document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
+  }, [handleTranscriptSelectionSettled]);
 
   // ── Send ────────────────────────────────────────────────────────────
   /** Tracks whether the in-flight turn streamed an askQuestion step, so the
@@ -2111,7 +2173,11 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         });
         sessionIdRef.current = created.id;
         hydratedRef.current = created.id;
-        setSharedSessions((rows) => [created, ...rows]);
+        patchSharedChatSessions(
+          workspaceId,
+          (rows) => [created, ...rows.filter((row) => row.id !== created.id)],
+          { seed: true },
+        );
         sessionAssistantRef.current.set(created.id, interlocutor.id);
         chat.setSession(created.id);
         selectSession(created.id, "workspace");
@@ -2818,7 +2884,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     // catches teammate posts that arrived while this direct stream owned the
     // room mirror and viewer identity had not hydrated yet.
     if (isRoom && sourceMessageId && sessionIdRef.current) {
-      await loadTranscript(sessionIdRef.current);
+      await loadTranscript(sessionIdRef.current, { force: true });
     }
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3026,7 +3092,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         setError(t.editFailed);
         // The optimistic rewrite has to go back — the room still holds the
         // original text and every other member is still reading it.
-        await loadTranscript(sessionId);
+        await loadTranscript(sessionId, { force: true });
       }
     },
     [
@@ -3065,7 +3131,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
   // has to be legible at a glance.
   const viewTabCls = (active: boolean) =>
     cn(
-      "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors",
+      "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors max-md:py-2.5",
       active
         ? "bg-background text-foreground shadow-sm"
         : "text-sidebar-foreground/60 hover:text-sidebar-accent-foreground",
@@ -3271,10 +3337,16 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     onRetry?: () => void,
     onEdit?: () => void,
     onReply?: () => void,
+    /** Assistant rows only: jump to the Brain's Audit section on this turn
+     *  (which tools ran, which entries were retrieved, lit on the graph). */
+    onAudit?: () => void,
   ) => (
     <div
+      // Always visible on a phone (responsive contract M2): a finger has no
+      // hover, and Retry / Edit / Reply / Audit had no touch path. Desktop
+      // keeps the hover reveal.
       className={cn(
-        "flex items-center gap-1 pt-0.5 opacity-0 transition-opacity group-hover:opacity-100",
+        "flex items-center gap-1 pt-0.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100",
         alignEnd ? "-mr-1" : "-ml-1",
       )}
     >
@@ -3287,7 +3359,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           onClick={onReply}
           aria-label={t.reply}
           title={t.reply}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-7 md:w-7"
         >
           <Reply className="size-3.5" aria-hidden />
         </button>
@@ -3297,7 +3369,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         onClick={() => handleCopy(messageId, text)}
         aria-label={copiedMessageId === messageId ? tChat.copied : tChat.copy}
         title={copiedMessageId === messageId ? tChat.copied : tChat.copy}
-        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-7 md:w-7"
       >
         {copiedMessageId === messageId ? (
           <Check className="size-3.5" aria-hidden />
@@ -3311,7 +3383,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           onClick={onEdit}
           aria-label={t.editMessage}
           title={t.editMessage}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-7 md:w-7"
         >
           <Pencil className="size-3.5" aria-hidden />
         </button>
@@ -3322,9 +3394,20 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           onClick={onRetry}
           aria-label={tChat.retry}
           title={tChat.retry}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-7 md:w-7"
         >
           <RotateCw className="size-3.5" aria-hidden />
+        </button>
+      ) : null}
+      {onAudit ? (
+        <button
+          type="button"
+          onClick={onAudit}
+          aria-label={t.auditTurn}
+          title={t.auditTurn}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-7 md:w-7"
+        >
+          <Route className="size-3.5" aria-hidden />
         </button>
       ) : null}
     </div>
@@ -3366,7 +3449,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           rowClassName="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1 px-2 pb-2"
           textareaClassName={cn(
             "w-full max-h-[240px] min-w-0 resize-none overflow-y-auto",
-            "bg-transparent px-1.5 pt-2.5 pb-1 text-sm leading-relaxed outline-none",
+            "bg-transparent px-1.5 pt-2.5 pb-1 text-[16px] leading-relaxed outline-none md:text-sm",
             "placeholder:text-muted-foreground focus-visible:shadow-none",
           )}
           placeholder={t.composerPlaceholder}
@@ -3427,7 +3510,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
     }) ? (
       <Popover open={switcherOpen} onOpenChange={setSwitcherOpen}>
         <PopoverTrigger
-          className="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:shadow-none"
+          className="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:shadow-none max-md:py-2.5"
           aria-label={tChat.switchAssistant}
         >
           <AssistantAvatar
@@ -3685,7 +3768,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         // padding the two layers must agree on stay here.
         textareaClassName={cn(
           "w-full max-h-[240px] min-w-0 resize-none overflow-y-auto",
-          "bg-transparent px-1.5 pt-2.5 pb-1 text-sm leading-relaxed outline-none",
+          "bg-transparent px-1.5 pt-2.5 pb-1 text-[16px] leading-relaxed outline-none md:text-sm",
           "placeholder:text-muted-foreground focus-visible:shadow-none",
         )}
         slotAttachments={
@@ -3778,7 +3861,12 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           </>
         }
         slotPreInput={
-          <div className="order-2 flex min-w-0 items-center gap-0.5">
+          // Wraps below `sm` (responsive contract M8): at 360px the paperclip,
+          // recorder, assistant picker, Research and tier picker exceed the
+          // 1fr track's width and used to run under Send. The 1fr track is
+          // `minmax(0,…)`, so wrapping keeps every control inside the box
+          // with no horizontal overflow.
+          <div className="order-2 flex min-w-0 flex-wrap items-center gap-0.5 sm:flex-nowrap">
             <input
               ref={fileInputRef}
               type="file"
@@ -3796,7 +3884,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
               disabled={!!pendingQuestion || recordingUpload.busy}
               aria-label={tAttach.attach}
               title={tAttach.attach}
-              className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50 focus-visible:shadow-none"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50 focus-visible:shadow-none sm:size-8"
             >
               <Paperclip className="size-[17px]" aria-hidden />
             </button>
@@ -3881,7 +3969,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
         // muted, because it queues into a turn rather than starting one. In a
         // room (no queueing) it still gives way to Stop.
         sendButtonClassName={cn(
-          "order-3 ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+          "order-3 ml-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg sm:h-8 sm:w-8",
           "transition-colors focus-visible:shadow-none",
           "disabled:opacity-40 disabled:pointer-events-none",
           canQueueMidTurn
@@ -3897,7 +3985,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
               aria-label={tChat.abort}
               title={tChat.abort}
               className={cn(
-                "order-3 ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                "order-3 ml-1 inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-lg sm:h-8 sm:w-8",
                 "bg-muted text-foreground/80 transition-colors hover:bg-muted/80 hover:text-destructive",
                 "focus-visible:shadow-none",
               )}
@@ -3923,7 +4011,11 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
           <div
             role="tablist"
             aria-label={t.viewSwitchAria}
-            className="flex items-center gap-0.5 rounded-lg bg-sidebar-accent/60 p-0.5"
+            // `shrink-0`: the toggle is the only way to reach workspace rooms
+            // on a phone, so it keeps its intrinsic width and the center slot
+            // scrolls instead (M8). The topbar's chip is already hidden below
+            // `sm` for the same reason.
+            className="flex shrink-0 items-center gap-0.5 rounded-lg bg-sidebar-accent/60 p-0.5"
           >
             <button
               type="button"
@@ -3956,7 +4048,7 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
                 : startNewChat
             }
             disabled={startingShared}
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-50 max-md:py-2.5"
           >
             <Plus className="size-3.5" aria-hidden />
             {view === "workspace" ? t.newWorkspaceChat : t.newChat}
@@ -4017,7 +4109,6 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
       <section className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={scrollRef}
-          onMouseUp={handleTranscriptMouseUp}
           // The pill is anchored to a viewport rect, so scrolling would strand
           // it over the wrong text. Dismiss rather than chase.
           onScroll={selectionQuote ? () => setSelectionQuote(null) : undefined}
@@ -4042,11 +4133,30 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
             ) : null}
             {chat.state.messages.length === 0 &&
               !chat.state.isStreaming &&
-              !remoteActive && (
+              !remoteActive &&
+              (transcriptCold ? (
+                // A switch onto a session with no cached transcript: the
+                // pane's own geometry in placeholder blocks, never the
+                // previous thread's rows and never a sentence (N4).
+                <div aria-hidden className="flex flex-col gap-5 py-2" data-testid="chat-transcript-skeleton">
+                  {[0, 1, 2].map((i) => (
+                    <div
+                      key={i}
+                      className={cn("flex gap-3", i % 2 === 0 ? "" : "flex-row-reverse")}
+                    >
+                      <Skeleton className="size-7 shrink-0 rounded-full" />
+                      <div className={cn("flex-1 space-y-2", i % 2 === 0 ? "max-w-[85%]" : "max-w-[60%]")}>
+                        <Skeleton className="h-3.5 w-full" />
+                        <Skeleton className="h-3.5" style={{ width: `${45 + ((i * 23) % 40)}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
                 <p className="py-20 text-center text-sm text-muted-foreground">
                   {activeShared ? t.sharedTranscriptEmpty : t.transcriptEmpty}
                 </p>
-              )}
+              ))}
             {(chat.state.messages as SurfaceMessage[]).map((m, messageIndex) => {
               const meta = transcriptMeta[messageIndex];
               const timeKnown = !Number.isNaN(m.timestamp.getTime());
@@ -4252,6 +4362,24 @@ export function ChatSurface({ workspaceId }: { workspaceId: string }) {
                           canReplyToMessage(m)
                             ? () =>
                                 startReply(m, { authorName: quoteAuthorFor(m) })
+                            : undefined,
+                          activeSessionId
+                            ? () =>
+                                router.push(
+                                  auditTurnUrl(
+                                    "",
+                                    workspaceId,
+                                    activeSessionId,
+                                    // A live-streamed reply carries a synthetic
+                                    // client id until the next reload; only a
+                                    // persisted row id can address a turn, so
+                                    // the audit page falls back to the newest
+                                    // turn (which the live reply is) otherwise.
+                                    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(m.id)
+                                      ? m.id
+                                      : null,
+                                  ),
+                                )
                             : undefined,
                         )
                       : null}

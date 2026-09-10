@@ -9,6 +9,7 @@ import { publicRuntimeConfig } from "@/lib/runtime-public-config";
  * [COMP:app-web/crm-surface]
  */
 
+import type { AppLocale } from "@use-brian/shared";
 import { authFetch } from "@/lib/auth-fetch";
 
 const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
@@ -196,6 +197,27 @@ export function fetchCrmSummary(workspaceId: string, pipeline?: string | null): 
 
 export type CrmLookupRow = { id: string; name: string; hint: string | null };
 
+/** The three relationship directories the CRM surface joins names through. */
+export type CrmDirectories = {
+  contacts: CrmLookupRow[];
+  companies: CrmLookupRow[];
+  deals: CrmLookupRow[];
+};
+
+/**
+ * ONE fetcher for the `crm:<wid>:lookups` cache slot. The surface and its
+ * sidebar panel both read that key, so the value shape must come from one
+ * place, or whichever mounts first would hand the other a different object.
+ */
+export async function fetchCrmDirectories(workspaceId: string): Promise<CrmDirectories> {
+  const [contacts, companies, deals] = await Promise.all([
+    fetchCrmLookup(workspaceId, "contact"),
+    fetchCrmLookup(workspaceId, "company"),
+    fetchCrmLookup(workspaceId, "deal"),
+  ]);
+  return { contacts, companies, deals };
+}
+
 export function fetchCrmLookup(
   workspaceId: string,
   kind: CrmCollectionKind,
@@ -310,6 +332,23 @@ export type CrmConfig = {
   fields: CrmFieldDefinition[];
 };
 
+/** Shape guard for a persisted config copy (`surface-content-cache.ts`). */
+export function isCrmConfigValue(value: unknown): value is CrmConfig {
+  if (!value || typeof value !== "object") return false;
+  const config = value as Partial<CrmConfig>;
+  return (
+    Array.isArray(config.pipelines) &&
+    config.pipelines.every(
+      (pipeline) =>
+        !!pipeline &&
+        typeof pipeline === "object" &&
+        typeof pipeline.id === "string" &&
+        Array.isArray(pipeline.stages),
+    ) &&
+    Array.isArray(config.fields)
+  );
+}
+
 type CrmIntakeFieldDefinition = {
   key: string;
   label: string;
@@ -331,8 +370,11 @@ export type CrmIntakeDefinition = {
   currentVersion: number;
   fields: CrmIntakeFieldDefinition[];
   identityPolicy: "external_subject" | "trusted_verified_email" | "new_or_review";
+  identityVerification?: { keyId: string; publicKey: string; maxAgeSeconds: number; acknowledged: true } | null;
+  verificationAcknowledgedByUserId?: string | null;
+  verificationAcknowledgedAt?: string | null;
   allowedIdentityProvider?: string | null;
-  consentMappings: Array<{ fieldKey: string; grantedValue: string | boolean | number; purposeKey: string }>;
+  consentMappings: Array<{ fieldKey: string; grantedValue: string | boolean | number; purposeKey: string; locale?: AppLocale; localeFieldKey?: string }>;
   queueKey: string;
   ownerUserId?: string | null;
   followUpTaskTemplate?: { title: string; description: string; priority: "low" | "medium" | "high" | "urgent"; tags: string[] } | null;
@@ -345,6 +387,7 @@ export type CrmIntakeDefinition = {
 };
 
 export type CrmIntakeCredential = {
+  rotatedFromCredentialId?: string | null;
   id: string;
   label: string;
   prefix: string;
@@ -385,6 +428,10 @@ export type CrmConsentPurpose = {
   wordingVersion: string;
   wording: string;
   wordingHash: string;
+  wordingVersionId?: string;
+  defaultLocale?: AppLocale | null;
+  localeWordings?: Partial<Record<AppLocale, string>>;
+  localeWordingHashes?: Partial<Record<AppLocale, string>>;
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -395,6 +442,8 @@ export type CrmCompliance = {
   purposes: CrmConsentPurpose[];
   events: Array<{
     id: string; purposeKey: string; action: "granted" | "withdrawn";
+    wordingVersionId?: string | null; wordingLocale?: AppLocale | null;
+    wording?: string | null; wordingHash?: string | null;
     wordingVersion: string; source: string; occurredAt: string; createdAt: string;
   }>;
   suppressions: Array<{
@@ -405,7 +454,7 @@ export type CrmCompliance = {
 
 export type CrmSendabilityVerdict = {
   verdict: "allowed" | "blocked" | "unknown";
-  reasons: Array<"contact_method_missing" | "global_suppression" | "channel_suppression" | "consent_withdrawn" | "consent_not_recorded" | "purpose_archived">;
+  reasons: Array<"contact_method_missing" | "global_suppression" | "channel_suppression" | "consent_withdrawn" | "consent_not_recorded" | "purpose_archived" | "purpose_channel_inapplicable">;
   effectiveConsentEventId?: string;
   effectiveSuppressionEventIds: string[];
 };
@@ -477,6 +526,8 @@ export type CrmEntitlement = {
   planKey: string;
   planName: string;
   status: CrmEntitlementStatus;
+  isEffective?: boolean;
+  effectiveAt?: string;
   startsAt: string;
   endsAt: string | null;
   renewalMode: "none" | "manual" | "auto";
@@ -529,6 +580,7 @@ export type CrmIntakeDefinitionInput = {
   definition: {
     fields: CrmIntakeFieldDefinition[];
     identityPolicy: CrmIntakeDefinition["identityPolicy"];
+    identityVerification?: NonNullable<CrmIntakeDefinition["identityVerification"]>;
     allowedIdentityProvider?: string | null;
     consentMappings?: CrmIntakeDefinition["consentMappings"];
     queueKey?: string;
@@ -543,15 +595,44 @@ export type CrmIntakeDefinitionInput = {
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(`${API_URL}${path}`, init);
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(body.error ?? `CRM request failed (${res.status})`);
+  if (!res.ok) {
+    // The status rides along as a property: a server-worded message carries no
+    // `(NNN)` suffix, and the disk tier (`surface-content-cache.ts`) has to
+    // tell an authoritative 401 / 403 / 404 from a transient failure.
+    throw Object.assign(
+      new Error(body.error ?? `CRM request failed (${res.status})`),
+      { status: res.status },
+    );
+  }
   return body;
 }
 
+// Operations panels consume complete catalogs and lists. Keep the exported SDK
+// array contract while explicitly following the server's bounded continuation.
+async function allCrmPages<Key extends string, Item>(path: string, key: Key, first?: Record<Key, Item[]> & { nextCursor?: string | null }): Promise<Item[]> {
+  const items: Item[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const url = cursor ? `${path}${path.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}` : path;
+    const body = first ?? await jsonRequest<Record<Key, Item[]> & { nextCursor?: string | null }>(url);
+    first = undefined;
+    if (!Array.isArray(body[key])) throw new Error("invalid_crm_page");
+    items.push(...body[key]);
+    if (body.nextCursor != null && (typeof body.nextCursor !== "string" || !body.nextCursor || seen.has(body.nextCursor))) {
+      throw new Error("invalid_crm_cursor");
+    }
+    cursor = body.nextCursor ?? undefined;
+    if (cursor) seen.add(cursor);
+  } while (cursor);
+  return items;
+}
+
 export async function listCrmIntakeDefinitions(workspaceId: string): Promise<CrmIntakeDefinition[]> {
-  const body = await jsonRequest<{ definitions: CrmIntakeDefinition[] }>(
+  return allCrmPages<"definitions", CrmIntakeDefinition>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/intake-definitions`,
+    "definitions",
   );
-  return body.definitions;
 }
 
 export function saveCrmIntakeDefinition(
@@ -566,15 +647,15 @@ export function saveCrmIntakeDefinition(
 }
 
 export async function listCrmIntakeCredentials(workspaceId: string): Promise<CrmIntakeCredential[]> {
-  const body = await jsonRequest<{ credentials: CrmIntakeCredential[] }>(
+  return allCrmPages<"credentials", CrmIntakeCredential>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/intake-credentials`,
+    "credentials",
   );
-  return body.credentials;
 }
 
 export function createCrmIntakeCredential(
   workspaceId: string,
-  input: { label: string; definitionIds: string[] },
+  input: { label: string; definitionIds: string[]; rotateFromCredentialId?: string },
 ): Promise<{ record: CrmIntakeCredential; key: string }> {
   return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/intake-credentials`, {
     method: "POST",
@@ -603,10 +684,10 @@ export async function listCrmSubmissions(
   if (filters.ownerUserId) params.set("ownerUserId", filters.ownerUserId);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ submissions: CrmSubmission[] }>(
+  return allCrmPages<"submissions", CrmSubmission>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/submissions${query ? `?${query}` : ""}`,
+    "submissions",
   );
-  return body.submissions;
 }
 
 export async function getCrmSubmission(workspaceId: string, submissionId: string): Promise<CrmSubmission> {
@@ -628,10 +709,10 @@ export function updateCrmSubmission(
 }
 
 export async function listCrmConsentPurposes(workspaceId: string, includeArchived = false): Promise<CrmConsentPurpose[]> {
-  const body = await jsonRequest<{ purposes: CrmConsentPurpose[] }>(
+  return allCrmPages<"purposes", CrmConsentPurpose>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/consent-purposes${includeArchived ? "?includeArchived=true" : ""}`,
+    "purposes",
   );
-  return body.purposes;
 }
 
 export function saveCrmConsentPurpose(
@@ -640,6 +721,7 @@ export function saveCrmConsentPurpose(
     purposeId?: string; purposeKey: string; label: string; description?: string;
     requiresConsent?: boolean; applicableChannels?: CrmDeliveryChannel[];
     wordingVersion: string; wording: string; archived?: boolean;
+    defaultLocale?: AppLocale | null; localeWordings?: Partial<Record<AppLocale, string>>;
   },
 ): Promise<{ record: CrmConsentPurpose; created: boolean }> {
   return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/consent-purposes`, {
@@ -654,7 +736,7 @@ export function getCrmCompliance(workspaceId: string, contactId: string): Promis
 export function recordCrmConsent(
   workspaceId: string,
   contactId: string,
-  input: { purposeKey: string; action: "granted" | "withdrawn"; source: string },
+  input: { purposeKey: string; action: "granted" | "withdrawn"; source: string; locale?: AppLocale },
 ): Promise<{ record: Record<string, unknown> }> {
   return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/contacts/${encodeURIComponent(contactId)}/consent`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
@@ -688,11 +770,27 @@ export async function listCrmSegments(
 ): Promise<{ segments: CrmSegment[]; catalog: CrmSegmentCatalogEntry[] }> {
   const params = new URLSearchParams({ entityKind });
   if (includeArchived) params.set("includeArchived", "true");
-  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/segments?${params}`);
+  const path = `/api/crm/${encodeURIComponent(workspaceId)}/operations/segments?${params}`;
+  const first = await jsonRequest<{ segments: CrmSegment[]; catalog: CrmSegmentCatalogEntry[]; nextCursor?: string | null }>(path);
+  const segments = await allCrmPages<"segments", CrmSegment>(path, "segments", first);
+  return { segments, catalog: first.catalog };
 }
 
-export function previewCrmSegment(workspaceId: string, segmentId: string): Promise<CrmSegmentPreview> {
-  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/segments/${encodeURIComponent(segmentId)}/preview?limit=25&snapshotLimit=1000`);
+export async function previewCrmSegment(workspaceId: string, segmentId: string): Promise<CrmSegmentPreview> {
+  const path = `/api/crm/${encodeURIComponent(workspaceId)}/operations/segments/${encodeURIComponent(segmentId)}/preview?limit=25&snapshotLimit=1000`;
+  const first = await jsonRequest<CrmSegmentPreview & { snapshotNextCursor?: string | null }>(path);
+  const snapshotIds = [...first.snapshotIds];
+  let cursor = first.snapshotNextCursor;
+  const seen = new Set<string>();
+  while (cursor) {
+    if (typeof cursor !== "string" || seen.has(cursor)) throw new Error("invalid_crm_cursor");
+    seen.add(cursor);
+    const page = await jsonRequest<CrmSegmentPreview & { snapshotNextCursor?: string | null }>(`${path}&snapshotCursor=${encodeURIComponent(cursor)}`);
+    if (!Array.isArray(page.snapshotIds)) throw new Error("invalid_crm_page");
+    snapshotIds.push(...page.snapshotIds);
+    cursor = page.snapshotNextCursor;
+  }
+  return { rows: first.rows, count: first.count, snapshotIds };
 }
 
 export function saveCrmSegment(
@@ -738,26 +836,28 @@ export async function listCrmEntitlementPlans(
   if (filters.published !== undefined) params.set("published", String(filters.published));
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ plans: CrmEntitlementPlan[] }>(
+  return allCrmPages<"plans", CrmEntitlementPlan>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/entitlement-plans${query ? `?${query}` : ""}`,
+    "plans",
   );
-  return body.plans;
 }
 
 export async function listCrmEntitlements(
   workspaceId: string,
-  filters: { contactId?: string; planId?: string; status?: CrmEntitlementStatus; limit?: number } = {},
+  filters: { contactId?: string; planId?: string; status?: CrmEntitlementStatus; activeOnly?: boolean; effectiveAt?: string; limit?: number } = {},
 ): Promise<CrmEntitlement[]> {
   const params = new URLSearchParams();
   if (filters.contactId) params.set("contactId", filters.contactId);
   if (filters.planId) params.set("planId", filters.planId);
+  if (filters.activeOnly !== undefined) params.set("activeOnly", String(filters.activeOnly));
+  if (filters.effectiveAt) params.set("effectiveAt", filters.effectiveAt);
   if (filters.status) params.set("status", filters.status);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ entitlements: CrmEntitlement[] }>(
+  return allCrmPages<"entitlements", CrmEntitlement>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/entitlements${query ? `?${query}` : ""}`,
+    "entitlements",
   );
-  return body.entitlements;
 }
 
 export function grantCrmEntitlement(
@@ -791,10 +891,10 @@ export async function listCrmEvents(
   if (filters.status) params.set("status", filters.status);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ events: CrmEvent[] }>(
+  return allCrmPages<"events", CrmEvent>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/events${query ? `?${query}` : ""}`,
+    "events",
   );
-  return body.events;
 }
 
 export async function listCrmParticipation(
@@ -808,10 +908,10 @@ export async function listCrmParticipation(
   if (filters.sourceKind) params.set("sourceKind", filters.sourceKind);
   if (filters.limit) params.set("limit", String(filters.limit));
   const query = params.toString();
-  const body = await jsonRequest<{ participation: CrmParticipation[] }>(
+  return allCrmPages<"participation", CrmParticipation>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/participation${query ? `?${query}` : ""}`,
+    "participation",
   );
-  return body.participation;
 }
 
 export function recordCrmParticipation(
@@ -956,20 +1056,20 @@ export async function listCrmOperationsAudit(
   workspaceId: string,
   limit = 50,
 ): Promise<CrmOperationsAuditEntry[]> {
-  const body = await jsonRequest<{ entries: CrmOperationsAuditEntry[] }>(
+  return allCrmPages<"entries", CrmOperationsAuditEntry>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/audit?limit=${limit}`,
+    "entries",
   );
-  return body.entries;
 }
 
 export async function listCrmEventDelivery(
   workspaceId: string,
   limit = 50,
 ): Promise<CrmEventDeliveryEntry[]> {
-  const body = await jsonRequest<{ events: CrmEventDeliveryEntry[] }>(
+  return allCrmPages<"events", CrmEventDeliveryEntry>(
     `/api/crm/${encodeURIComponent(workspaceId)}/operations/event-delivery?limit=${limit}`,
+    "events",
   );
-  return body.events;
 }
 
 export async function downloadCrmOperationsPrivacyExport(workspaceId: string): Promise<Blob> {
@@ -978,6 +1078,23 @@ export async function downloadCrmOperationsPrivacyExport(workspaceId: string): P
   );
   if (!res.ok) throw new Error(`CRM operations export failed (${res.status})`);
   return res.blob();
+}
+
+export type CrmPrivacyPolicy = {
+  version: number;
+  policy: { intakeReplay: { retentionSeconds: number } | null };
+  approvedByUserId: string | null;
+  createdAt: string | null;
+};
+export function getCrmPrivacyPolicy(workspaceId: string): Promise<CrmPrivacyPolicy> {
+  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/privacy-policy`);
+}
+export function saveCrmPrivacyPolicy(workspaceId: string, input: {
+  expectedVersion: number; confirmed: true; intakeReplay: { retentionSeconds: number } | null;
+}): Promise<{ record: CrmPrivacyPolicy; created: boolean }> {
+  return jsonRequest(`/api/crm/${encodeURIComponent(workspaceId)}/operations/privacy-policy`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
 }
 
 export async function downloadCrmCsv(

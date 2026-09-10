@@ -360,7 +360,7 @@ export function SkillCreator({ workspaceId, onBack, onCreated, initialImport }: 
               <SelectTrigger
                 size="sm"
                 aria-label={skillsCopy.sensitivityLabel}
-                className="w-auto gap-1.5 border-transparent bg-muted/60 text-xs hover:bg-muted"
+                className="w-auto gap-1.5 border-transparent bg-muted/60 text-[16px] md:text-xs hover:bg-muted"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -442,7 +442,7 @@ export function SkillCreator({ workspaceId, onBack, onCreated, initialImport }: 
                   }
                   onUnavailable={() => setNotice(copy.draftUnavailable)}
                   onBusyChange={setChatBusy}
-                  className="h-[60vh] lg:h-[calc(100vh-10rem)]"
+                  className="h-[60dvh] lg:h-[calc(100dvh-10rem)]"
                 />
               </div>
             </aside>
@@ -527,7 +527,7 @@ export function SkillCreator({ workspaceId, onBack, onCreated, initialImport }: 
                   submitIntent();
                 }
               }}
-              className="w-full resize-none bg-transparent px-4 pt-4 pb-1 text-sm outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70"
+              className="w-full resize-none bg-transparent px-4 pt-4 pb-1 text-[16px] md:text-sm outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70"
             />
             <div className="flex flex-wrap items-center gap-1.5 px-3 pb-3 pt-1">
               <input

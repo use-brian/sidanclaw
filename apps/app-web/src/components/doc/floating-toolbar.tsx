@@ -34,6 +34,15 @@
  * for free from StarterKit, Cmd-K is deferred to Phase 4 polish. Until
  * then the user clicks the link button.
  *
+ * Phone (responsive contract M3 / M5 / M9): the strip wraps below `md` with
+ * the link field as its own full-width row, buttons grow to 36px, and a
+ * coarse-pointer "Comment" chip (`SelectionCommentChip`) renders BELOW the
+ * selection, driven by `pointerup` / `selectionchange` and holding the
+ * selection through the tap (`preventDefault` on mousedown / pointerdown).
+ * The tippy bubble sits above the selection, exactly where iOS / Android
+ * draw the native selection callout, so on touch it may be covered; the
+ * chip is the reliable path to an anchored comment there.
+ *
  * [COMP:app-web/floating-toolbar]
  */
 
@@ -44,6 +53,8 @@ import { isNodeRangeSelection } from "@tiptap/extension-node-range";
 import { CellSelection } from "@tiptap/pm/tables";
 import { Bold, Italic, Code, Link as LinkIcon, MessageSquarePlus } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport, useCoarsePointer } from "@/lib/viewport";
+import { clampPopupRect, measureViewport, type PopupAnchor } from "@/lib/popup-clamp";
 import { TurnIntoMenu } from "./turn-into-menu";
 
 type Props = {
@@ -203,7 +214,7 @@ export function ToolbarButtons({
             aria-pressed={editor.isActive("comment")}
             onClick={onComment}
             className={[
-              "h-7 inline-flex items-center gap-1.5 rounded px-2 text-sm transition-colors",
+              "h-9 md:h-7 inline-flex items-center gap-1.5 rounded px-2 text-sm transition-colors",
               editor.isActive("comment")
                 ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
                 : "hover:bg-[var(--muted)]",
@@ -215,6 +226,118 @@ export function ToolbarButtons({
         </>
       ) : null}
     </>
+  );
+}
+
+/** The chip's box for placement (its padding + `h-11`). */
+const SELECTION_CHIP_SIZE = { width: 128, height: 44 };
+
+/**
+ * The rect a coarse-pointer Comment chip anchors to: the current selection's
+ * span (start line top → end line bottom, left of the start), or `null` when
+ * the toolbar itself would not show (collapsed selection, code block, an
+ * area / table-axis range). Pure over the editor's read surface so the
+ * trigger rule is unit-testable without booting an editor.
+ */
+export function selectionChipAnchor(
+  ed: Pick<Editor, "state" | "isActive"> & {
+    view: Pick<Editor["view"], "coordsAtPos">;
+  },
+): PopupAnchor | null {
+  const { from, to } = ed.state.selection;
+  const show = shouldShowToolbar({
+    from,
+    to,
+    isInCodeBlock: ed.isActive("codeBlock"),
+    isNodeRange: isNodeRangeSelection(ed.state.selection),
+    isCellSelection: ed.state.selection instanceof CellSelection,
+  });
+  if (!show) return null;
+  const start = ed.view.coordsAtPos(Math.min(from, to));
+  const end = ed.view.coordsAtPos(Math.max(from, to));
+  return {
+    top: Math.min(start.top, end.top),
+    bottom: Math.max(start.bottom, end.bottom),
+    left: start.left,
+  };
+}
+
+/**
+ * Coarse-pointer "Comment" chip (responsive contract M3 / M9). Renders only
+ * when the primary pointer cannot hover; shows after a selection gesture
+ * ends (`pointerup` / `keyup`, coalesced to one frame), hides the instant the
+ * selection collapses, and keeps the selection alive through the tap by
+ * cancelling the default of mousedown / pointerdown (a focus change would
+ * otherwise collapse it before `onComment` can read the range). Placed
+ * BELOW the selection through `clampPopupRect`, clear of the native
+ * callout the OS draws above it.
+ */
+export function SelectionCommentChip({
+  editor,
+  onComment,
+}: {
+  editor: Editor;
+  onComment: () => void;
+}) {
+  const tc = useT().comments;
+  const coarse = useCoarsePointer();
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!coarse || typeof document === "undefined") {
+      setPos(null);
+      return;
+    }
+    let raf = 0;
+    const show = () => {
+      raf = 0;
+      const anchor = selectionChipAnchor(editor);
+      if (!anchor) {
+        setPos(null);
+        return;
+      }
+      const placed = clampPopupRect(anchor, SELECTION_CHIP_SIZE, measureViewport());
+      setPos({ top: placed.top, left: placed.left });
+    };
+    const schedule = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(show);
+    };
+    // Collapsing hides at once; a new selection shows only when the gesture
+    // ends, so the chip never chases a drag in progress.
+    const onSelectionChange = () => {
+      if (editor.state.selection.empty) setPos(null);
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("pointerup", schedule);
+    document.addEventListener("keyup", schedule);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("pointerup", schedule);
+      document.removeEventListener("keyup", schedule);
+    };
+  }, [coarse, editor]);
+
+  if (!pos) return null;
+  const keepSelection = (e: { preventDefault: () => void }) => e.preventDefault();
+  return (
+    <button
+      type="button"
+      data-selection-comment-chip
+      aria-label={tc.toolbarButtonAria}
+      onMouseDown={keepSelection}
+      onPointerDown={keepSelection}
+      onClick={() => {
+        setPos(null);
+        onComment();
+      }}
+      style={{ position: "fixed", top: pos.top, left: pos.left }}
+      className="z-40 inline-flex h-11 items-center gap-1.5 rounded-lg border border-border bg-popover px-3 text-sm font-medium text-popover-foreground shadow-md transition-colors hover:bg-accent"
+    >
+      <MessageSquarePlus className="size-4 text-muted-foreground" aria-hidden />
+      <span className="whitespace-nowrap">{tc.toolbarButton}</span>
+    </button>
   );
 }
 
@@ -240,8 +363,10 @@ export function FloatingToolbar({ editor, className, onComment }: Props) {
           })
         }
         className={[
+          // Below `md` the strip wraps (the link field becomes a second row)
+          // and never exceeds the viewport (responsive contract M5).
           "inline-flex items-center gap-0.5 rounded-md border border-border",
-          "bg-background shadow-md p-1",
+          "bg-background shadow-md p-1 max-md:flex-wrap max-md:max-w-[calc(100vw-1rem)]",
           className,
         ]
           .filter(Boolean)
@@ -249,6 +374,7 @@ export function FloatingToolbar({ editor, className, onComment }: Props) {
       >
         <ToolbarButtons editor={editor} onComment={onComment} />
       </BubbleMenu>
+      {onComment ? <SelectionCommentChip editor={editor} onComment={onComment} /> : null}
     </div>
   );
 }
@@ -271,7 +397,8 @@ function ToolbarButton({
       aria-pressed={active}
       onClick={onClick}
       className={[
-        "h-7 w-7 inline-flex items-center justify-center rounded transition-colors",
+        // 36px on a phone, the 28px desktop button from `md` (M3).
+        "size-9 md:size-7 inline-flex items-center justify-center rounded transition-colors",
         active
           ? "bg-[var(--accent)] text-[var(--accent-foreground)]"
           : "hover:bg-[var(--muted)]",
@@ -296,10 +423,11 @@ function LinkInput({
   onCancel: () => void;
 }) {
   return (
-    <div className="ml-1 flex items-center gap-1">
+    // Its own full-width row below `md` (the strip wraps), inline from `md`.
+    <div className="ml-1 flex items-center gap-1 max-md:ml-0 max-md:mt-1 max-md:w-full max-md:basis-full">
       <input
         type="url"
-        autoFocus
+        autoFocus={!isPhoneViewport()}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
@@ -312,7 +440,7 @@ function LinkInput({
           }
         }}
         placeholder={placeholder}
-        className="h-7 px-2 text-sm border border-border rounded bg-transparent w-48 outline-none focus:ring-1 focus:ring-border"
+        className="h-9 md:h-7 px-2 text-[16px] md:text-sm border border-border rounded bg-transparent w-[min(12rem,calc(100vw-5rem))] max-md:w-full outline-none focus:ring-1 focus:ring-border"
       />
     </div>
   );

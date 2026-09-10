@@ -20,6 +20,7 @@
  * [COMP:tools/gmail-send-as]
  */
 
+import { CrmOperationsStableKeySchema, CrmOperationsError } from '../../crm/operations-types.js'
 import { z } from 'zod'
 import { buildTool, type Tool } from '../types.js'
 import { googleFailure } from './_google-error.js'
@@ -51,6 +52,8 @@ export type GmailApi = {
   getMessage(messageId: string): Promise<unknown>
 
   sendMessage(params: {
+    crmPurposeKey?: string
+    crmTemplateKey?: string
     to: string[]
     /** Visible carbon-copy recipients (a real `Cc:` header). */
     cc?: string[]
@@ -157,6 +160,8 @@ export function createGmailTools(
       'If attaching fails, relay the reason honestly and do not send the email claiming an attachment that is not on it — ' +
       'either send it without and say so, or stop and tell the user what is blocking you.',
     inputSchema: z.object({
+      crmPurposeKey: CrmOperationsStableKeySchema.optional().describe('Explicit CRM purpose configured for a managed email account.'),
+      crmTemplateKey: CrmOperationsStableKeySchema.optional().describe('Configured CRM template key, when using a managed template.'),
       to: z.array(z.string()).min(1).max(20).describe('Recipient email addresses.'),
       cc: z.array(z.string()).max(20).optional().describe('CC addresses: copied recipients, visible to everyone on the email.'),
       bcc: z.array(z.string()).max(20).optional().describe('BCC addresses: copied recipients hidden from everyone else on the email.'),
@@ -195,7 +200,7 @@ export function createGmailTools(
     // names/sizes when possible. displayLines replaces the generic renderer
     // on channel surfaces, therefore it carries the whole draft.
     async describeConfirmation(input, context) {
-      const { to, cc, bcc, from, subject, body, attachments } = (input ?? {}) as {
+      const { to, cc, bcc, from, subject, body, attachments, crmPurposeKey, crmTemplateKey } = (input ?? {}) as {
         to?: unknown
         cc?: unknown
         bcc?: unknown
@@ -203,8 +208,12 @@ export function createGmailTools(
         subject?: unknown
         body?: unknown
         attachments?: unknown
+        crmPurposeKey?: unknown
+        crmTemplateKey?: unknown
       }
       const lines: string[] = []
+      if (typeof crmPurposeKey === 'string') lines.push(`• CRM purpose: ${crmPurposeKey}`)
+      if (typeof crmTemplateKey === 'string') lines.push(`• CRM template: ${crmTemplateKey}`)
       const explicitFrom = typeof from === 'string' ? from.trim() : ''
       const sender = explicitFrom || opts?.senderEmail?.trim()
       if (sender) lines.push(`• From: ${sender}`)
@@ -301,6 +310,8 @@ export function createGmailTools(
         }
 
         const data = await api.sendMessage({
+          ...(input.crmPurposeKey ? { crmPurposeKey:input.crmPurposeKey } : {}),
+          ...(input.crmTemplateKey ? { crmTemplateKey:input.crmTemplateKey } : {}),
           to: input.to,
           ...(input.cc?.length ? { cc: input.cc } : {}),
           ...(input.bcc?.length ? { bcc: input.bcc } : {}),
@@ -320,6 +331,9 @@ export function createGmailTools(
           },
         }
       } catch (err) {
+        if (err instanceof CrmOperationsError && err.details?.reason==='provider_outcome_unknown') {
+          return { data:'The provider may have accepted the email. Verify delivery before retrying.',isError:true }
+        }
         // A send failure must say so outright — the model otherwise tells the
         // user the mail went out on the strength of a retry that never ran.
         const failure = googleFailure(err, { tool: 'gmailSendMessage', product: 'Gmail', target: `the message to ${input.to.join(', ')}` })

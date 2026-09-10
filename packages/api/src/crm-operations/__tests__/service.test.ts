@@ -38,7 +38,7 @@ const definition: StoredIntakeDefinition = {
     { key: 'newsletter', label: 'Newsletter', type: 'boolean', required: true, mapping: { kind: 'submission_only' } },
     { key: 'private_note', label: 'Private note', type: 'text', required: false, mapping: { kind: 'custom_field', fieldKey: 'intake_note' } },
   ],
-  identityPolicy: 'trusted_verified_email',
+  identityPolicy: 'new_or_review',
   allowedIdentityProvider: null,
   consentMappings: [{ fieldKey: 'newsletter', grantedValue: true, purposeKey: 'newsletter' }],
   queueKey: 'general',
@@ -55,7 +55,7 @@ function makeTransaction(overrides: Partial<CrmOperationsTransaction> = {}) {
   let eventIndex = 0
   const tx = {
     getIntakeDefinition: vi.fn().mockResolvedValue(definition),
-    intakeCredentialMayUse: vi.fn().mockResolvedValue(true),
+    intakeCredentialReplayScope: vi.fn().mockResolvedValue(CREDENTIAL_ID),
     claimIdempotency: vi.fn().mockResolvedValue({ kind: 'claimed', claimId: 'claim-1' }),
     commitIdempotency: vi.fn().mockResolvedValue(undefined),
     resolveExternalIdentity: vi.fn().mockResolvedValue(null),
@@ -90,6 +90,7 @@ function makeTransaction(overrides: Partial<CrmOperationsTransaction> = {}) {
     saveSegment: vi.fn(),
     archiveSegment: vi.fn(),
     grantEntitlement: vi.fn(),
+    expireDueEntitlement: vi.fn(),
     updateEntitlement: vi.fn(),
     recordParticipation: vi.fn(),
     updateParticipation: vi.fn(),
@@ -232,19 +233,20 @@ describe('[COMP:crm/operations-service] canonical CRM operations service', () =>
   })
 
   it('fails closed when an intake credential is not bound to the definition', async () => {
-    const tx = makeTransaction({ intakeCredentialMayUse: vi.fn().mockResolvedValue(false) })
+    const tx = makeTransaction({ intakeCredentialReplayScope: vi.fn().mockResolvedValue(null) })
     await expect(createCrmOperationsService(makeStore(tx)).execute(context, submissionCommand))
       .rejects.toMatchObject({ code: 'credential_revoked' })
     expect(tx.claimIdempotency).not.toHaveBeenCalled()
   })
 
-  it('rejects undeclared fields before creating CRM data', async () => {
-    const tx = makeTransaction()
-    await expect(createCrmOperationsService(makeStore(tx)).execute(context, {
+  it('rolls back a new receipt and rejects undeclared fields before creating CRM data', async () => {
+    const tx = makeTransaction(), rolledBack = vi.fn()
+    await expect(createCrmOperationsService(makeStore(tx, rolledBack)).execute(context, {
       ...submissionCommand,
       fields: { ...submissionCommand.fields, ownerUserId: USER_ID },
     })).rejects.toBeInstanceOf(CrmOperationsError)
-    expect(tx.claimIdempotency).not.toHaveBeenCalled()
+    expect(rolledBack).toHaveBeenCalledOnce()
+    expect(tx.commitIdempotency).not.toHaveBeenCalled()
     expect(tx.createContact).not.toHaveBeenCalled()
   })
 
@@ -280,7 +282,7 @@ describe('[COMP:crm/operations-service] canonical CRM operations service', () =>
     expect(output.oneTimeSecret).toBe(`sk_intake_${CREDENTIAL_ID}_one-time-material`)
     expect(tx.createIntakeCredential).toHaveBeenCalledWith(expect.objectContaining({
       credentialId: CREDENTIAL_ID,
-      secretPrefix: 'sk_intake_3333',
+      secretPrefix: `sk_intake_${CREDENTIAL_ID}`,
       secretHash: 'scrypt$test',
     }))
     const credentialCalls = (tx.createIntakeCredential as ReturnType<typeof vi.fn>).mock.calls

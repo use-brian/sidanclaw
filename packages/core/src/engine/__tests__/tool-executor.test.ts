@@ -1428,3 +1428,19 @@ describe('[COMP:engine/tool-executor] liveness: per-tool timer vs abandonment', 
     expect(touch).toHaveBeenCalledWith('tool_end:gated')
   })
 })
+
+
+describe('[COMP:engine/tool-executor] mini-app invocation gate', () => {
+  it('refuses a stale tool when its write set is off before confirmation or mutation', async () => {
+    const execute = vi.fn(async () => ({ data: 'saved' }))
+    const confirm = vi.fn(async () => true)
+    const tool = buildTool({ name: 'officeEdit', description: 'Edit office', inputSchema: z.object({}), requiresCapability: 'office', resolveConfirmation: confirm, execute })
+    const executor = createToolExecutor({ tools: new Map([[tool.name, tool]]), context: { ...ctx, activeCapabilities: new Set(['office', 'home_app:office:read']) }, loopDetector: createLoopDetector() })
+    executor.addTool('call_1', tool.name, {})
+    const results = await drainResults(executor)
+    expect(results[0]).toMatchObject({ isError: true })
+    expect((results[0] as { content: string }).content).toContain('home_app:office:write')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+  })
+})

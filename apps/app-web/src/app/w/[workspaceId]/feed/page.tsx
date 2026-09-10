@@ -14,10 +14,13 @@
 
 import { Suspense } from "react";
 import { FeedPlan } from "@/components/feed/feed-plan";
+import { GridSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 
 export default function FeedPlanPage() {
+  // The same pane skeleton `feed/loading.tsx` draws, never a "..." sentence
+  // (instant-navigation N4).
   return (
-    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">…</div>}>
+    <Suspense fallback={<GridSurfaceSkeleton chrome={false} padded />}>
       <FeedPlan />
     </Suspense>
   );

@@ -213,7 +213,7 @@ export function NewCommentPopover({
         width: COMMENT_PANEL_WIDTH,
         maxHeight: pos.maxHeight,
       }}
-      className="z-40 flex max-w-[92vw] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
+      className="z-40 flex max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-lg"
     >
       <div className="flex flex-col gap-2 p-3" {...drop.dropProps}>
         <FileDropOverlay active={drop.isDragging} />
@@ -238,7 +238,7 @@ export function NewCommentPopover({
             onEnter={submit}
             workspaceId={workspaceId}
             placeholder={t.composerPlaceholder}
-            className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[14px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70"
+            className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[16px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70 md:text-[14px]"
           />
           {aiReply ? (
             <>
@@ -270,7 +270,7 @@ export function NewCommentPopover({
                 aria-label={tAttach.attach}
                 onClick={() => fileInputRef.current?.click()}
                 disabled={rec.busy}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 sm:size-7"
               >
                 <Paperclip className="size-[18px]" />
               </button>
@@ -292,12 +292,13 @@ export function NewCommentPopover({
                 : {})}
               className="flex-1"
             />
+            {/* 44px on a phone, 28px from `sm` (responsive contract M3). */}
             <button
               type="button"
               onClick={submit}
               disabled={!canSend}
               aria-label={t.send}
-              className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground sm:size-7"
             >
               <ArrowUp className="size-4" />
             </button>

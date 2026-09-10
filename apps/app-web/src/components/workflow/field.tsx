@@ -19,6 +19,12 @@
 
 import { useState } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { useCoarsePointer } from "@/lib/viewport";
 import { cn } from "@/lib/utils";
 
 export function RailCard({
@@ -46,7 +52,47 @@ export function RailCard({
   );
 }
 
+function InfoGlyph() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8v.5" />
+    </svg>
+  );
+}
+
+/**
+ * The hint glyph. A hover / focus tooltip on a pointer that can hover; on a
+ * coarse pointer (touch) a tooltip never opens and the helper copy would be
+ * unreadable, so the same glyph toggles a popover on tap instead
+ * (responsive contract M9), with a larger hit area.
+ */
 export function InfoTip({ text }: { text: string }) {
+  const coarse = useCoarsePointer();
+  if (coarse) {
+    return (
+      <Popover>
+        <PopoverTrigger
+          aria-label={text}
+          className="-my-1.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 hover:text-foreground data-[popup-open]:text-foreground"
+        >
+          <InfoGlyph />
+        </PopoverTrigger>
+        <PopoverContent side="top" className="max-w-64 text-xs leading-snug">
+          {text}
+        </PopoverContent>
+      </Popover>
+    );
+  }
   return (
     <Tooltip
       label={
@@ -62,19 +108,7 @@ export function InfoTip({ text }: { text: string }) {
         aria-label={text}
         className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 hover:text-foreground"
       >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          aria-hidden
-        >
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 11v5M12 8v.5" />
-        </svg>
+        <InfoGlyph />
       </button>
     </Tooltip>
   );

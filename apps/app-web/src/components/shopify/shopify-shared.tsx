@@ -88,6 +88,8 @@ export function RangeControl({
         </Field>
 
         {custom ? (
+          // Pre-existing native date controls (the responsive contract bans
+          // NEW ones); the 16px floor stops the iOS zoom on focus (M4).
           <>
             <Field label={t.shopifyApp.from}>
               <input
@@ -95,7 +97,7 @@ export function RangeControl({
                 value={range.since}
                 max={iso(new Date())}
                 onChange={(e) => onRange({ ...range, since: e.target.value })}
-                className="h-9 rounded-lg border border-border bg-background px-2 text-sm"
+                className="h-9 rounded-lg border border-border bg-background px-2 text-[16px] md:text-sm"
               />
             </Field>
             <Field label={t.shopifyApp.to}>
@@ -104,7 +106,7 @@ export function RangeControl({
                 value={range.until}
                 max={iso(new Date())}
                 onChange={(e) => onRange({ ...range, until: e.target.value })}
-                className="h-9 rounded-lg border border-border bg-background px-2 text-sm"
+                className="h-9 rounded-lg border border-border bg-background px-2 text-[16px] md:text-sm"
               />
             </Field>
           </>
@@ -118,7 +120,7 @@ export function RangeControl({
                 value={orderNo.from}
                 placeholder="1001"
                 onChange={(e) => onOrderNo({ ...orderNo, from: orderDigits(e.target.value) })}
-                className="h-9 w-28 rounded-lg border border-border bg-background px-2 text-sm"
+                className="h-9 w-28 rounded-lg border border-border bg-background px-2 text-[16px] md:text-sm"
               />
             </Field>
             <Field label={t.shopifyApp.orderTo}>
@@ -127,7 +129,7 @@ export function RangeControl({
                 value={orderNo.to}
                 placeholder="1099"
                 onChange={(e) => onOrderNo({ ...orderNo, to: orderDigits(e.target.value) })}
-                className="h-9 w-28 rounded-lg border border-border bg-background px-2 text-sm"
+                className="h-9 w-28 rounded-lg border border-border bg-background px-2 text-[16px] md:text-sm"
               />
             </Field>
           </>
@@ -154,7 +156,7 @@ export function Field({ label, children }: { label: string; children: React.Reac
 export function Kpi({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-border bg-card px-3 py-2">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
       <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
@@ -213,7 +215,7 @@ export function AutoTable({ rows }: { rows: Array<Record<string, unknown>> }) {
             {cols.map((c) => (
               <th
                 key={c}
-                className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground ${
+                className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground ${
                   isNum(rows[0][c]) ? "text-right" : "text-left"
                 }`}
               >

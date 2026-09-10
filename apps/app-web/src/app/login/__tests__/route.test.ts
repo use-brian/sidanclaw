@@ -47,6 +47,10 @@ describe("[COMP:app-web/login-delegation] GET /login", () => {
   });
 
   it("server-redirects hosted users to the canonical login without rendering HTML", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("USEBRIAN_EDITION", "hosted");
+    vi.stubEnv("PUBLIC_PRIMARY_AUTH_URL", "");
+    mockedWebAppUrl.mockReturnValue("https://app.usebrian.ai");
     const res = GET(new Request("https://app.usebrian.ai/login"));
     const target = new URL(res.headers.get("location")!);
 
@@ -54,6 +58,17 @@ describe("[COMP:app-web/login-delegation] GET /login", () => {
     expect(target.origin).toBe("https://usebrian.ai");
     expect(target.pathname).toBe("/login");
     expect(target.searchParams.get("next")).toBe("https://app.usebrian.ai/");
+    expect(mockedWebAppUrl).not.toHaveBeenCalled();
+  });
+
+  it("honors the legacy hosted primary and canonical app origin", () => {
+    vi.stubEnv("USEBRIAN_EDITION", "hosted");
+    vi.stubEnv("NEXT_PUBLIC_PRIMARY_AUTH_URL", "https://auth.preview.example");
+    vi.stubEnv("NEXT_PUBLIC_AUTHED_APP_URL", "https://app.preview.example");
+    const res = GET(new Request("http://localhost:3003/login?next=%2Fw%2Fone"));
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe("https://auth.preview.example");
+    expect(target.searchParams.get("next")).toBe("https://app.preview.example/w/one");
   });
 
   it("preserves a same-origin return, add-account intent, and a safe error", () => {

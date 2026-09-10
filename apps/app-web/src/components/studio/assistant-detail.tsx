@@ -1,5 +1,7 @@
 "use client";
 
+import { HOME_APP_TOOL_CONFIG } from "@use-brian/shared";
+import { HomeAppToolSettings } from "./home-app-tool-settings";
 
 import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -11,7 +13,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { AssistantAvatar } from "@/components/assistant-avatar";
-import { getCachedAssistants, setCachedAssistants } from "@/lib/sidebar-cache";
+import { getCachedAssistants, setCachedAssistants, type Assistant } from "@/lib/sidebar-cache";
+import { Skeleton } from "@/components/skeleton";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { assistantDetailCacheKey } from "@/lib/surface-prefetch";
 import { KnowledgeTab } from "@/components/knowledge-tab";
 import { ApiKeysTab } from "@/components/api-keys-tab";
 import { SensitivityBadge, type Sensitivity } from "@/components/sensitivity-badge";
@@ -66,11 +71,77 @@ function buildTabs(t: Dictionary): { id: Tab; label: string }[] {
   ];
 }
 
+/** The header row of one assistant - what the pane paints above its tabs. */
+export type AssistantHeader = {
+  id: string;
+  name: string;
+  role: string;
+  iconSeed?: number;
+  workspaceId?: string | null;
+  clearance?: Sensitivity;
+  kind?: "standard" | "app" | "primary";
+};
+
+/** What the Studio rail already knows about a row - enough to paint the header. */
+export type AssistantSeed = Pick<AssistantHeader, "id" | "name"> &
+  Partial<Omit<AssistantHeader, "id" | "name">>;
+
+export type AssistantDetailSnapshot = {
+  assistant: AssistantHeader;
+  workspaceName: string | null;
+  /** The caller's role on the assistant's workspace (gates the clearance editor). */
+  workspaceRole: string | null;
+};
+
+/**
+ * The roster read (`GET /api/assistants`) that also feeds the sidebar cache,
+ * narrowed to the one row this pane shows, plus that row's workspace name and
+ * the caller's role there - fetched in the SAME fetcher (a data dependency on
+ * the row's workspace id, not an effect waterfall; N7).
+ */
+export async function fetchAssistantDetail(id: string): Promise<AssistantDetailSnapshot> {
+  const res = await authFetch(`${API_URL}/api/assistants`);
+  if (!res.ok) throw new Error(`assistants ${res.status}`);
+  const data = (await res.json()) as {
+    assistants?: (AssistantHeader & { description?: string | null; memoryCount?: number })[];
+  };
+  const rows = data.assistants ?? [];
+  if (rows.length) setCachedAssistants(rows as unknown as Assistant[]);
+  const match = rows.find((a) => a.id === id);
+  if (!match) throw new Error("assistant not found");
+  let workspaceName: string | null = null;
+  let workspaceRole: string | null = null;
+  if (match.workspaceId) {
+    try {
+      const w = await authFetch(`${API_URL}/api/workspaces/${match.workspaceId}`);
+      if (w.ok) {
+        const wsp = (await w.json()) as { name?: string; role?: string } | null;
+        workspaceName = wsp?.name ?? null;
+        workspaceRole = wsp?.role ?? null;
+      }
+    } catch {
+      // The header still renders; only the workspace badge and the role
+      // gate wait for the next revalidation.
+    }
+  }
+  return { assistant: match, workspaceName, workspaceRole };
+}
+
 export function AssistantDetail({
   id,
+  workspaceId,
+  seed,
   onWorkspaceChanged,
 }: {
   id: string;
+  /**
+   * The workspace the Studio rail is scoped to. Keys the cached header
+   * (`assistantDetailCacheKey`); without it the pane paints from `seed` /
+   * the sidebar cache only and never fetches.
+   */
+  workspaceId?: string | null;
+  /** The rail row for `id`, so the header paints before the fetch lands. */
+  seed?: AssistantSeed | null;
   // Fired when the assistant's workspace association changes (adopt /
   // remove from workspace via the Settings tab). The studio rail is
   // workspace-scoped, so it uses this to drop the row when the assistant
@@ -99,65 +170,53 @@ export function AssistantDetail({
     setTabRaw(t);
     try { localStorage.setItem(TAB_CACHE_KEY, t); } catch {}
   }
-  const [assistant, setAssistant] = useState<{
-    id: string;
-    name: string;
-    role: string;
-    iconSeed?: number;
-    workspaceId?: string | null;
-    clearance?: Sensitivity;
-    kind?: "standard" | "app" | "primary";
-  } | null>(null);
-  const [workspaceName, setTeamName] = useState<string | null>(null);
+  // The header reads the assistant's cached key (instant-navigation N1). The
+  // rail row the page already holds (`seed`), or the sidebar cache's copy,
+  // paints name / icon / clearance on the FIRST frame while the roster read
+  // lands, so selecting a row never blanks the pane. Optimistic edits made
+  // before that read lands (clearance, icon, rename) sit in `pending` until
+  // there is a cached row to patch.
+  const detailKey = workspaceId ? assistantDetailCacheKey(workspaceId, id) : null;
+  const detail = useCachedResource<AssistantDetailSnapshot>(detailKey, () =>
+    fetchAssistantDetail(id),
+  );
+  const [pending, setPending] = useState<Partial<AssistantHeader>>({});
+  const sidebarSeed: AssistantHeader | undefined = getCachedAssistants().find((a) => a.id === id);
+  const assistant: AssistantHeader | null = detail.data
+    ? detail.data.assistant
+    : seed
+      ? { role: "", ...seed, ...pending }
+      : sidebarSeed
+        ? { ...sidebarSeed, ...pending }
+        : null;
+  const patchAssistant = useCallback(
+    (patch: Partial<AssistantHeader>) => {
+      setPending((prev) => ({ ...prev, ...patch }));
+      mutateSurfaceCache<AssistantDetailSnapshot>(detailKey, (prev) => ({
+        ...prev,
+        assistant: { ...prev.assistant, ...patch },
+      }));
+    },
+    [detailKey],
+  );
+  // The Settings tab renames the workspace badge (`onTeamChanged`) ahead of
+  // the roster read catching up.
+  const [localWorkspaceName, setTeamName] = useState<string | null>(null);
+  const workspaceName = localWorkspaceName ?? detail.data?.workspaceName ?? null;
   // Caller's role on the assistant's workspace. Mirrors the API auth
   // model: a workspace admin/owner may edit clearance even when they
   // don't own the assistant. See packages/api/src/routes/assistants.ts
   // PATCH handler and docs/architecture/platform/sensitivity.md.
-  const [workspaceRole, setWorkspaceRole] = useState<string | null>(null);
+  const workspaceRole = detail.data?.workspaceRole ?? null;
   const [clearanceFeedback, setClearanceFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [savingClearance, setSavingClearance] = useState(false);
-
-  // Fetch assistant data. The assistant list rail is owned by the
-  // Studio page — this component only needs the current assistant.
-  useEffect(() => {
-    // Resolve immediately from sidebar cache to avoid loading flash
-    const cached = getCachedAssistants();
-    if (cached.length > 0) {
-      const match = cached.find((a) => a.id === id);
-      if (match) setAssistant(match);
-    }
-
-    authFetch(`${API_URL}/api/assistants`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: { assistants?: { id: string; name: string; role: string; iconSeed?: number; description?: string | null; memoryCount?: number; workspaceId?: string | null; clearance?: Sensitivity; kind?: "standard" | "app" | "primary" }[] } | null) => {
-        if (!data?.assistants?.length) return;
-        setCachedAssistants(data.assistants as import("@/lib/sidebar-cache").Assistant[]);
-        const match = data.assistants.find((a) => a.id === id);
-        if (match) {
-          setAssistant(match);
-          // Fetch workspace name + caller's workspace role on the same
-          // round-trip; role is what gates the header clearance editor for
-          // non-owners.
-          if (match.workspaceId) {
-            authFetch(`${API_URL}/api/workspaces/${match.workspaceId}`)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((wsp: { name?: string; role?: string } | null) => {
-                if (wsp?.name) setTeamName(wsp.name);
-                if (wsp?.role) setWorkspaceRole(wsp.role);
-              })
-              .catch(() => {});
-          }
-        }
-      })
-      .catch(() => {});
-  }, [id]);
 
   async function handleSetClearance(next: Sensitivity) {
     if (!assistant) return;
     const prev = assistant.clearance;
     if (prev === next) return;
     setSavingClearance(true);
-    setAssistant({ ...assistant, clearance: next });
+    patchAssistant({ clearance: next });
     // Optimistically update the sidebar cache so the Studio rail badge
     // flips immediately. Mirrors the icon-regenerate handler above.
     const cached = getCachedAssistants();
@@ -169,7 +228,7 @@ export function AssistantDetail({
         body: JSON.stringify({ clearance: next }),
       });
       if (!res.ok) {
-        setAssistant((a) => (a ? { ...a, clearance: prev } : a));
+        patchAssistant({ clearance: prev });
         const rolledBack = getCachedAssistants();
         setCachedAssistants(rolledBack.map((a) => (a.id === id ? { ...a, clearance: prev } : a)));
         const err = await res.json().catch(() => ({ error: "" }));
@@ -184,7 +243,7 @@ export function AssistantDetail({
         });
       }
     } catch {
-      setAssistant((a) => (a ? { ...a, clearance: prev } : a));
+      patchAssistant({ clearance: prev });
       const rolledBack = getCachedAssistants();
       setCachedAssistants(rolledBack.map((a) => (a.id === id ? { ...a, clearance: prev } : a)));
       setClearanceFeedback({ type: "error", message: t.assistant.clearanceSelector.networkError });
@@ -195,9 +254,18 @@ export function AssistantDetail({
   }
 
   if (!assistant) {
+    // Nothing known about this row yet (no seed, no cache): a header-shaped
+    // skeleton holds the geometry (N4), never a "Loading..." sentence.
     return (
-      <div className="text-[13px] text-muted-foreground py-10 text-center">
-        {t.assistant.detailWrapper.loading}
+      <div className="space-y-6 md:space-y-8 w-full" data-testid="assistant-detail-skeleton">
+        <div className="flex items-start gap-4">
+          <Skeleton className="size-14 shrink-0 rounded-[10px]" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <Skeleton className="h-7 w-48" />
+            <Skeleton className="h-3.5 w-32" />
+          </div>
+        </div>
+        <Skeleton className="h-9 w-full max-w-md" />
       </div>
     );
   }
@@ -215,7 +283,7 @@ export function AssistantDetail({
                 const res = await authFetch(`${API_URL}/api/assistants/${id}/regenerate-icon`, { method: "POST" });
                 if (res.ok) {
                   const data = await res.json();
-                  setAssistant((a) => a ? { ...a, iconSeed: data.iconSeed } : a);
+                  patchAssistant({ iconSeed: data.iconSeed });
                   // Update sidebar cache — triggers subscribers in layout + AppSidebar
                   const cached = getCachedAssistants();
                   setCachedAssistants(cached.map((a) => a.id === id ? { ...a, iconSeed: data.iconSeed } : a));
@@ -224,11 +292,21 @@ export function AssistantDetail({
             }}
           >
             <AssistantAvatar id={assistant.id} name={assistant.name} iconSeed={assistant.iconSeed} size="lg" />
-            <div className="absolute inset-0 bg-black/40 rounded-[10px] opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+            {/* Hover scrim on `md+`; below `md` a phone cannot hover, so a
+                visible corner badge says the avatar is tappable (M2). */}
+            <div className="absolute inset-0 hidden bg-black/40 rounded-[10px] md:flex md:opacity-0 md:group-hover:opacity-100 transition-opacity items-center justify-center">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
               </svg>
             </div>
+            <span
+              aria-hidden
+              className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm md:hidden"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+              </svg>
+            </span>
           </button>
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-semibold tracking-tight">{assistant.name}</h1>
@@ -258,7 +336,7 @@ export function AssistantDetail({
                     <SelectTrigger
                       size="sm"
                       aria-label={t.assistant.clearanceSelector.ariaLabel}
-                      className="h-6 w-auto gap-1 border-transparent bg-transparent px-1 py-0 text-[11px] hover:bg-muted/50"
+                      className="h-9 w-auto gap-1 border-transparent bg-transparent px-1 py-0 text-[16px] hover:bg-muted/50 sm:h-6 md:text-[11px]"
                     >
                       <SelectValue>
                         <SensitivityBadge tier={assistant.clearance} size="xs" />
@@ -334,9 +412,9 @@ export function AssistantDetail({
             kind={assistant.kind}
             assistantName={assistant.name}
             workspaceId={assistant.workspaceId ?? null}
-            onRenamed={(name) => setAssistant((a) => a ? { ...a, name } : a)}
+            onRenamed={(name) => patchAssistant({ name })}
             onTeamChanged={(newTeamId, newTeamName) => {
-              setAssistant((a) => a ? { ...a, workspaceId: newTeamId } : a);
+              patchAssistant({ workspaceId: newTeamId });
               setTeamName(newTeamName);
               onWorkspaceChanged?.(id, newTeamId);
             }}
@@ -708,7 +786,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
               setSearchQuery(e.target.value);
               debouncedSearch(e.target.value);
             }}
-            className="w-full h-9 px-3 text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            className="w-full h-9 px-3 text-[16px] md:text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
           {isSearching && (
             <button
@@ -855,16 +933,19 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                     <div className="overflow-hidden">
                       {isSelected && selected && (
                         <div className={`bg-muted/20 ${i < memories.length - 1 ? "border-b border-border" : ""}`}>
-                          <div className="flex items-center justify-between px-5 py-2.5">
+                          {/* Both rows wrap: the container is overflow-hidden,
+                              so an unwrapped action row clips Delete / Close off
+                              the right edge at 360px (M8). */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-2.5">
                             <span className="text-[11px] text-muted-foreground">
                               {format(t.assistant.brainTab.scopeAndConfidence, { scope: selected.scope, percent: Math.round(selected.confidence * 100) })}
                             </span>
-                            <div className="flex items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                               {!editing && (
                                 <>
                                   <button
                                     onClick={(e) => { e.stopPropagation(); startEdit(); }}
-                                    className="text-[12px] font-medium px-3 py-1 rounded-lg border border-border text-foreground hover:bg-muted/40 transition-colors"
+                                    className="inline-flex h-9 items-center text-[12px] font-medium px-3 rounded-lg sm:h-6 border border-border text-foreground hover:bg-muted/40 transition-colors"
                                   >
                                     {t.assistant.brainTab.edit}
                                   </button>
@@ -881,7 +962,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                                         }
                                       }}
                                       disabled={scopeChanging}
-                                      className="text-[12px] font-medium px-3 py-1 rounded-lg border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-50"
+                                      className="inline-flex h-9 items-center text-[12px] font-medium px-3 rounded-lg sm:h-6 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 transition-colors disabled:opacity-50"
                                     >
                                       {scopeChanging ? t.assistant.brainTab.promoting : t.assistant.brainTab.promoteToTeam}
                                     </button>
@@ -899,7 +980,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                                         }
                                       }}
                                       disabled={scopeChanging}
-                                      className="text-[12px] font-medium px-3 py-1 rounded-lg border border-border text-foreground hover:bg-muted/40 transition-colors disabled:opacity-50"
+                                      className="inline-flex h-9 items-center text-[12px] font-medium px-3 rounded-lg sm:h-6 border border-border text-foreground hover:bg-muted/40 transition-colors disabled:opacity-50"
                                     >
                                       {scopeChanging ? t.assistant.brainTab.updating : t.assistant.brainTab.makePersonal}
                                     </button>
@@ -916,7 +997,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                                         handleDelete(selected.id);
                                       }
                                     }}
-                                    className="text-[12px] font-medium px-3 py-1 rounded-lg border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors"
+                                    className="inline-flex h-9 items-center text-[12px] font-medium px-3 rounded-lg sm:h-6 border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors"
                                   >
                                     {t.assistant.brainTab.delete}
                                   </button>
@@ -994,7 +1075,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                                   value={editSummary}
                                   onChange={(e) => setEditSummary(e.target.value)}
                                   onClick={(e) => e.stopPropagation()}
-                                  className="mt-1 w-full h-9 px-3 text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                                  className="mt-1 w-full h-9 px-3 text-[16px] md:text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                                 />
                               </div>
                               <div>
@@ -1006,7 +1087,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                                   onChange={(e) => setEditDetail(e.target.value)}
                                   onClick={(e) => e.stopPropagation()}
                                   rows={4}
-                                  className="mt-1 w-full px-3 py-2 text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+                                  className="mt-1 w-full px-3 py-2 text-[16px] md:text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
                                 />
                               </div>
                               <div>
@@ -1018,7 +1099,7 @@ function MemoryTab({ assistantId, workspaceId }: { assistantId: string; workspac
                                   value={editTags}
                                   onChange={(e) => setEditTags(e.target.value)}
                                   onClick={(e) => e.stopPropagation()}
-                                  className="mt-1 w-full h-9 px-3 text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                                  className="mt-1 w-full h-9 px-3 text-[16px] md:text-[13px] bg-secondary/50 border border-border rounded-lg text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                                 />
                               </div>
                               <div className="flex items-center gap-2 pt-1">
@@ -1316,7 +1397,7 @@ function ConnectorsTab({
   const params = useParams<{ workspaceId: string }>();
   const routeWs = params?.workspaceId ?? "";
   const studioHref = (segment: string) => `/w/${routeWs}/studio/${segment}`;
-  const [subTab, setSubTab] = useState<"connectors" | "browser-identities" | "skills">("connectors");
+  const [subTab, setSubTab] = useState<"home-apps" | "connectors" | "browser-identities" | "skills">("home-apps");
   const [userConnectors, setUserConnectors] = useState<UserConnector[]>([]);
   const [loading, setLoading] = useState(true);
   const [toggling, setToggling] = useState<string | null>(null);
@@ -1541,17 +1622,19 @@ function ConnectorsTab({
 
   return (
     <div className="space-y-6">
-      {/* Sub-tab toggle: Connectors / Browser identities / Skills */}
-      <div className="flex gap-1 border-b border-border pb-2">
-        {(["connectors", "browser-identities", "skills"] as const).map((sub) => (
+      {/* Sub-tab toggle: Mini apps / Connectors / Browser identities / Skills */}
+      <div className="flex gap-1 overflow-x-auto border-b border-border pb-2">
+        {(["home-apps", "connectors", "browser-identities", "skills"] as const).map((sub) => (
           <button
             key={sub}
-            onClick={() => setSubTab(sub)}
-            className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${
+            onClick={() => { setSubTab(sub); if (sub === "connectors") fetchConnectors(); }}
+            className={`shrink-0 text-sm px-3 py-1.5 rounded-lg transition-colors ${
               subTab === sub ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            {sub === "skills"
+            {sub === "home-apps"
+              ? t.assistant.toolsTab.homeApps.title
+              : sub === "skills"
               ? t.assistant.toolsTab.subTabSkills
               : sub === "browser-identities"
                 ? t.assistant.toolsTab.subTabBrowserIdentities
@@ -1560,7 +1643,9 @@ function ConnectorsTab({
         ))}
       </div>
 
-      {subTab === "browser-identities" ? (
+      {subTab === "home-apps" ? (
+        <HomeAppToolSettings key={assistantId} assistantId={assistantId} workspaceId={workspaceId} />
+      ) : subTab === "browser-identities" ? (
         <BrowserIdentitiesPanel
           assistantId={assistantId}
           assistantClearance={assistantClearance}
@@ -1642,7 +1727,7 @@ function ConnectorsTab({
                   onClick={() => toggleStar(item.id, !item.starred)}
                   aria-pressed={!!item.starred}
                   title={item.starred ? t.assistant.toolsTab.skillUnstar : t.assistant.toolsTab.skillStar}
-                  className={`shrink-0 mt-0.5 p-1 rounded transition-colors ${
+                  className={`shrink-0 -m-2 p-2.5 rounded transition-colors sm:m-0 sm:mt-0.5 sm:p-1 ${
                     item.starred
                       ? "text-amber-600 hover:text-amber-500 dark:text-amber-400 dark:hover:text-amber-300"
                       : "text-muted-foreground/60 hover:text-amber-600 dark:hover:text-amber-400"
@@ -1678,9 +1763,9 @@ function ConnectorsTab({
                   onClick={() => item.rowId
                     ? toggleWorkspaceSkill(item.rowId, !item.enabled)
                     : toggleSkill(item.id, !item.enabled)}
-                  className={`shrink-0 relative inline-flex h-5 w-9 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${item.enabled ? "bg-primary" : "bg-muted"}`}
+                  className={`shrink-0 relative inline-flex h-7 w-12 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 sm:h-5 sm:w-9 ${item.enabled ? "bg-primary" : "bg-muted"}`}
                 >
-                  <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform duration-200 ${item.enabled ? "translate-x-4" : "translate-x-0"}`} />
+                  <span className={`pointer-events-none inline-block size-6 rounded-full bg-background shadow-sm transition-transform duration-200 sm:size-4 ${item.enabled ? "translate-x-5 sm:translate-x-4" : "translate-x-0"}`} />
                 </button>
               </div>
               );
@@ -1759,7 +1844,11 @@ function ConnectorsTab({
                           route (no connector instance to enable/disable), every
                           other row through the connector route. Same control,
                           because to the user it is the same question. */}
-                      <button
+                      {c.scope === "builtin" && HOME_APP_TOOL_CONFIG.some((app) => app.capability === c.id) ? (
+                        <button type="button" className="text-xs text-primary" onClick={(e) => { e.stopPropagation(); setSubTab("home-apps"); }}>
+                          {t.assistant.toolsTab.homeApps.policies}
+                        </button>
+                      ) : <button
                         type="button" role="switch" aria-checked={c.enabled}
                         disabled={toggling === c.id}
                         onClick={(e) => {
@@ -1767,10 +1856,10 @@ function ConnectorsTab({
                           if (c.scope === "builtin") toggleBuiltinCapability(c.id, !c.enabled);
                           else toggleAssistantEnabled(c.id, !c.enabled);
                         }}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${c.enabled ? "bg-primary" : "bg-muted"}`}
+                        className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:h-5 sm:w-9 ${c.enabled ? "bg-primary" : "bg-muted"}`}
                       >
-                        <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform duration-200 ${c.enabled ? "translate-x-4" : "translate-x-0"}`} />
-                      </button>
+                        <span className={`pointer-events-none inline-block size-6 rounded-full bg-background shadow-sm transition-transform duration-200 sm:size-4 ${c.enabled ? "translate-x-5 sm:translate-x-4" : "translate-x-0"}`} />
+                      </button>}
                     </>
                   )}
                 </div>
@@ -2467,7 +2556,7 @@ function SettingsTab({
                 onChange={(e) => setName(e.target.value)}
                 disabled={!canRename}
                 maxLength={100}
-                className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-2 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-2 text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               />
               {canRename && (
                 <button
@@ -2505,7 +2594,7 @@ function SettingsTab({
                   disabled={!isOwner}
                   maxLength={300}
                   placeholder={t.assistant.settings.charterMissionPlaceholder}
-                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
                 />
                 <p className="text-[11px] text-muted-foreground mt-1.5">{t.assistant.settings.charterMissionHint}</p>
               </div>
@@ -2520,7 +2609,7 @@ function SettingsTab({
                   disabled={!isOwner}
                   maxLength={500}
                   placeholder={t.assistant.settings.charterAudiencePlaceholder}
-                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
                 />
               </div>
               <div>
@@ -2534,7 +2623,7 @@ function SettingsTab({
                   maxLength={2000}
                   rows={3}
                   placeholder={t.assistant.settings.charterSuccessPlaceholder}
-                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 resize-y"
+                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2.5 text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 resize-y"
                 />
               </div>
               <div>
@@ -2547,7 +2636,7 @@ function SettingsTab({
                   maxLength={10000}
                   rows={6}
                   placeholder={t.assistant.settings.charterInstructionsPlaceholder}
-                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 resize-y min-h-[120px]"
+                  className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2.5 text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 resize-y min-h-[120px]"
                 />
                 <span className="text-[11px] text-muted-foreground">
                   {charter.instructions.length.toLocaleString()} / 10,000
@@ -2778,7 +2867,7 @@ function SettingsTab({
                         value={deleteConfirm}
                         onChange={(e) => setDeleteConfirm(e.target.value)}
                         placeholder={assistantName}
-                        className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-2 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-destructive/50"
+                        className="flex-1 bg-muted/50 border border-border rounded-lg px-3 py-2 text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-destructive/50"
                       />
                       <button
                         onClick={handleDelete}
@@ -2818,7 +2907,7 @@ type PrimitiveGrantState = {
   /** Which surface owns the row. Built-in primitives render their switch on
    *  the Tools tab beside the other connectors, so this panel skips them —
    *  two controls for one grant is worse than none. */
-  group?: "primitive" | "admin" | "builtin";
+  group?: "primitive" | "admin" | "builtin" | "home-app";
 };
 
 function PrimitiveGrantsPanel({ assistantId }: { assistantId: string }) {
@@ -2886,7 +2975,7 @@ function PrimitiveGrantsPanel({ assistantId }: { assistantId: string }) {
   // here would give the same grant two controls. Keyed on the server's group
   // discriminator rather than a local slug list so a new built-in cannot leak
   // into this panel by default.
-  const rows = grants.filter((g) => g.group !== "builtin" && copyFor(g.capability));
+  const rows = grants.filter((g) => g.group !== "builtin" && g.group !== "home-app" && copyFor(g.capability));
   if (rows.length === 0) return null;
 
   return (

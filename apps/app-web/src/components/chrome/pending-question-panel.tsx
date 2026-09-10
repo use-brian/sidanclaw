@@ -17,6 +17,7 @@
 import { useCallback, useRef, useState } from "react";
 import { TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import type { useT } from "@/lib/i18n/client";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
@@ -113,11 +114,12 @@ export function PendingQuestionPanel({
           }}
           placeholder={dict.placeholder}
           rows={2}
-          autoFocus
+          // No auto-raised keyboard on a phone (responsive contract M4).
+          autoFocus={!isPhoneViewport()}
           disabled={submitting || cancelling}
           className={cn(
             "w-full min-h-[3.25rem] max-h-40 resize-none overflow-y-auto rounded-md border border-border bg-background",
-            "px-2.5 py-1.5 text-[13px] leading-relaxed outline-none",
+            "px-2.5 py-1.5 text-[16px] leading-relaxed outline-none md:text-[13px]",
             "placeholder:text-muted-foreground",
             "disabled:opacity-60",
           )}

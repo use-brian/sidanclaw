@@ -828,10 +828,14 @@ export function CommentThreadBody({
         type="button"
         onClick={() => void resolve()}
         aria-label={t.resolve}
-        className={`absolute right-2 top-2 z-10 inline-flex size-7 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground${
+        className={`absolute right-1 top-1 z-10 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground/70 hover:bg-accent hover:text-foreground sm:right-2 sm:top-2 sm:size-7${
           // Notion reveals the resolve control on hover; the popover/rail keep it
           // always visible (a fixed box with no surrounding page to hover off).
-          inline ? " opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100" : ""
+          // The hover reveal only applies from `md` (responsive contract M2):
+          // a finger cannot hover, so on a phone the tick is always visible.
+          inline
+            ? " opacity-100 transition-opacity md:opacity-0 md:focus-visible:opacity-100 md:group-hover:opacity-100"
+            : ""
         }`}
       >
         <Check className="size-4" />
@@ -843,7 +847,7 @@ export function CommentThreadBody({
         className={
           inline
             ? "px-4 pb-1 pt-4"
-            : "min-h-0 max-h-[44vh] flex-1 overflow-y-auto px-4 pb-1 pt-4"
+            : "min-h-0 max-h-[44dvh] flex-1 overflow-y-auto px-4 pb-1 pt-4"
         }
       >
         {loading ? (
@@ -1015,7 +1019,7 @@ export function CommentThreadBody({
             onEnter={() => void sendReply()}
             workspaceId={workspaceId}
             placeholder={t.composerPlaceholder}
-            className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[14px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70"
+            className="max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 text-[16px] leading-relaxed outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70 md:text-[14px]"
           />
           {aiReply ? (
             <AttachmentChips attachments={att.attachments} onRemove={att.remove} />
@@ -1045,7 +1049,7 @@ export function CommentThreadBody({
                 aria-label={tAttach.attach}
                 onClick={() => fileInputRef.current?.click()}
                 disabled={rec.busy}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 sm:size-7"
               >
                 <Paperclip className="size-[18px]" />
               </button>
@@ -1066,6 +1070,8 @@ export function CommentThreadBody({
               onAiReplyChange={setAiReply}
               className="flex-1"
             />
+            {/* Send is the primary action of every comment surface: 44px on a
+                phone, the 28px desktop button from `sm` (responsive contract M3). */}
             <button
               type="button"
               onClick={() => void sendReply()}
@@ -1077,7 +1083,7 @@ export function CommentThreadBody({
                 (!draft.trim() && !(aiReply && (att.hasReady || pendingRecordings.length > 0)))
               }
               aria-label={busy ? t.sending : t.send}
-              className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground sm:size-7"
             >
               <ArrowUp className="size-4" />
             </button>

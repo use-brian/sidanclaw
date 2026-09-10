@@ -86,7 +86,7 @@ export function WhatsappGroupManager({ workspaceId }: { workspaceId: string }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={wa.groupSearchPlaceholder}
-            className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:outline-none"
+            className="w-full rounded-md border border-border bg-background py-2 pl-9 pr-3 text-[16px] md:text-sm placeholder:text-muted-foreground focus:outline-none"
           />
         </div>
       )}
@@ -181,7 +181,7 @@ function WhatsappGroupRow({
         onClick={() => void setEnabled(!group.enabled, "scheduled")}
         disabled={busy}
         className={
-          "shrink-0 rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 " +
+          "inline-flex h-9 shrink-0 items-center rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-50 sm:h-7 " +
           (group.enabled
             ? "border border-border text-muted-foreground hover:text-destructive"
             : "bg-action text-action-foreground hover:bg-action/90")

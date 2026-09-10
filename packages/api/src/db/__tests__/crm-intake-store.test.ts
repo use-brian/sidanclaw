@@ -78,10 +78,10 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
     const rows = await createDbCrmIntakeReadStore().listSubmissions(WORKSPACE_ID, {
       status: 'new', definitionKey: 'contact_form', limit: 25,
     })
-    expect(rows).toEqual([{ id: 'submission-1' }])
+    expect(rows).toEqual({ submissions: [{ id: 'submission-1' }], nextCursor: null })
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('WHERE e.workspace_id=$1'),
-      [WORKSPACE_ID, 'new', 'contact_form', null, 25],
+      [WORKSPACE_ID, 'new', 'contact_form', null, null, null, null, null, null, null, null, null, 26],
     )
   })
 
@@ -94,6 +94,7 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
         id: 'suppression-1', channel: 'email', action: 'suppressed',
         occurredAt: new Date('2026-08-30T00:00:00Z'), createdAt: new Date('2026-08-30T00:00:00Z'),
       }] })
+      .mockResolvedValueOnce({ rows: [] }) // No retained address suppression.
     const verdict = await createDbCrmIntakeReadStore().checkSendability(
       WORKSPACE_ID, DEFINITION_ID, 'email', 'marketing',
     )
@@ -113,12 +114,12 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
     const rows = await createDbCrmIntakeReadStore().listParticipation(WORKSPACE_ID, {
       eventId: DEFINITION_ID, status: 'registered', sourceKind: 'commerce', limit: 25,
     })
-    expect(rows[0]).toMatchObject({
+    expect(rows.participation[0]).toMatchObject({
       status: 'registered', sourceStatus: 'confirmed', commerceManaged: true,
     })
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining("WHEN 'confirmed' THEN 'registered'"),
-      [WORKSPACE_ID, null, DEFINITION_ID, 'commerce', 'registered', 25],
+      [WORKSPACE_ID, null, DEFINITION_ID, 'commerce', 'registered', null, null, null, null, null, null, null, null, 26],
     )
   })
 
@@ -129,12 +130,12 @@ describe('[COMP:crm/operations-store] CRM operations read model', () => {
     const rows = await createDbCrmIntakeReadStore().listPipelines(WORKSPACE_ID, {
       entityKind: 'deal', includeArchived: false,
     })
-    expect(rows).toEqual([{
+    expect(rows).toEqual({ pipelines: [{
       id: 'pipeline-1', name: 'Renewals', stages: [{ id: 'stage-1', name: 'Review' }],
-    }])
+    }], nextCursor: null })
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('FROM crm_pipelines p'),
-      [WORKSPACE_ID, false],
+      [WORKSPACE_ID, false, null, null, null, null, null, null, null, 51],
     )
   })
 })

@@ -36,7 +36,6 @@ describeIf('[COMP:prompt/builder] Runtime-context provenance (live Gemini)', () 
     })
 
     const privateBlock = formatPrivateRuntimeContext(split.privateRuntimeContext)
-    const systemPrompt = [split.stablePrompt, privateBlock].filter(Boolean).join('\n\n')
     const messages = attachUserVisibleContext(
       [{ role: 'user', content: '呢句咩意思' }] satisfies Message[],
       split.userVisibleContext,
@@ -47,7 +46,8 @@ describeIf('[COMP:prompt/builder] Runtime-context provenance (live Gemini)', () 
     const response = await collectStream(
       provider.stream({
         model: 'gemini-flash',
-        systemPrompt,
+        systemPrompt: split.stablePrompt,
+        runtimeSystemContext: privateBlock,
         messages: messages!,
         // Gemini 3's reasoning tokens share maxOutputTokens with the visible
         // answer. Keep LOW thinking and enough headroom for the full Cantonese

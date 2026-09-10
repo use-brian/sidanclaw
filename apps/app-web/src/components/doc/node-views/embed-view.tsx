@@ -406,20 +406,23 @@ function DataEmbed({
             </button>
           </div>
         ) : null}
-        {/* Title + view-config options share ONE fixed-height row. The options
-            (search / filter / sort / group / properties) fade in on hover or
-            keyboard focus via opacity ALONE — they always occupy their layout
-            slot, so revealing them never reflows the row or nudges the table
-            below. The container settles at `opacity:1` when revealed, creating
-            no stacking context then, so the popovers' `z-40` paints above the
-            table's sticky `z-20` header. */}
-        <div className="flex min-h-7 items-center gap-3">
+        {/* Title + view-config options share ONE fixed-height row. From `md`
+            the options (search / filter / sort / group / properties) fade in
+            on hover or keyboard focus via opacity ALONE — they always occupy
+            their layout slot, so revealing them never reflows the row or
+            nudges the table below. The container settles at `opacity:1` when
+            revealed, creating no stacking context then, so the popovers'
+            `z-40` paint above the table's sticky `z-20` header. Below `md`
+            there is no hover, so the toolbar is always visible, collapsed
+            into a "View options" button that wraps the controls under the
+            title (responsive contract M2; report B row 34). */}
+        <div className="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1.5">
           <div className="shrink-0 text-base font-semibold text-foreground">
             {entityLabel}
           </div>
           <div
             aria-label={t.dataTable.toolbarAria}
-            className="min-w-0 flex-1 pointer-events-none opacity-0 transition-opacity duration-150 group-hover/datatable:pointer-events-auto group-hover/datatable:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 motion-reduce:transition-none"
+            className="min-w-0 flex-1 opacity-100 transition-opacity duration-150 md:pointer-events-none md:opacity-0 md:group-hover/datatable:pointer-events-auto md:group-hover/datatable:opacity-100 md:focus-within:pointer-events-auto md:focus-within:opacity-100 motion-reduce:transition-none"
           >
             <ViewToolbar
               columns={tableRoot.columns}
@@ -692,7 +695,9 @@ export function DiagramEmbed({
         aria-label={editable ? t.diagramSource.edit : t.diagramSource.view}
         title={editable ? t.diagramSource.edit : t.diagramSource.view}
         onClick={() => setEditing(true)}
-        className="absolute left-2 top-2 z-10 rounded-md border border-border bg-background/80 p-1.5 text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/diagram:opacity-100 motion-reduce:transition-none"
+        // Always visible on touch (responsive contract M2), hover-revealed
+        // from `md`; 36px on a phone.
+        className="absolute left-2 top-2 z-10 rounded-md border border-border bg-background/80 p-2.5 text-muted-foreground opacity-100 shadow-sm backdrop-blur transition-opacity hover:bg-muted hover:text-foreground md:p-1.5 md:opacity-0 md:focus-visible:opacity-100 md:group-hover/diagram:opacity-100 motion-reduce:transition-none"
       >
         <Code2 className="size-4" aria-hidden />
       </button>
@@ -748,7 +753,7 @@ function DiagramSourceEditor({
             onCancel();
           }
         }}
-        className="w-full resize-y rounded border border-border bg-background px-2.5 py-2 font-mono text-xs leading-relaxed text-foreground outline-none read-only:cursor-default read-only:opacity-90"
+        className="w-full resize-y rounded border border-border bg-background px-2.5 py-2 font-mono text-[16px] leading-relaxed text-foreground outline-none read-only:cursor-default read-only:opacity-90 md:text-xs"
       />
       <div className="flex items-center justify-end gap-2">
         {onCancel ? (
@@ -864,7 +869,7 @@ function MediaEmbed({
               if (caption !== (block.caption ?? "")) onCaption(caption);
             }}
             placeholder={t.mediaBlock.captionPlaceholder}
-            className="w-full bg-transparent text-xs text-muted-foreground outline-none placeholder:text-muted-foreground/50"
+            className="w-full bg-transparent text-[16px] text-muted-foreground outline-none placeholder:text-muted-foreground/50 md:text-xs"
           />
         ) : block.caption ? (
           <figcaption className="text-xs text-muted-foreground">{block.caption}</figcaption>
@@ -892,7 +897,7 @@ function MediaEmbed({
           }
         }}
         placeholder={kind === "video" ? t.embed.videoUrlPlaceholder : t.embed.audioUrlPlaceholder}
-        className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+        className="min-w-0 flex-1 bg-transparent text-[16px] text-foreground outline-none placeholder:text-muted-foreground/60 md:text-sm"
       />
       <button
         type="button"

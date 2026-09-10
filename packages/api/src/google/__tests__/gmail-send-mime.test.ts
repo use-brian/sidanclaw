@@ -1,3 +1,7 @@
+// Recipient admission is exercised with real PostgreSQL in crm-managed-mailbox.integration.test.ts.
+vi.mock('../../crm-operations/delivery-policy.js', () => ({
+  withCrmMailAdmission: (_context: unknown, _provider: unknown, _envelope: unknown, invoke: () => Promise<unknown>) => invoke(),
+}))
 /**
  * Unit tests for `sendGmailMessage` MIME assembly.
  * Component tag: [COMP:tools/gmail-attachments].

@@ -1,3 +1,4 @@
+import { filterToolsByCapabilities } from '../tools/capability-gate.js'
 /**
  * Context-clean Doc edit runner.
  *
@@ -265,7 +266,7 @@ async function runAttempt(
           },
         ],
       }],
-      tools: new Map(options.tools),
+      tools: filterToolsByCapabilities(new Map(options.tools), options.context.activeCapabilities ?? new Set()),
       context: isolateDocEditToolContext(options.context),
       stateless: true,
       maxTurns: options.maxTurns ?? DOC_EDIT_MAX_TURNS,
@@ -473,6 +474,7 @@ export function createDelegateDocEditTool(
   let delegations = 0
   let lastStatus: DocEditReceipt['status'] | null = null
   return buildTool<typeof delegateDocEditInputSchema>({
+    requiresCapability: 'page',
     name: DOC_EDIT_GATEWAY_TOOL,
     description:
       'Apply a requested Doc page, entity, or comment change through a fresh isolated editor. Choose edit only when runtime context supplies an exact allowed existing page id (the open Page, or a readable Page pinned in the current full-Chat room). Edit may patch that Page or create real child Pages beneath it, but it cannot create an unrelated top-level Page. When several pinned Pages are allowed and the user did not clearly select one, ask which Page instead of guessing. Choose create only when the user explicitly asks for a new top-level Page. Submit one self-contained brief after gathering needed evidence. The editor has no search, brain, memory, recording, connector, or web tools and cannot see this conversation: every fact it needs must be pasted into the brief (the text itself, plus source page ids or URLs), never referenced. Questions that do not require a Doc mutation should be answered directly. The receipt status is completed, partial, or failed: partial means the editor applied some changes and was cut off before finishing - relay that honestly (what landed, what did not) and offer to continue in the next turn; never describe a partial result as done. A failed receipt whose summary starts with missing_evidence: names what the brief lacked; gather exactly that and call this tool once more with it pasted in (one retry is allowed after a no-change failure).',

@@ -100,4 +100,29 @@ describe("[COMP:app-web/live-recording-page] rolling recorder windows", () => {
     expect(onLiveWindow).toHaveBeenCalledTimes(2);
     expect(track.stop).toHaveBeenCalled();
   });
+
+  it("stops capture and flushes the local spool without waiting for transcript network requests", async () => {
+    let finishNetwork!: () => void;
+    const network = new Promise<void>((resolve) => { finishNetwork = resolve; });
+    const onLiveWindow = vi.fn().mockReturnValue(network);
+    const { createRecorderEngine } = await import("../recorder-engine");
+    const { memorySpoolStore } = await import("../recorder-spool");
+    const spool = memorySpoolStore();
+    const engine = await createRecorderEngine({ onLiveWindow, liveWindowMs: 100 });
+    engine.latch(spool, { id: "capture-1", workspaceId: "workspace-1", assistantId: "assistant-1", startedAt: Date.now() });
+    await vi.advanceTimersByTimeAsync(150);
+    const capture = await engine.stop();
+    expect(capture.durationMs).toBe(150);
+    expect(track.stop).toHaveBeenCalled();
+    expect(FakeMediaRecorder.instances.every((recorder) => recorder.state === "inactive")).toBe(true);
+    expect(await spool.readChunks("capture-1")).toHaveLength(1);
+    expect(onLiveWindow).toHaveBeenCalledTimes(1);
+    let drained = false;
+    void capture.liveWindowsDone!.then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    finishNetwork();
+    await capture.liveWindowsDone;
+    expect(onLiveWindow).toHaveBeenCalledTimes(2);
+  });
 });

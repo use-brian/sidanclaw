@@ -35,6 +35,14 @@ export {
   type CrmEmailDraftStore,
 } from './email-drafts.js'
 export * from './operations-types.js'
+export * from './config-commands.js'
+export * from './integration-authority.js'
 export * from './operations-tools.js'
+export * from './pagination.js'
 export * from './sendability.js'
 export * from './segments.js'
+
+export * from './segment-catalog.js'
+
+export * from './retention-types.js'
+export * from './file-cleanup-types.js'

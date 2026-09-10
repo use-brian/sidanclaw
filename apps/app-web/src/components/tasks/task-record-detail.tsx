@@ -216,7 +216,8 @@ export function TaskRecordDetail({
 
   return (
     <ResizablePeek storageKey="operator:peek-width" ariaLabel={row.title} onDismiss={onClose}>
-      {/* Slim action toolbar — the Brain entry page's top-row shape. */}
+      {/* Slim action toolbar — the Brain entry page's top-row shape. 44px
+          targets below `sm` (responsive contract M3), 28px from `sm`. */}
       <div className="flex items-center justify-end gap-1 border-b border-border/60 px-3 py-2">
         <button
           type="button"
@@ -224,14 +225,14 @@ export function TaskRecordDetail({
           title={tp.deleteTaskAria}
           disabled={deleting}
           onClick={() => void deleteWithReason()}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:pointer-events-none disabled:opacity-50 sm:size-7"
         >
           <Trash2 className="size-4" aria-hidden />
         </button>
         <Link
           href={brainRowUrl("", workspaceId, row.id, "task")}
           title={tp.openInBrain}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground sm:size-7"
         >
           <ExternalLink className="size-4" aria-hidden />
         </Link>
@@ -239,7 +240,7 @@ export function TaskRecordDetail({
           type="button"
           aria-label={tp.closeDetail}
           onClick={onClose}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground sm:size-7"
         >
           <X className="size-4" aria-hidden />
         </button>

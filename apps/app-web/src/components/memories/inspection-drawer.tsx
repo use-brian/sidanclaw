@@ -237,7 +237,9 @@ export function InspectionDrawer({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md h-full bg-card border-l border-border flex flex-col"
+        // `h-dvh` (C 74 / M6): on iOS the layout viewport kept the bottom-
+        // anchored composer under the keyboard.
+        className="w-full max-w-md h-dvh bg-card border-l border-border flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -253,7 +255,8 @@ export function InspectionDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="text-muted-foreground hover:text-foreground p-1"
+            // Full-screen sheet below `sm`: the close is the way out (C 15 / M3).
+            className="inline-flex h-11 w-11 sm:h-7 sm:w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label={t.memoriesReview.close}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
@@ -334,7 +337,7 @@ export function InspectionDrawer({
             disabled={!session}
             placeholder={t.memoriesReview.askInputPlaceholder}
             rows={3}
-            className="text-sm px-3 py-2 rounded-md border border-border bg-background resize-y"
+            className="text-[16px] md:text-sm px-3 py-2 rounded-md border border-border bg-background resize-y"
           />
           <div className="flex items-center justify-between">
             <div className="text-[10px] text-muted-foreground">

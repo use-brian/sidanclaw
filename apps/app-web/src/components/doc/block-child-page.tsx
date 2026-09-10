@@ -136,7 +136,8 @@ export function BlockChildPage({
       <span className="min-w-0 flex-1 truncate text-base font-medium underline-offset-2 group-hover/childpage:underline">
         {title}
       </span>
-      <ChevronRight className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover/childpage:opacity-100" />
+      {/* Always visible on touch, hover-revealed from `md` (responsive contract M2). */}
+      <ChevronRight className="size-5 shrink-0 text-muted-foreground opacity-100 md:opacity-0 md:group-hover/childpage:opacity-100" />
     </button>
   );
 }

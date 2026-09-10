@@ -3,6 +3,18 @@ import { describe, expect, it, vi } from 'vitest'
 import { associationFingerprint } from '../../association/domain.js'
 import { createAssociationStore } from '../association-store.js'
 
+// The legacy store unit cases isolate domain transitions. Durable admission,
+// leases, authority and atomic acknowledgement run against real PostgreSQL.
+vi.mock('../../association/provider-inbox.js', () => ({
+  receiveProviderInbox: async (pool: Pool, envelope: { orderId: string; event: unknown }, actor: unknown, _workspace: string,
+    handlers: { apply(client: unknown, envelope: unknown, actor: unknown): Promise<unknown> }) => {
+    const client = await pool.connect()
+    try { await client.query('BEGIN'); const result = await handlers.apply(client, { ...envelope, target: 'order' }, actor); await client.query('COMMIT'); return result }
+    catch (error) { await client.query('ROLLBACK'); throw error }
+    finally { client.release() }
+  },
+}))
+
 const WID = '11111111-1111-4111-8111-111111111111'
 const CONTACT_ID = '22222222-2222-4222-8222-222222222222'
 const RECORD_ID = '33333333-3333-4333-8333-333333333333'
@@ -18,6 +30,15 @@ function fakePool(
     if (normalized === 'BEGIN' || normalized === 'COMMIT' || normalized === 'ROLLBACK') {
       return { rows: [], rowCount: 0 }
     }
+    if (normalized.includes('FROM workspace_modules') && normalized.endsWith('FOR SHARE')) {
+      return { rows: [{ workspaceId: WID, moduleKey: 'association', state: 'enabled', version: 1,
+        enabledAt: null, disableRequestedAt: null, disabledAt: null, updatedAt: null, updatedByUserId: null }], rowCount: 1 }
+    }
+    // These provider-transition fixtures have no inventory scopes; races are
+    // exercised against PostgreSQL in association-inventory.integration.test.ts.
+    if (normalized.startsWith('SELECT pg_advisory_xact_lock')) return { rows: [] }
+    if (normalized.startsWith('SELECT DISTINCT event_id FROM association_ticket_types')) return { rows: [] }
+    if (normalized.startsWith('SELECT reservation_expires_at>clock_timestamp() unexpired')) return { rows: [{ unexpired: false }] }
     return resolve(normalized, params)
   })
   const release = vi.fn()
@@ -160,7 +181,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
     const fake = fakePool(async (sql) => {
       if (sql.includes('FROM association_provider_events')) return { rows: [], rowCount: 0 }
       if (sql.includes('FROM association_orders') && sql.includes('FOR UPDATE')) {
-        return { rows: [{ status: 'paid' }], rowCount: 1 }
+        return { rows: [{ status: 'paid', provider: 'stripe', provider_reference: 'fixture-object', total_minor: '100', currency: 'USD' }], rowCount: 1 }
       }
       throw new Error(`unexpected SQL: ${sql}`)
     })
@@ -168,7 +189,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
       WID,
       ORDER_ID,
       {
-        provider: 'stripe',
+        provider: 'stripe', providerReference: 'fixture-object', amountMinor: 100, currency: 'USD',
         eventId: 'evt_1',
         targetStatus: 'failed',
         occurredAt: '2027-02-02T10:00:00.000Z',
@@ -185,7 +206,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
       if (sql.includes('FROM association_provider_events')) return { rows: [], rowCount: 0 }
       if (sql.includes('FROM association_orders') && sql.includes('FOR UPDATE')) {
         return {
-          rows: [{ status: 'pending', reservation_expires_at: new Date(Date.now() - 60_000) }],
+          rows: [{ status: 'pending', provider: 'stripe', provider_reference: 'fixture-object', total_minor: '100', currency: 'USD', reservation_expires_at: new Date(Date.now() - 60_000) }],
           rowCount: 1,
         }
       }
@@ -195,7 +216,7 @@ describe('[COMP:crm/association-store] transactional evidence', () => {
       WID,
       ORDER_ID,
       {
-        provider: 'stripe',
+        provider: 'stripe', providerReference: 'fixture-object', amountMinor: 100, currency: 'USD',
         eventId: 'evt_late',
         targetStatus: 'paid',
         occurredAt: '2027-02-02T10:00:00.000Z',

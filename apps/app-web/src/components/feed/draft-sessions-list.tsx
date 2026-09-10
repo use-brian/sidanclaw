@@ -46,7 +46,6 @@ import {
   createFeedDraftSession,
   deleteFeedDraftSession,
   deleteFeedPublishedPost,
-  fetchFeedDraftSessions,
   fetchFeedSavedDrafts,
   type FeedDraftSessionSeed,
   type FeedDraftSessionSummary,
@@ -59,6 +58,16 @@ import {
 } from "@/lib/feed-nav";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import {
+  feedSessionsCacheKey,
+  feedWorkspaceCacheKey,
+} from "@/lib/surface-prefetch";
+import {
+  loadFeedPlatformSessions,
+  type FeedPlatformSessions,
+} from "@/lib/feed-surface-cache";
+import { notifyFeedPostsChanged } from "@/lib/feed-posts-events";
 
 type FeedPageDict = ReturnType<typeof useT>["feedPage"];
 
@@ -263,9 +272,56 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
   const { chooseAsync, dialog: choiceDialog } = useChoiceDialog();
   const { pickAccount, dialog: accountDialog } = useAccountPicker();
 
-  const [sessions, setSessions] = useState<FeedDraftSessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The list paints from the surface cache (instant-navigation N1 / N2): the
+  // SAME `feed-sessions:<wid>:<viewer>:<platform>` key the sidebar rail
+  // reads, holding every distribution assistant's sessions for the platform,
+  // of which this pane shows its own assistant's. Cold entry answers from
+  // IndexedDB; the local "posts changed" signal marks the family stale (N3).
+  const workspaceKey = feedWorkspaceCacheKey(team.workspaceId);
+  const sessionsKey = assistantId
+    ? feedSessionsCacheKey(team.workspaceId, platform)
+    : null;
+  const sessionsResource = useCachedResource<FeedPlatformSessions>(
+    sessionsKey,
+    () =>
+      loadFeedPlatformSessions({
+        workspaceId: team.workspaceId,
+        platform,
+        sessionsKey: sessionsKey as string,
+        workspaceKey,
+      }),
+  );
+  const sessions = useMemo<FeedDraftSessionSummary[]>(
+    () =>
+      sessionsResource.data?.find((entry) => entry.assistantId === assistantId)
+        ?.sessions ?? [],
+    [sessionsResource.data, assistantId],
+  );
+  const loading = assistantId !== null && sessionsResource.loading;
+  // Action errors are local; a failed FIRST load reads off the cache entry
+  // (a failed revalidation keeps the last good rows and stays quiet).
   const [error, setError] = useState<string | null>(null);
+  const loadError =
+    sessionsResource.data === undefined && sessionsResource.error !== undefined
+      ? sessionsResource.error instanceof Error
+        ? sessionsResource.error.message
+        : td.loadFailed
+      : null;
+  // Optimistic removal: the row leaves the cache row every mounted reader
+  // paints (this pane AND the sidebar rail), then the signal revalidates.
+  const dropSession = useCallback(
+    (sessionId: string) => {
+      mutateSurfaceCache<FeedPlatformSessions>(sessionsKey, (previous) =>
+        previous.map((entry) =>
+          entry.assistantId === assistantId
+            ? { ...entry, sessions: entry.sessions.filter((row) => row.id !== sessionId) }
+            : entry,
+        ),
+      );
+      notifyFeedPostsChanged();
+    },
+    [sessionsKey, assistantId],
+  );
   // `composing` covers all three create flows. The reply flow uses a single
   // input element that *is* the button (placeholder doubles as the label,
   // swapping to "Paste URL" on focus) — no expand/collapse toggle.
@@ -337,28 +393,6 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
     return cols;
   }, [visibleSessions, colCount]);
 
-  const loadFailedCopy = td.loadFailed;
-  const load = useCallback(async () => {
-    if (!assistantId) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const rows = await fetchFeedDraftSessions(assistantId, platform);
-      setSessions(rows);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : loadFailedCopy);
-    } finally {
-      setLoading(false);
-    }
-  }, [assistantId, platform, loadFailedCopy]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   // Discard a single session from the list. Authorization mirrors the
   // backend: admin/owner OR original starter. The button is hidden for
   // anyone else, but the backend re-checks regardless.
@@ -377,12 +411,12 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
           setError(message);
           throw new Error(message);
         }
-        setSessions((prev) => prev.filter((row) => row.id !== s.id));
+        dropSession(s.id);
       } finally {
         setDiscardingId(null);
       }
     },
-    [assistantId, td.discardFailed],
+    [assistantId, dropSession, td.discardFailed],
   );
 
   // Take down every live post this session produced, then discard the
@@ -417,12 +451,12 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
           setError(message);
           throw new Error(message);
         }
-        setSessions((prev) => prev.filter((row) => row.id !== s.id));
+        dropSession(s.id);
       } finally {
         setDiscardingId(null);
       }
     },
-    [assistantId, td.couldntDeletePost, td.discardFailed],
+    [assistantId, dropSession, td.couldntDeletePost, td.discardFailed],
   );
 
   const discardSession = useCallback(
@@ -702,9 +736,9 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
         ) : null}
       </header>
 
-      {error ? (
+      {error ?? loadError ? (
         <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          {error}
+          {error ?? loadError}
         </div>
       ) : null}
 
@@ -726,7 +760,7 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
                 aria-selected={active}
                 onClick={() => setFilter(id)}
                 className={
-                  "inline-flex items-center gap-1.5 rounded-full px-3 h-7 text-xs font-medium transition-colors " +
+                  "inline-flex items-center gap-1.5 rounded-full px-3 h-9 md:h-7 text-xs font-medium transition-colors " +
                   (active
                     ? "bg-action text-action-foreground"
                     : "bg-card border border-border text-muted-foreground hover:text-foreground hover:bg-accent")
@@ -891,7 +925,7 @@ export function DraftSessionsList(props: { platform?: FeedPlatform } = {}) {
                       void discardSession(s);
                     }}
                     disabled={isDiscarding}
-                    className="absolute top-2 right-2 h-6 w-6 inline-flex items-center justify-center rounded-md bg-card/90 backdrop-blur-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-50"
+                    className="absolute top-2 right-2 h-8 w-8 md:h-6 md:w-6 inline-flex items-center justify-center rounded-md bg-card/90 backdrop-blur-sm text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity disabled:opacity-50"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
@@ -1037,7 +1071,7 @@ function ReplyAndPostStack(props: {
           disabled={disabled}
           aria-label={td.replyAria}
           className={
-            "w-full h-9 rounded-lg text-[13px] border bg-card transition-all duration-150 ease-out focus:outline-none disabled:opacity-50 " +
+            "w-full h-9 rounded-lg text-[16px] md:text-[13px] border bg-card transition-all duration-150 ease-out focus:outline-none disabled:opacity-50 " +
             (replyActive
               ? // Active — left-align for URL readability, room on the
                 // right for the submit caret. Border tint alone is the
@@ -1103,7 +1137,7 @@ function ReplyAndPostStack(props: {
           disabled={disabled}
           aria-label={td.linkAria}
           className={
-            "w-full h-9 rounded-lg text-[13px] border bg-card transition-all duration-150 ease-out focus:outline-none disabled:opacity-50 " +
+            "w-full h-9 rounded-lg text-[16px] md:text-[13px] border bg-card transition-all duration-150 ease-out focus:outline-none disabled:opacity-50 " +
             (linkActive
               ? "text-left pl-3 pr-8 border-primary/50 shadow-sm text-foreground font-normal placeholder:text-muted-foreground placeholder:font-normal"
               : "text-center px-3 border-foreground/15 shadow-sm text-foreground hover:border-foreground/30 hover:bg-accent/50 hover:shadow cursor-text placeholder:text-foreground placeholder:font-medium")

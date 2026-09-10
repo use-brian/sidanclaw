@@ -7,10 +7,11 @@ import {
   AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, ChevronDown, ChevronLeft, ChevronRight,
   FileSearch, Highlighter, Image as ImageIcon, IndentDecrease, IndentIncrease, Italic, Link,
   List, ListOrdered, MoreHorizontal, Pilcrow, Redo2, RemoveFormatting, Search, Strikethrough,
-  Table2, Underline, Undo2,
+  Table2, Type, Underline, Undo2,
 } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { visualViewportBottomInset } from "@/lib/office/phone-toolbar";
 import { promptDialog } from "@/components/ui/prompt-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -54,6 +55,7 @@ export function DocumentToolbar({ editor, editable, onInsertImage, controllerRef
   const [countsOpen, setCountsOpen] = useState(false);
   const imageInput = useRef<HTMLInputElement>(null);
   const headerImageInput = useRef<HTMLInputElement>(null);
+  const keyboardInset = useVisualViewportInset();
   useEffect(() => {
     if (!editor) return;
     const refresh = () => setRevision((value) => value + 1);
@@ -93,8 +95,12 @@ export function DocumentToolbar({ editor, editable, onInsertImage, controllerRef
     <div className="hidden border-b bg-background/95 backdrop-blur sm:block" data-document-toolbar-surface="desktop-tablet">
       <ToolbarContent {...common} />
     </div>
-    <div className="fixed inset-x-2 bottom-2 z-30 rounded-xl border bg-background/95 shadow-xl backdrop-blur sm:hidden" data-document-toolbar-surface="phone">
-      <div className="overflow-x-auto"><ToolbarContent {...common} compact /></div>
+    {/* Phone bar. `bottom-2` is the no-JS baseline; the inline `bottom` adds
+        the soft-keyboard inset (`visualViewport`) and the home-indicator safe
+        area so the bar sits above both (report B row 23, contract M6). Every
+        control inside is at least 44px on touch (M3). */}
+    <div className="fixed inset-x-2 bottom-2 z-30 rounded-xl border bg-background/95 shadow-xl backdrop-blur sm:hidden" style={{ bottom: `calc(${keyboardInset}px + max(0.5rem, env(safe-area-inset-bottom)))` }} data-document-toolbar-surface="phone">
+      <div className="overflow-x-auto [&_button]:min-h-11 [&_button]:min-w-11"><ToolbarContent {...common} compact /></div>
     </div>
     <input ref={imageInput} type="file" accept="image/png,image/jpeg" className="sr-only" aria-label={t.documentInsertImage} onChange={(event) => {
       const file = event.target.files?.[0];
@@ -167,6 +173,7 @@ function ToolbarContent({ editor, editable, compact = false, onInsertImage, onIn
     <PageSetupMenu editor={editor} editable={editable} section={section} onInsertHeaderImage={onInsertHeaderImage} />
     {table ? <TableMenu editor={editor} editable={editable} table={table.node} /> : null}
     {image ? <ImageMenu editor={editor} editable={editable} image={image.node} onReplace={onInsertImage} /> : null}
+    {compact ? <TextToolsPopover editor={editor} editable={editable} canFormat={canFormat} fontFamily={first?.fontFamily ?? null} fontSizePt={first?.fontSizePt ?? null} color={first?.color ?? null} highlight={first?.highlight ?? null} /> : null}
     <DropdownMenu>
       <DropdownMenuTrigger render={<button type="button" className="rounded p-2 hover:bg-muted" aria-label={t.documentTools}><MoreHorizontal className="size-4" /></button>} />
       <DropdownMenuContent align="end">
@@ -215,6 +222,33 @@ function SpacingMenu({ editor, editable }: { editor: Editor | null; editable: bo
       <DropdownMenuItem onClick={() => setDocumentBlockAttributes(editor, { spacingBeforePt: undefined, spacingAfterPt: undefined })}>{t.removeParagraphSpacing}</DropdownMenuItem>
     </DropdownMenuContent>
   </DropdownMenu>;
+}
+
+/** The phone toolbar's route to font family / size, text and highlight colour
+ *  and paragraph spacing (report B row 16): the compact surface has no room
+ *  for the desktop selects, so they live behind one "Text" popover. */
+function TextToolsPopover({ editor, editable, canFormat, fontFamily, fontSizePt, color, highlight }: { editor: Editor | null; editable: boolean; canFormat: boolean; fontFamily: string | null; fontSizePt: number | null; color: string | null; highlight: string | null }) {
+  const t = useT().office;
+  return <Popover>
+    <PopoverTrigger render={<button type="button" disabled={!editable} className="flex h-11 items-center gap-1 rounded px-2 text-xs hover:bg-muted disabled:opacity-40" data-document-text-tools="true"><Type className="size-4" />{t.compactTextTools}<ChevronDown className="size-3" /></button>} />
+    <PopoverContent align="end" className="w-72 max-w-[calc(100vw-1rem)]">
+      <label className="text-xs font-medium">{t.fontFamily}</label>
+      <Select value={fontFamily} onValueChange={(value) => value && applyDocumentRunFormatting(editor, { fontFamily: value })} disabled={!canFormat}>
+        <SelectTrigger className="w-full" aria-label={t.fontFamily}><SelectValue placeholder={t.mixedValue} /></SelectTrigger>
+        <SelectContent>{FONTS.map((font) => <SelectItem key={font} value={font}>{font}</SelectItem>)}</SelectContent>
+      </Select>
+      <label className="text-xs font-medium">{t.fontSize}</label>
+      <Select value={fontSizePt ? String(fontSizePt) : null} onValueChange={(value) => value && applyDocumentRunFormatting(editor, { fontSizePt: Number(value) })} disabled={!canFormat}>
+        <SelectTrigger className="w-full" aria-label={t.fontSize}><SelectValue placeholder={t.mixedValue} /></SelectTrigger>
+        <SelectContent>{FONT_SIZES.map((size) => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}</SelectContent>
+      </Select>
+      <div className="flex items-center gap-2">
+        <ColorInput label={t.textColor} value={color ?? "#111111"} disabled={!canFormat} onValue={(next) => applyDocumentRunFormatting(editor, { color: next })} /><span className="text-xs">{t.textColor}</span>
+        <ColorInput label={t.highlightColor} value={highlight ?? "#FFF2CC"} disabled={!canFormat} onValue={(next) => applyDocumentRunFormatting(editor, { highlight: next })} icon={<Highlighter />} /><span className="text-xs">{t.highlightColor}</span>
+      </div>
+      <SpacingMenu editor={editor} editable={editable} />
+    </PopoverContent>
+  </Popover>;
 }
 
 function PageSetupMenu({ editor, editable, section, onInsertHeaderImage }: { editor: Editor | null; editable: boolean; section: Record<string, unknown> | null; onInsertHeaderImage(): void }) {
@@ -318,11 +352,11 @@ function FindReplacePanel({ editor, editable, onClose }: { editor: Editor | null
   const queryRef = useRef<HTMLInputElement>(null);
   useEffect(() => { queryRef.current?.focus(); }, []);
   return <section className="absolute right-3 top-12 z-40 w-[min(26rem,calc(100%-1.5rem))] rounded-xl border bg-background p-3 shadow-xl" aria-label={t.findReplace} data-document-find-replace="true">
-    <div className="flex items-center gap-2"><input ref={queryRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.findPlaceholder} aria-label={t.find} className="h-8 min-w-0 flex-1 rounded border px-2 text-sm" onKeyDown={(event) => { if (event.key === "Enter") setMatches(findDocumentText(editor, query, event.shiftKey ? -1 : 1, matchCase)); if (event.key === "Escape") onClose(); }} />
+    <div className="flex items-center gap-2"><input ref={queryRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.findPlaceholder} aria-label={t.find} className="h-10 min-w-0 flex-1 rounded border px-2 text-[16px] md:h-8 md:text-sm" onKeyDown={(event) => { if (event.key === "Enter") setMatches(findDocumentText(editor, query, event.shiftKey ? -1 : 1, matchCase)); if (event.key === "Escape") onClose(); }} />
       <ToolbarButton label={t.previousMatch} disabled={!query} pressed={false} onClick={() => setMatches(findDocumentText(editor, query, -1, matchCase))} icon={<ChevronLeft />} />
       <ToolbarButton label={t.nextMatch} disabled={!query} pressed={false} onClick={() => setMatches(findDocumentText(editor, query, 1, matchCase))} icon={<ChevronRight />} />
-      <button type="button" onClick={onClose} aria-label={t.close} className="rounded p-2 hover:bg-muted">×</button></div>
-    <div className="mt-2 flex items-center gap-2"><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder={t.replacePlaceholder} aria-label={t.replace} disabled={!editable} className="h-8 min-w-0 flex-1 rounded border px-2 text-sm disabled:opacity-40" />
+      <button type="button" onClick={onClose} aria-label={t.close} className="flex size-11 items-center justify-center rounded hover:bg-muted sm:size-8">×</button></div>
+    <div className="mt-2 flex items-center gap-2"><input value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder={t.replacePlaceholder} aria-label={t.replace} disabled={!editable} className="h-10 min-w-0 flex-1 rounded border px-2 text-[16px] disabled:opacity-40 md:h-8 md:text-sm" />
       <button type="button" disabled={!editable || !query} onClick={() => setMatches(replaceDocumentText(editor, query, replacement, false, matchCase))} className="rounded border px-2 py-1.5 text-xs disabled:opacity-40">{t.replace}</button>
       <button type="button" disabled={!editable || !query} onClick={() => setMatches(replaceDocumentText(editor, query, replacement, true, matchCase))} className="rounded border px-2 py-1.5 text-xs disabled:opacity-40">{t.replaceAll}</button></div>
     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground"><label className="flex items-center gap-2"><input type="checkbox" checked={matchCase} onChange={(event) => setMatchCase(event.target.checked)} />{t.matchCase}</label><span aria-live="polite">{t.matchesFound.replace("{count}", String(matches))}</span></div>
@@ -333,7 +367,7 @@ function OutlinePanel({ editor, onClose }: { editor: Editor | null; onClose(): v
   const t = useT().office;
   const { headings } = documentProductivity(editor);
   return <section className="absolute left-3 top-12 z-40 max-h-[70vh] w-72 overflow-y-auto rounded-xl border bg-background p-3 shadow-xl" aria-label={t.documentOutline} data-document-outline="true">
-    <div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">{t.documentOutline}</h2><button type="button" onClick={onClose} aria-label={t.close}>×</button></div>
+    <div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">{t.documentOutline}</h2><button type="button" onClick={onClose} aria-label={t.close} className="flex size-11 items-center justify-center rounded hover:bg-muted sm:size-8">×</button></div>
     {headings.length ? <ol className="space-y-1">{headings.map((heading) => <li key={heading.id}><button type="button" onClick={() => focusDocumentHeading(editor, heading)} className="w-full truncate rounded px-2 py-1.5 text-left text-xs hover:bg-muted" style={{ paddingInlineStart: `${Math.max(0, heading.level - 1) * 12 + 8}px` }}>{heading.text || t.untitledHeading}</button></li>)}</ol> : <p className="text-xs text-muted-foreground">{t.noHeadings}</p>}
   </section>;
 }
@@ -343,7 +377,7 @@ function WordCountPanel({ editor, onClose }: { editor: Editor | null; onClose():
   const { counts } = documentProductivity(editor);
   const rows = [[t.words, counts.words], [t.characters, counts.characters], [t.charactersNoSpaces, counts.charactersNoSpaces], [t.selectionWords, counts.selectionWords], [t.selectionCharacters, counts.selectionCharacters]] as const;
   return <section className="absolute left-1/2 top-16 z-40 w-72 -translate-x-1/2 rounded-xl border bg-background p-3 shadow-xl" aria-label={t.wordCount} data-document-word-count="true">
-    <div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">{t.wordCount}</h2><button type="button" onClick={onClose} aria-label={t.close}>×</button></div>
+    <div className="mb-2 flex items-center justify-between"><h2 className="text-sm font-semibold">{t.wordCount}</h2><button type="button" onClick={onClose} aria-label={t.close} className="flex size-11 items-center justify-center rounded hover:bg-muted sm:size-8">×</button></div>
     <dl className="space-y-1 text-xs">{rows.map(([label, value]) => <div key={label} className="flex justify-between gap-4"><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
   </section>;
 }
@@ -361,6 +395,21 @@ function ToolbarButton({ label, icon, disabled, pressed, onClick }: { label: str
   return <button type="button" aria-label={label} aria-pressed={pressed} disabled={disabled} onClick={onClick} className={cn("rounded p-2 hover:bg-muted disabled:opacity-40 [&_svg]:size-4", pressed && "bg-muted text-primary")}>{icon}</button>;
 }
 function Divider() { return <span className="mx-0.5 h-5 border-l" aria-hidden />; }
+
+/** The soft-keyboard inset for the phone bar, from `window.visualViewport` (0 where unsupported). */
+function useVisualViewportInset(): number {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => setInset(visualViewportBottomInset(viewport.height, viewport.offsetTop, window.innerHeight));
+    update();
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    return () => { viewport.removeEventListener("resize", update); viewport.removeEventListener("scroll", update); };
+  }, []);
+  return inset;
+}
 
 function currentBlockStyle(editor: Editor | null): DocumentBlockStyle {
   if (!editor) return "Body";

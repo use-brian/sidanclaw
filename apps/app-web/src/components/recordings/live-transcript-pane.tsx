@@ -33,6 +33,21 @@ import {
 
 const POLL_MS = 10_000;
 
+/**
+ * Reader is at (or within `threshold` px of) the tail of a scroll box. The
+ * follow-the-tail decision is made from the box's scroll geometry on EVERY
+ * scroll, not from the input that caused it: a `wheel` handler covers a mouse
+ * and nothing else, so a phone reader who dragged up to re-read was yanked
+ * back to the tail on the next window (every few seconds during a capture).
+ * `onScroll` fires for wheel, touch drag, keyboard and scrollbar alike.
+ */
+export function isPinnedToEnd(
+  box: { scrollHeight: number; scrollTop: number; clientHeight: number },
+  threshold = 40,
+): boolean {
+  return box.scrollHeight - box.scrollTop - box.clientHeight < threshold;
+}
+
 /** Merge-by-chunkId, capture order — poll results and event appends converge. */
 export function mergeLiveWindows(
   current: LiveTranscriptWindowRow[],
@@ -133,11 +148,8 @@ export function LiveTranscriptPane({
       {expanded ? (
         <div
           ref={scrollRef}
-          onWheel={() => {
-            const el = scrollRef.current;
-            if (!el) return;
-            pinnedToEndRef.current =
-              el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          onScroll={(event) => {
+            pinnedToEndRef.current = isPinnedToEnd(event.currentTarget);
           }}
           className="mt-2 max-h-80 overflow-y-auto rounded-md border border-border bg-background px-3 py-2"
         >

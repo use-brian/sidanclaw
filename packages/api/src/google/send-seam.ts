@@ -20,7 +20,7 @@ import { refreshGoogleAccessToken, sendGmailMessage } from './client.js'
 import type { ConnectorStore } from '../db/connector-store.js'
 import type { ConnectorInstanceStore } from '../db/connector-instance-store.js'
 
-export type GmailSendParams = { to: string; subject: string; body: string }
+export type GmailSendParams = { to: string; subject: string; body: string; crmPurposeKey?: string; crmTemplateKey?: string }
 
 export type AcquireGmailSenderResult =
   | { ok: true; send: (params: GmailSendParams) => Promise<{ id: string; threadId: string }> }
@@ -31,22 +31,24 @@ export type AcquireGmailSender = (params: {
   userId: string
   /** Optional multi-account connector_instance id; absent = the primary gmail connector. */
   instanceId?: string
+  workspaceId?: string
 }) => Promise<AcquireGmailSenderResult>
 
 export function createGmailSendSeam(deps: {
-  connectorStore: Pick<ConnectorStore, 'getCredentials'>
+  connectorStore: Pick<ConnectorStore, 'list'>
   connectorInstanceStore: Pick<ConnectorInstanceStore, 'getCredentials'>
 }): AcquireGmailSender {
-  return async ({ userId, instanceId }) => {
+  return async ({ userId, instanceId, workspaceId }) => {
     const googleCfg = getConnectorConfig('google')
     if (!googleCfg) {
       return { ok: false, message: 'Google OAuth is not configured on this deployment.' }
     }
     // Google connector rows store the REFRESH token in `client_secret`
     // (legacy blob shape — same read `injectMcpTools.readRefreshToken` does).
-    const creds = instanceId
-      ? await deps.connectorInstanceStore.getCredentials(userId, instanceId)
-      : await deps.connectorStore.getCredentials(userId, 'gmail')
+    const boundId = instanceId ?? (await deps.connectorStore.list(userId))
+      .filter(row => row.connectorId === 'gmail' && row.connected)
+      .sort((a,b) => a.createdAt.getTime()-b.createdAt.getTime() || a.id.localeCompare(b.id))[0]?.id
+    const creds = boundId ? await deps.connectorInstanceStore.getCredentials(userId, boundId) : null
     const refreshToken = creds?.client_secret ?? null
     if (!refreshToken) {
       return {
@@ -63,7 +65,7 @@ export function createGmailSendSeam(deps: {
     )
     return {
       ok: true,
-      send: (params) => sendGmailMessage(accessToken, params),
+      send: (params) => sendGmailMessage(accessToken, params, { userId,workspaceId,connectorInstanceId:boundId }),
     }
   }
 }

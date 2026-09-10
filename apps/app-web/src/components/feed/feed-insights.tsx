@@ -1178,7 +1178,7 @@ function KindFilterPicker({
             type="button"
             onClick={() => onChange(opt.id)}
             className={
-              "px-3 h-8 text-xs font-medium rounded-lg transition-colors inline-flex items-center gap-1.5 " +
+              "px-3 h-9 md:h-8 text-xs font-medium rounded-lg transition-colors inline-flex items-center gap-1.5 " +
               (isActive
                 ? "bg-action text-action-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent")
@@ -1264,7 +1264,7 @@ function RangePicker({
             type="button"
             onClick={() => onChange(opt)}
             className={
-              "px-3 h-8 text-xs font-medium rounded-lg transition-colors " +
+              "px-3 h-9 md:h-8 text-xs font-medium rounded-lg transition-colors " +
               (isActive
                 ? "bg-action text-action-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground hover:bg-accent")

@@ -220,8 +220,11 @@ export function ReviewPanel({
 
         {/* Action row — Verify is THE action; the drawer keeps the rest. */}
         <div className="flex items-center gap-2">
+          {/* Verify is THE trust action on every review surface: 44px on
+              touch (C 70 / M3). */}
           <Button
             size="sm"
+            className="h-11 sm:h-7 px-4 sm:px-2.5"
             disabled={busy || readOnly}
             onClick={() => void handleVerify()}
           >

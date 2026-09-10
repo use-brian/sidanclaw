@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { promptDialog } from "@/components/ui/prompt-dialog";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import {
@@ -275,8 +276,8 @@ export function TaskSuggestionsView({
                         <input
                           value={editTitle}
                           onChange={(e) => setEditTitle(e.target.value)}
-                          autoFocus
-                          className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm font-medium text-foreground outline-none"
+                          autoFocus={!isPhoneViewport()}
+                          className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] font-medium text-foreground outline-none md:text-sm"
                           aria-label={t.editTitleLabel}
                         />
                       ) : (
@@ -473,7 +474,7 @@ export function TaskSuggestionsView({
                         onChange={(e) => setReason(e.target.value)}
                         placeholder={t.dismissPlaceholder}
                         rows={3}
-                        className="mt-3 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+                        className="mt-3 w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-[16px] text-foreground outline-none placeholder:text-muted-foreground md:text-sm"
                       />
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <Button

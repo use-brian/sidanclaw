@@ -41,6 +41,7 @@ export type IngestPageToolDeps = {
 
 export function createIngestPageTool(deps: IngestPageToolDeps): Tool {
   return buildTool({
+    requiresCapability: 'page',
     name: 'ingestPage',
     description:
       'Add a saved doc page to the brain: distil its authored prose, decisions, and ' +

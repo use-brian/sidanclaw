@@ -461,11 +461,12 @@ export function createTaskTools(
           // Provenance anchors (mig 316). Extraction runs (writeSource
           // 'extracted') and the programmatic brain-MCP surface carry a
           // SYNTHETIC context.sessionId (randomUUID, no sessions row) — a
-          // real session is only stamped for interactive/workflow chat.
+          // real session is only stamped for interactive chat. Workflow run
+          // UUIDs identify execution, not a persisted sessions row.
           sourceEpisodeId: opts?.writeSourceEpisodeId ?? null,
           sourceStartMs: moment?.startMs ?? null,
           sourceSessionId:
-            opts?.writeSourceEpisodeId || opts?.writeSource === 'extracted' || context.channelType === 'programmatic'
+            opts?.writeSourceEpisodeId || opts?.writeSource === 'extracted' || (context.channelType === 'programmatic' || context.channelType === 'workflow')
               ? null
               : context.sessionId,
           createdByAssistantId: context.assistantId,

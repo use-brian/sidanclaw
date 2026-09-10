@@ -91,7 +91,6 @@ import {
   submitCustomChannelInput,
   disconnectCustomChannel,
   customChannelBridgePath,
-  listChannelAssistants,
   attachChannelAssistant,
   detachChannelAssistant,
   updateChannelAssistant,
@@ -107,8 +106,11 @@ import {
   type RequireMentionOverride,
   type UserAccessMode,
 } from "@/lib/api/channels";
-import { listAssistants, type StudioAssistantSummary } from "@/lib/api/studio";
-import type { WorkspaceRole } from "@/lib/api/workspaces";
+import type { StudioAssistantSummary } from "@/lib/api/studio";
+import { BackButton } from "@/components/ui/back-button";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
+import { isPhoneViewport } from "@/lib/viewport";
+import { useChannelsData } from "./use-channels-data";
 import {
   probeEmailInboxes,
   createEmailInbox,
@@ -299,53 +301,58 @@ function clearanceRank(c: ChannelClearance): number {
  * and treats the caller as a non-admin, so a failed probe never *grants* an
  * affordance the server would reject.
  */
-async function fetchWorkspaceMembership(workspaceId: string): Promise<{
-  clearance: ChannelClearance | null;
-  role: WorkspaceRole | null;
-}> {
-  try {
-    const res = await authFetch(
-      `${API_URL}/api/workspaces/${encodeURIComponent(workspaceId)}`,
-    );
-    if (!res.ok) return { clearance: null, role: null };
-    const data = (await res.json()) as {
-      me?: { id?: string };
-      members?: {
-        userId: string;
-        clearance?: ChannelClearance;
-        role?: WorkspaceRole;
-      }[];
-    };
-    const meId = data.me?.id;
-    if (!meId || !Array.isArray(data.members)) return { clearance: null, role: null };
-    const mine = data.members.find((m) => m.userId === meId);
-    return { clearance: mine?.clearance ?? null, role: mine?.role ?? null };
-  } catch {
-    return { clearance: null, role: null };
-  }
-}
+// The caller's `workspace_members` probe (`fetchWorkspaceMembership`) lives
+// with the page's data hook in `./use-channels-data.ts`.
 
 export default function StudioChannelsPage() {
   const t = useT();
   const { activeId } = useWorkspaces();
-  const [channels, setChannels] = useState<Channel[] | null>(null);
-  const [routing, setRouting] = useState<Record<string, ChannelAssistant[]>>({});
-  const [assistants, setAssistants] = useState<StudioAssistantSummary[]>([]);
-  // The caller's clearance on this workspace, surfaced by GET /workspaces/:id
-  // (added with workspace-channels migration 153). Defaults to 'internal' —
-  // the schema-level default — while loading. Used to filter the clearance
-  // dropdown to options at or below the user's own tier, mirroring the RLS
-  // WITH CHECK on `channels`.
-  const [myClearance, setMyClearance] = useState<ChannelClearance>("internal");
-  // The caller's workspace role, from the same GET /workspaces/:id read.
-  // Null until it resolves (and on failure) — rename stays hidden until we
-  // positively know the caller is an owner or admin.
-  const [myRole, setMyRole] = useState<WorkspaceRole | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // The channel list (with its per-channel routing rows), the assistant list
+  // and the caller's membership read three cached keys in parallel
+  // (instant-navigation N1 / N7): a revisit paints the rail on the first
+  // frame; connect / rename / detach / disconnect write through the same key.
+  //
+  // `myClearance` (from GET /workspaces/:id, migration 153) defaults to
+  // 'internal' - the schema-level default - until the probe lands, and
+  // filters the clearance dropdown to options at or below the caller's own
+  // tier, mirroring the RLS WITH CHECK on `channels`. `myRole` is null until
+  // it resolves (and on failure) - rename stays hidden until we positively
+  // know the caller is an owner or admin.
+  const {
+    channels,
+    routing,
+    error,
+    assistants,
+    myClearance: membershipClearance,
+    myRole,
+    refresh: refreshChannels,
+    updateChannels,
+    updateRouting,
+    refreshRouting,
+  } = useChannelsData(activeId);
+  const myClearance: ChannelClearance = membershipClearance ?? "internal";
   const [addOpen, setAddOpen] = useState(false);
   // Master-detail selection — a rail row key (channel UUID or "official");
   // null / stale keys resolve to the first rail row.
   const [selected, setSelected] = useState<string | null>(null);
+  // Phone single-pane (responsive contract M1 / M5): below `md` the rail and
+  // the panel are two screens; a tapped row (or a fresh connect) opens the
+  // panel and Back returns to the rail. Inert on `md+`.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const detailRef = useRef<HTMLDivElement>(null);
+
+  // A workspace switch drops the selection and returns to the rail.
+  useEffect(() => {
+    setSelected(null);
+    setDetailOpen(false);
+  }, [activeId]);
+
+  const revealDetail = useCallback(() => {
+    setDetailOpen(true);
+    requestAnimationFrame(() => {
+      detailRef.current?.scrollIntoView({ block: "start" });
+    });
+  }, []);
   // Assistant email inboxes (agentmail.md). Null while probing; a 503 probe
   // means no email provider is configured server-side — the email tab and
   // inbox affordances then stay hidden (the dark contract).
@@ -378,90 +385,56 @@ export default function StudioChannelsPage() {
     void refreshEmailInboxes();
   }, [refreshEmailInboxes]);
 
-  useEffect(() => {
-    if (!activeId) {
-      setChannels(null);
-      return;
-    }
-    let cancelled = false;
-    setChannels(null);
-    setError(null);
-    void (async () => {
-      try {
-        const [chans, asts, me] = await Promise.all([
-          listChannels(activeId),
-          listAssistants(activeId),
-          fetchWorkspaceMembership(activeId),
-        ]);
-        if (cancelled) return;
-        setAssistants(asts);
-        setChannels(chans);
-        if (me.clearance) setMyClearance(me.clearance);
-        setMyRole(me.role);
-        const entries = await Promise.all(
-          chans.map(
-            async (c) =>
-              [c.id, await listChannelAssistants(activeId, c.id)] as const,
-          ),
-        );
-        if (!cancelled) setRouting(Object.fromEntries(entries));
-      } catch (e) {
-        if (!cancelled) setError((e as Error).message);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId]);
-
-  const onChannelUpdated = useCallback((updated: Channel) => {
-    setChannels((prev) =>
-      prev ? prev.map((c) => (c.id === updated.id ? updated : c)) : prev,
-    );
-  }, []);
-
-  const refreshRouting = useCallback(
-    async (channelId: string) => {
-      if (!activeId) return;
-      const rows = await listChannelAssistants(activeId, channelId);
-      setRouting((prev) => ({ ...prev, [channelId]: rows }));
+  const onChannelUpdated = useCallback(
+    (updated: Channel) => {
+      updateChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     },
-    [activeId],
+    [updateChannels],
   );
 
   const onChannelCreated = useCallback(
     async (created: Channel) => {
-      setChannels((prev) => {
-        if (!prev) return [created];
-        // Re-install hits the same channel id — replace in place; new
-        // channels prepend so the user sees their fresh install first.
-        const at = prev.findIndex((c) => c.id === created.id);
-        if (at >= 0) {
-          const next = [...prev];
-          next[at] = created;
-          return next;
-        }
-        return [created, ...prev];
-      });
-      // Jump the detail panel to the fresh install.
+      if (channels === null) {
+        // The dialog opened before the list ever landed (nothing cached to
+        // patch): let the in-flight or next load pick the new row up.
+        void refreshChannels();
+      } else {
+        updateChannels((prev) => {
+          // Re-install hits the same channel id — replace in place; new
+          // channels prepend so the user sees their fresh install first.
+          const at = prev.findIndex((c) => c.id === created.id);
+          if (at >= 0) {
+            const next = [...prev];
+            next[at] = created;
+            return next;
+          }
+          return [created, ...prev];
+        });
+      }
+      // Jump the detail panel to the fresh install - on a phone the pane
+      // swaps to it, so the user is not left looking at the rail.
       setSelected(created.id);
+      revealDetail();
       // The backend may have seeded a default `channel_assistants` row when
       // `defaultAssistantId` was provided — pull routing so the new panel
       // shows it.
       await refreshRouting(created.id);
     },
-    [refreshRouting],
+    [channels, refreshChannels, updateChannels, refreshRouting, revealDetail],
   );
 
-  const onChannelDeleted = useCallback((channelId: string) => {
-    setChannels((prev) => (prev ? prev.filter((c) => c.id !== channelId) : prev));
-    setRouting((prev) => {
-      if (!(channelId in prev)) return prev;
-      const next = { ...prev };
-      delete next[channelId];
-      return next;
-    });
-  }, []);
+  const onChannelDeleted = useCallback(
+    (channelId: string) => {
+      updateChannels((prev) => prev.filter((c) => c.id !== channelId));
+      updateRouting((prev) => {
+        if (!(channelId in prev)) return prev;
+        const next = { ...prev };
+        delete next[channelId];
+        return next;
+      });
+    },
+    [updateChannels, updateRouting],
+  );
 
   const tr = t.studioPage.channels;
 
@@ -505,10 +478,13 @@ export default function StudioChannelsPage() {
       <li key={row.key}>
         <button
           type="button"
-          onClick={() => setSelected(row.key)}
+          onClick={() => {
+            setSelected(row.key);
+            revealDetail();
+          }}
           aria-current={isSel ? "true" : undefined}
           className={cn(
-            "flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
+            "flex w-full items-center gap-2.5 rounded-md px-2 py-2.5 md:py-1.5 text-left text-sm transition-colors",
             isSel
               ? "bg-muted font-medium text-foreground"
               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
@@ -546,7 +522,7 @@ export default function StudioChannelsPage() {
           <button
             type="button"
             onClick={() => setAddOpen(true)}
-            className="shrink-0 text-sm font-medium rounded-md bg-action text-action-foreground px-3 py-1.5"
+            className="inline-flex h-11 shrink-0 items-center text-sm font-medium rounded-md bg-action text-action-foreground px-3 sm:h-8"
           >
             {tr.add.cta}
           </button>
@@ -575,9 +551,9 @@ export default function StudioChannelsPage() {
           {tr.loadError}
         </div>
       ) : channels === null ? (
-        <div className="text-sm text-muted-foreground py-10 text-center">
-          {tr.loading}
-        </div>
+        // Cold: nothing cached for this workspace yet - the rail skeleton
+        // holds the geometry (N4), never a "Loading..." sentence.
+        <RailSurfaceSkeleton chrome={false} padded={false} />
       ) : railOrder.length === 0 ? (
         <div className="border border-border rounded-md bg-card/50 p-6 flex flex-col gap-1">
           <div className="font-medium text-sm">{tr.emptyTitle}</div>
@@ -586,7 +562,12 @@ export default function StudioChannelsPage() {
       ) : (
         /* ── Master-detail: status-grouped rail + selected channel panel ── */
         <div className="flex flex-col gap-6 md:flex-row">
-          <aside className="w-full md:w-64 shrink-0 self-start">
+          <aside
+            className={cn(
+              "w-full md:w-64 shrink-0 self-start",
+              detailOpen && "max-md:hidden",
+            )}
+          >
             <nav aria-label={tr.railAriaLabel} className="flex flex-col gap-3">
               {railGroups.map((g) => (
                 <div key={g.id}>
@@ -605,7 +586,17 @@ export default function StudioChannelsPage() {
           </aside>
 
           {/* Detail — the selected channel's management panel. */}
-          <div className="min-w-0 flex-1">
+          <div
+            ref={detailRef}
+            className={cn("min-w-0 flex-1", !detailOpen && "max-md:hidden")}
+          >
+            <div className="mb-3 md:hidden">
+              <BackButton
+                label={tr.backToList}
+                onClick={() => setDetailOpen(false)}
+                className="min-h-11"
+              />
+            </div>
             {!sel ? (
               <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                 {tr.selectPrompt}
@@ -866,7 +857,7 @@ export function ChannelDetail({
             >
               <input
                 type="text"
-                autoFocus
+                autoFocus={!isPhoneViewport()}
                 value={nameDraft}
                 onChange={(e) => setNameDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -880,7 +871,7 @@ export function ChannelDetail({
                 maxLength={200}
                 placeholder={t.studioPage.channels.rename.placeholder}
                 aria-label={t.studioPage.channels.rename.placeholder}
-                className="min-w-0 flex-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-[15px] font-semibold tracking-tight text-foreground placeholder:font-normal placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                className="min-w-0 flex-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-[16px] md:text-[15px] font-semibold tracking-tight text-foreground placeholder:font-normal placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
               />
               <button
                 type="submit"
@@ -954,7 +945,7 @@ export function ChannelDetail({
               if (v) void patch({ clearance: v as ChannelClearance });
             }}
           >
-            <SelectTrigger size="sm" className="text-sm">
+            <SelectTrigger size="sm" className="text-[16px] md:text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1146,26 +1137,31 @@ export function ChannelDetail({
         ) : (
           <ul className="flex flex-col gap-1.5">
             {routing.map((r) => (
-              <li key={r.id} className="flex items-center gap-2 text-sm">
-                <span className="font-medium">{assistantName(r.assistantId)}</span>
-                <span className="text-xs text-muted-foreground">
+              <li key={r.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="min-w-0 truncate font-medium">{assistantName(r.assistantId)}</span>
+                <span className="min-w-0 truncate text-xs text-muted-foreground">
                   {r.externalSurfaceId
                     ? `${t.studioPage.channels.surfacePrefix}: ${r.externalSurfaceId}`
                     : t.studioPage.channels.defaultSurface}
                 </span>
-                <RoutingModelPicker
-                  workspaceId={workspaceId}
-                  channelId={channel.id}
-                  routing={r}
-                  onUpdated={onRoutingChanged}
-                />
-                <button
-                  type="button"
-                  onClick={() => void onDetach(r.id)}
-                  className="text-xs text-muted-foreground hover:text-destructive transition-colors"
-                >
-                  {t.studioPage.channels.detach}
-                </button>
+                {/* The picker + Detach take a second line at 360px (M8):
+                    the row must never push the studio pane into horizontal
+                    scroll. */}
+                <span className="flex w-full items-center justify-end gap-2 sm:ml-auto sm:w-auto">
+                  <RoutingModelPicker
+                    workspaceId={workspaceId}
+                    channelId={channel.id}
+                    routing={r}
+                    onUpdated={onRoutingChanged}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void onDetach(r.id)}
+                    className="inline-flex h-9 items-center rounded-md px-1.5 text-xs text-muted-foreground hover:text-destructive transition-colors sm:h-6"
+                  >
+                    {t.studioPage.channels.detach}
+                  </button>
+                </span>
               </li>
             ))}
           </ul>
@@ -1177,7 +1173,7 @@ export function ChannelDetail({
             onValueChange={(v) => setAttachAssistantId(v ?? "")}
             items={assistantItems}
           >
-            <SelectTrigger size="sm" className="text-sm">
+            <SelectTrigger size="sm" className="text-[16px] md:text-sm">
               <SelectValue
                 placeholder={t.studioPage.channels.attachAssistantPlaceholder}
               />
@@ -1226,7 +1222,7 @@ export function ChannelDetail({
             type="button"
             onClick={() => void onDisconnect()}
             disabled={deleting}
-            className="text-xs font-medium text-destructive/70 hover:text-destructive transition-colors disabled:opacity-50"
+            className="inline-flex h-9 items-center rounded-md px-1.5 text-xs font-medium text-destructive/70 hover:text-destructive transition-colors disabled:opacity-50 sm:h-6"
           >
             {deleting
               ? t.studioPage.channels.disconnect.confirming
@@ -1325,7 +1321,7 @@ export function WhatsAppCloudGroupsSection({
           placeholder={copy.subjectPlaceholder}
           onChange={(event) => setSubject(event.target.value)}
           disabled={creating}
-          className="min-w-0 flex-1 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+          className="min-w-0 flex-1 rounded-md border border-border bg-muted/50 px-3 py-1.5 text-[16px] md:text-sm focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
         />
         <button
           type="submit"
@@ -1442,7 +1438,7 @@ function RoutingModelPicker({
         if (v === "standard" || v === "pro" || v === "max") void save(v);
       }}
     >
-      <SelectTrigger size="sm" className="ml-auto text-xs h-7 w-auto min-w-24 gap-1.5">
+      <SelectTrigger size="sm" className="ml-auto text-[16px] md:text-xs h-7 w-auto min-w-24 gap-1.5">
         <SelectValue />
       </SelectTrigger>
       <SelectContent side="bottom" align="end">
@@ -1545,7 +1541,7 @@ function SurfaceInput({
 
   return (
     <input
-      className="text-sm rounded-md border border-border bg-background px-2 py-1 min-w-0 flex-1"
+      className="text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1 min-w-0 flex-1"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={tr.attachSurfacePlaceholder}
@@ -1668,7 +1664,7 @@ export function ChannelConfigSection({
             if (v) void save({ userAccessMode: v as UserAccessMode });
           }}
         >
-          <SelectTrigger size="sm" className="text-sm">
+          <SelectTrigger size="sm" className="text-[16px] md:text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1773,7 +1769,7 @@ export function ChannelConfigSection({
                         ? cfg.userIdPlaceholderWhatsApp
                         : cfg.userIdPlaceholderTelegram
               }
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm font-mono"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] md:text-sm font-mono"
             />
             <button
               type="submit"
@@ -1818,7 +1814,7 @@ export function ChannelConfigSection({
             setConfig((c) => ({ ...c, ackReaction: e.target.value }))
           }
           onBlur={() => void save({ ackReaction: config.ackReaction ?? "" })}
-          className="w-24 rounded-md border border-border bg-background px-2 py-1.5 text-sm font-mono"
+          className="w-24 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] md:text-sm font-mono"
         />
         {(isSlack ? ["eyes", "brain", "thumbsup"] : ["👀", "🧠", "👍"]).map(
           (emoji) => (
@@ -2238,8 +2234,11 @@ export function AddChannelDialog({
         <Dialog.Popup
           className={cn(
             "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
-            "flex max-h-[calc(100vh-3rem)] w-[calc(100vw-2rem)] max-w-2xl flex-col",
-            "rounded-2xl border border-border bg-background shadow-xl ring-1 ring-foreground/5 outline-none",
+            // Full-screen sheet on a phone (M5, the settings-modal recipe);
+            // a centred card from `sm` up. `dvh`, never `vh`, so Safari's
+            // toolbar cannot hide the footer (M6).
+            "flex h-[100dvh] w-full max-w-none flex-col sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:w-[calc(100vw-2rem)] sm:max-w-2xl",
+            "rounded-none border border-border bg-background shadow-xl ring-1 ring-foreground/5 outline-none sm:rounded-2xl",
             "transition-all duration-150",
             "data-[starting-style]:opacity-0 data-[starting-style]:scale-95",
             "data-[ending-style]:opacity-0 data-[ending-style]:scale-95",
@@ -2251,7 +2250,7 @@ export function AddChannelDialog({
             </Dialog.Title>
             <Dialog.Close
               aria-label={add.close}
-              className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:size-7"
             >
               <X className="size-4" aria-hidden />
             </Dialog.Close>
@@ -2593,8 +2592,10 @@ export function AddChannelForm({
   // container border anyway - it only creates a spurious 1px vertical overflow.
   const TAB_BASE =
     "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-1.5 text-sm transition-colors";
+  // 16px below `md` (M4): iOS zooms the dialog on a 14px focus and stays
+  // zoomed; the constant carries the floor so every field it dresses does.
   const FIELD_INPUT =
-    "text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono disabled:opacity-50";
+    "text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono disabled:opacity-50";
 
   return (
     <div className="flex flex-col gap-4">
@@ -2662,7 +2663,7 @@ export function AddChannelForm({
               placeholder={add.custom.namePlaceholder}
               maxLength={200}
               disabled={submitting || !!success}
-              className="text-sm rounded-md border border-border bg-background px-2 py-1.5 disabled:opacity-50"
+              className="text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1.5 disabled:opacity-50"
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -2702,7 +2703,7 @@ export function AddChannelForm({
                     onChange={(e) => setAppName(e.target.value)}
                     maxLength={35}
                     disabled={submitting || !!success}
-                    className="text-sm rounded-md border border-border bg-background px-2 py-1"
+                    className="text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1"
                   />
                 </label>
                 <label className="flex flex-col gap-0.5">
@@ -2724,7 +2725,7 @@ export function AddChannelForm({
                   onChange={(e) => setAppDescription(e.target.value)}
                   maxLength={140}
                   disabled={submitting || !!success}
-                  className="text-sm rounded-md border border-border bg-background px-2 py-1"
+                  className="text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1"
                 />
               </label>
               <p className="text-xs text-muted-foreground">{add.manifest.urlNote}</p>
@@ -2796,7 +2797,7 @@ export function AddChannelForm({
                 }}
                 disabled={submitting || !!success}
               >
-                <SelectTrigger size="sm" className="text-sm">
+                <SelectTrigger size="sm" className="text-[16px] md:text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2903,7 +2904,7 @@ export function AddChannelForm({
               items={defaultAssistantItems}
               disabled={submitting || !!success}
             >
-              <SelectTrigger size="sm" className="text-sm">
+              <SelectTrigger size="sm" className="text-[16px] md:text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -2946,7 +2947,7 @@ export function AddChannelForm({
               }}
               disabled={submitting || !!success}
             >
-              <SelectTrigger size="sm" className="text-sm">
+              <SelectTrigger size="sm" className="text-[16px] md:text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -3135,7 +3136,7 @@ export function AddChannelForm({
             }
             disabled={submitting || !!success}
           >
-            <SelectTrigger size="sm" className="text-sm">
+            <SelectTrigger size="sm" className="text-[16px] md:text-sm">
               <SelectValue
                 placeholder={
                   platform === "email"
@@ -3541,7 +3542,7 @@ function WhatsappConnectTab({
                   onChange={(e) => (setter as (v: string) => void)(e.target.value)}
                   placeholder={placeholder as string}
                   disabled={cloudSubmitting}
-                  className="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-sm disabled:opacity-50"
+                  className="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[16px] md:text-sm disabled:opacity-50"
                 />
               </label>
             ))}
@@ -3696,7 +3697,7 @@ export function BridgeTokenReveal({
             value={bridgeToken}
             aria-label={c.tokenLabel}
             onFocus={(e) => e.currentTarget.select()}
-            className="min-w-0 flex-1 bg-transparent text-xs font-mono outline-none"
+            className="min-w-0 flex-1 bg-transparent text-[16px] md:text-xs font-mono outline-none"
           />
           <CopyValueButton value={bridgeToken} label={c.copyToken} copiedLabel={c.copied} />
         </div>
@@ -3960,7 +3961,7 @@ export function CustomBridgeSection({
               placeholder={c.inputPlaceholder}
               aria-label={action.prompt}
               disabled={inputSending}
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm font-mono"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] md:text-sm font-mono"
             />
             <button
               type="submit"
@@ -4183,7 +4184,7 @@ function WechatConnectTab({
                 if (e.key === "Enter") submitCode();
               }}
               maxLength={8}
-              className="w-28 text-center text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono tracking-widest"
+              className="w-28 text-center text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono tracking-widest"
             />
             <button
               type="button"
@@ -4273,7 +4274,7 @@ function WhatsappAccessControl({
 
   return (
     <div className="mt-1 flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm">{acc.label}</span>
         <Select
           value={mode}
@@ -4282,7 +4283,7 @@ function WhatsappAccessControl({
             if (v) onSave(v as WhatsappBotAccessMode, numbers);
           }}
         >
-          <SelectTrigger size="sm" className="min-w-[13rem] text-sm">
+          <SelectTrigger size="sm" className="w-full text-[16px] sm:w-auto sm:min-w-[13rem] md:text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -4350,7 +4351,7 @@ function WhatsappAccessControl({
               inputMode="numeric"
               disabled={busy}
               placeholder={acc.numberPlaceholder}
-              className="w-44 rounded-md border border-border bg-background px-2 py-1 font-mono text-sm"
+              className="w-44 rounded-md border border-border bg-background px-2 py-1 font-mono text-[16px] md:text-sm"
             />
             <button
               type="submit"
@@ -4404,7 +4405,7 @@ function WhatsappAckReaction({
           onBlur={() => {
             if (draft !== value) onSave(draft);
           }}
-          className="w-32 rounded-md border border-border bg-background px-2 py-1 font-mono text-sm"
+          className="w-32 rounded-md border border-border bg-background px-2 py-1 font-mono text-[16px] md:text-sm"
         />
         {["👀", "🧠", "👍"].map((emoji) => (
           <button
@@ -4576,7 +4577,7 @@ function WhatsappRepliesSection({ workspaceId }: { workspaceId: string }) {
           />
 
           {/* Reply scope — label left, control right (Telegram parity). */}
-          <div className="flex items-center justify-between gap-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
             <span className="text-muted-foreground">{bot.scopeLabel}</span>
             <Select
               value={config.sendScope}
@@ -4585,7 +4586,7 @@ function WhatsappRepliesSection({ workspaceId }: { workspaceId: string }) {
                 if (v) void run(() => enableWhatsappBot(workspaceId, v as WhatsappBotSendScope));
               }}
             >
-              <SelectTrigger size="sm" className="min-w-[13rem] text-sm">
+              <SelectTrigger size="sm" className="w-full text-[16px] sm:w-auto sm:min-w-[13rem] md:text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -4654,7 +4655,7 @@ function WhatsappRepliesSection({ workspaceId }: { workspaceId: string }) {
 
             <div className="flex flex-wrap items-center gap-2">
               <Select value={newType} onValueChange={(v) => v && setNewType(v)}>
-                <SelectTrigger size="sm" className="min-w-[11rem] text-xs">
+                <SelectTrigger size="sm" className="w-full text-[16px] sm:w-auto sm:min-w-[11rem] md:text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -4670,7 +4671,7 @@ function WhatsappRepliesSection({ workspaceId }: { workspaceId: string }) {
                   value={keywords}
                   onChange={(e) => setKeywords(e.target.value)}
                   placeholder={bot.keywordsPlaceholder}
-                  className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs"
+                  className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-[16px] md:text-xs"
                 />
               )}
               <button
@@ -5173,7 +5174,7 @@ export function EmailInboxSection({
             if (value) void saveHandler(value);
           }}
         >
-          <SelectTrigger size="sm" className="w-fit min-w-48 text-sm">
+          <SelectTrigger size="sm" className="w-fit min-w-48 text-[16px] md:text-sm">
             <SelectValue placeholder={em.handledByPlaceholder} />
           </SelectTrigger>
           <SelectContent>
@@ -5202,7 +5203,7 @@ export function EmailInboxSection({
             }
           }}
         >
-          <SelectTrigger size="sm" className="w-fit min-w-56 text-sm">
+          <SelectTrigger size="sm" className="w-fit min-w-56 text-[16px] md:text-sm">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -5286,7 +5287,7 @@ export function EmailInboxSection({
                       }
                     }}
                   >
-                    <SelectTrigger size="sm" className="w-fit min-w-48 text-xs">
+                    <SelectTrigger size="sm" className="w-fit min-w-48 text-[16px] md:text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -5312,7 +5313,7 @@ export function EmailInboxSection({
             })}
           </ul>
         )}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <input
             type="text"
             value={newContact}
@@ -5322,7 +5323,7 @@ export function EmailInboxSection({
             }}
             placeholder={em.contactPlaceholder}
             disabled={saving}
-            className="text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono disabled:opacity-50 min-w-[220px]"
+            className="min-w-0 flex-1 text-[16px] md:text-sm rounded-md border border-border bg-background px-2 py-1.5 font-mono disabled:opacity-50"
           />
           <button
             type="button"

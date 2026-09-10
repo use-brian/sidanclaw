@@ -77,7 +77,7 @@ describe("[COMP:app-web/desktop-spa] offline workspace bootstrap", () => {
     });
     const pending = resolveDesktopWorkspaceBootstrap({
       cached: [{ id: "cached", name: "Cached workspace" }],
-      hasStoredSession: true,
+      hasStoredSession: () => true,
       authenticate: async () => "access-token",
       loadLive: () => liveProbe,
     });
@@ -103,7 +103,7 @@ describe("[COMP:app-web/desktop-spa] offline workspace bootstrap", () => {
     await expect(
       resolveDesktopWorkspaceBootstrap({
         cached: [{ id: "cached", name: "Cached workspace" }],
-        hasStoredSession: true,
+        hasStoredSession: () => true,
         authenticate: async () => "access-token",
         loadLive: async () => {
           throw new TypeError("network unavailable");
@@ -116,15 +116,54 @@ describe("[COMP:app-web/desktop-spa] offline workspace bootstrap", () => {
     });
   });
 
-  it("never uses cached workspace identity after a 401", async () => {
+  it("uses cache after a resource 401 when refresh remains transient", async () => {
     await expect(
       resolveDesktopWorkspaceBootstrap({
         cached: [{ id: "cached", name: "Cached workspace" }],
-        hasStoredSession: true,
-        authenticate: async () => "rejected-token",
+        hasStoredSession: () => true,
+        authenticate: async () => "expired-token",
         loadLive: async () => ({ status: 401 }),
       }),
+    ).resolves.toMatchObject({
+      kind: "ready",
+      source: "cache",
+      workspaces: [{ id: "cached" }],
+    });
+  });
+
+  it("never uses cached workspace identity after refresh rejects the session", async () => {
+    let hasStoredSession = true;
+    await expect(
+      resolveDesktopWorkspaceBootstrap({
+        cached: [{ id: "cached", name: "Cached workspace" }],
+        hasStoredSession: () => hasStoredSession,
+        authenticate: async () => "rejected-token",
+        loadLive: async () => {
+          hasStoredSession = false;
+          return { status: 401 };
+        },
+      }),
     ).resolves.toEqual({ kind: "unauthenticated" });
+  });
+
+  it("uses cache when access-token refresh is unavailable but the session remains", async () => {
+    let probed = false;
+    await expect(
+      resolveDesktopWorkspaceBootstrap({
+        cached: [{ id: "cached", name: "Cached workspace" }],
+        hasStoredSession: () => true,
+        authenticate: async () => null,
+        loadLive: async () => {
+          probed = true;
+          return { status: 200 };
+        },
+      }),
+    ).resolves.toMatchObject({
+      kind: "ready",
+      source: "cache",
+      workspaces: [{ id: "cached" }],
+    });
+    expect(probed).toBe(false);
   });
 
   it("does not probe or use cache without a token", async () => {
@@ -132,7 +171,7 @@ describe("[COMP:app-web/desktop-spa] offline workspace bootstrap", () => {
     await expect(
       resolveDesktopWorkspaceBootstrap({
         cached: [{ id: "cached", name: "Cached workspace" }],
-        hasStoredSession: true,
+        hasStoredSession: () => false,
         authenticate: async () => null,
         loadLive: async () => {
           probed = true;

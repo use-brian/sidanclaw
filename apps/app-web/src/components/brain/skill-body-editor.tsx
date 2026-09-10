@@ -84,6 +84,7 @@ import {
   Type,
 } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   docToMarkdown,
   markdownToDoc,
@@ -490,7 +491,7 @@ function SkillMarkToolbar({ editor }: { editor: Editor }) {
         {linkOpen ? (
           <input
             type="url"
-            autoFocus
+            autoFocus={!isPhoneViewport()}
             value={linkUrl}
             onChange={(e) => setLinkUrl(e.target.value)}
             onKeyDown={(e) => {

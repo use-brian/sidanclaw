@@ -22,6 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   Select,
   SelectContent,
@@ -56,7 +57,9 @@ export function PropertyRow({
 }) {
   return (
     <div className="flex flex-col">
-      <div className="grid grid-cols-[9.5rem_minmax(0,1fr)] items-start gap-x-3">
+      {/* Label above value below `sm` (C 68): a 152px label column inside a
+          full-screen sheet left ~160px for every value at 360px. */}
+      <div className="grid grid-cols-1 items-start gap-x-3 sm:grid-cols-[9.5rem_minmax(0,1fr)]">
         <div className="flex h-9 min-w-0 items-center gap-2 text-sm text-muted-foreground">
           {icon && (
             <span className="shrink-0 text-muted-foreground/70 [&_svg]:size-4" aria-hidden>
@@ -68,7 +71,7 @@ export function PropertyRow({
         <div className="min-w-0">{children}</div>
       </div>
       {error && (
-        <p className="pl-[9.5rem] pb-1 text-xs text-red-500" role="alert">
+        <p className="pb-1 text-xs text-red-500 sm:pl-[9.5rem]" role="alert">
           {error}
         </p>
       )}
@@ -169,7 +172,7 @@ export function TextProperty({
       {editing ? (
         <input
           type="text"
-          autoFocus
+          autoFocus={!isPhoneViewport()}
           value={draft}
           maxLength={maxLength}
           onChange={(e) => setDraft(e.target.value)}
@@ -367,7 +370,7 @@ export function DateProperty({
       {editing ? (
         <input
           type="date"
-          autoFocus
+          autoFocus={!isPhoneViewport()}
           defaultValue={value}
           onBlur={(e) => void commit(e.target.value)}
           onKeyDown={(e) => {
@@ -401,7 +404,7 @@ export function DateProperty({
               type="button"
               aria-label={t.brainPage.detailDrawer.clearValue}
               onClick={() => void commit("")}
-              className="h-6 w-6 shrink-0 rounded text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover/date:opacity-100"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded text-muted-foreground/50 opacity-100 transition-opacity hover:bg-muted hover:text-foreground sm:h-6 sm:w-6 md:opacity-0 md:group-hover/date:opacity-100"
             >
               <svg
                 width="12"
@@ -491,7 +494,7 @@ export function TagsProperty({
       {editing ? (
         <input
           type="text"
-          autoFocus
+          autoFocus={!isPhoneViewport()}
           value={draft}
           placeholder={placeholder}
           onChange={(e) => setDraft(e.target.value)}
@@ -966,7 +969,7 @@ export function EditableBody({
         // no ring, no resize grip — same typography as the rendered view,
         // auto-growing, with the soft background swap as the focus cue.
         <textarea
-          autoFocus
+          autoFocus={!isPhoneViewport()}
           value={draft}
           rows={3}
           disabled={busy}

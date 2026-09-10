@@ -22,12 +22,21 @@ export function graphScopeCacheKey(input: {
   showMemory?: boolean;
   scopeId?: string | null;
   focusQuery?: string | null;
+  /** Exact-id focus (the chat-audit highlight) - order-insensitive. */
+  focusIds?: readonly string[] | null;
+  revealFocus?: boolean;
 }): string {
+  const ids =
+    input.focusIds && input.focusIds.length > 0
+      ? [...input.focusIds].sort().join(",")
+      : "";
   return [
     input.workspaceId,
     input.viewpointAssistantId ?? "",
     input.showMemory ? "memory" : "",
     input.scopeId ?? "overview",
     input.focusQuery?.trim().toLocaleLowerCase() ?? "",
-  ].join("\u0000");
+    ids,
+    ids && input.revealFocus ? "reveal" : "",
+  ].join("\x00");
 }

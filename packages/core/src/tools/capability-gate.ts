@@ -1,3 +1,4 @@
+import { homeAppToolRequirements } from '@use-brian/shared'
 import type { Tool, ToolContext } from './types.js'
 
 /**
@@ -24,11 +25,16 @@ export function filterToolsByCapabilities(
   const filtered = new Map<string, Tool>()
   for (const [name, tool] of tools) {
     if (tool.hiddenFromModel) continue
-    const need = tool.requiresCapability
-    if (need && !activeCapabilities.has(need)) continue
+    if (missingToolCapability(tool, activeCapabilities)) continue
     filtered.set(name, tool)
   }
   return filtered
+}
+
+/** Shared by discovery, the executor, and gateways calling execute directly. */
+export function missingToolCapability(tool: Tool, activeCapabilities?: ReadonlySet<string>): string | undefined {
+  const requirements = [tool.requiresCapability, ...homeAppToolRequirements(tool)]
+  return requirements.find((cap): cap is string => !!cap && !activeCapabilities?.has(cap))
 }
 
 /**

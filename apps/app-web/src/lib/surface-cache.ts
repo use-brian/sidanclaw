@@ -46,6 +46,15 @@ export type CacheEntry<T> = {
   error: unknown;
   /** `performance`-independent timestamp of the last successful load. */
   updatedAt: number;
+  /**
+   * Timestamp of the last load ATTEMPT, success or failure. Staleness reads
+   * the later of this and `updatedAt`, so a revalidation that REJECTS still
+   * closes the stale window: without it a stale entry whose fetcher throws
+   * (a 5xx behind a painted list) is stale again the instant the failure is
+   * written, the hook's load effect re-runs on that emit, and the surface
+   * hammers the endpoint in a tight loop until it recovers.
+   */
+  attemptedAt: number;
   /** A revalidation (or first load) is in flight. */
   revalidating: boolean;
 };
@@ -54,6 +63,7 @@ const EMPTY: CacheEntry<never> = {
   data: undefined,
   error: undefined,
   updatedAt: 0,
+  attemptedAt: 0,
   revalidating: false,
 };
 
@@ -92,7 +102,7 @@ export function isSurfaceCacheStale(
 ): boolean {
   const entry = readSurfaceCache(key);
   if (entry.data === undefined) return true;
-  return Date.now() - entry.updatedAt > staleMs;
+  return Date.now() - Math.max(entry.updatedAt, entry.attemptedAt) > staleMs;
 }
 
 /**
@@ -110,10 +120,12 @@ export function loadSurfaceCache<T>(
   put(key, { revalidating: true });
   const request = fetcher()
     .then((data) => {
+      const now = Date.now();
       put(key, {
         data,
         error: undefined,
-        updatedAt: Date.now(),
+        updatedAt: now,
+        attemptedAt: now,
         revalidating: false,
       });
       return data;
@@ -121,7 +133,10 @@ export function loadSurfaceCache<T>(
     .catch((error: unknown) => {
       // Keep the last good value: a failed refresh should not blank a surface
       // the user is reading. Consumers decide whether to surface `error`.
-      put(key, { error, revalidating: false });
+      // `attemptedAt` closes the stale window for this attempt, so the hook
+      // waits a full `staleMs` before trying again instead of retrying on the
+      // very emit this write produces.
+      put(key, { error, attemptedAt: Date.now(), revalidating: false });
       return undefined;
     })
     .finally(() => {
@@ -188,7 +203,38 @@ export function invalidateSurfaceCache(prefix: string): void {
   }
 }
 
-/** Test seam - drops everything, including subscriptions' cached values. */
+/**
+ * Mark cached entries stale WITHOUT dropping their data - the signal the
+ * workspace event spine sends (instant-navigation contract N3).
+ *
+ * `invalidateSurfaceCache` removes the value, which makes a mounted surface
+ * fall back to its cold branch for a round trip. A spine signal ("a task
+ * changed somewhere") wants the opposite: keep painting what is on screen and
+ * revalidate behind it. Setting `updatedAt` to 0 is exactly the state the
+ * hook already handles as "data present + stale": its load effect re-runs on
+ * the emitted snapshot, sees the entry is stale, and refetches while the old
+ * rows stay up. Only a USER action that changed the row invalidates.
+ *
+ * Same prefix semantics as `invalidateSurfaceCache`: an exact key, or a
+ * family prefix ending in `:`.
+ */
+export function markSurfaceCacheStale(prefix: string): void {
+  if (!isBrowser()) return;
+  for (const key of store.keys()) {
+    if (key !== prefix && !key.startsWith(prefix)) continue;
+    const entry = store.get(key);
+    if (!entry || entry.data === undefined) continue;
+    if (entry.updatedAt === 0 && entry.attemptedAt === 0) continue;
+    put(key, { updatedAt: 0, attemptedAt: 0 });
+  }
+}
+
+/**
+ * Drop everything. A test seam, and the sign-out / account-switch sweep
+ * (`account-logout.ts`, the switcher's account row): keys carry the viewer
+ * id, so a stale entry could never be READ by the next account, but a shared
+ * device should not keep the previous account's rows in memory either.
+ */
 export function resetSurfaceCache(): void {
   store.clear();
   inflight.clear();
@@ -256,10 +302,12 @@ export function useCachedResource<T>(
   // invalidated surface would sit on an empty state until its key changed.
   //
   // It terminates because each branch removes its own trigger: a success makes
-  // the entry fresh, an in-flight load is skipped, and a cold-load failure
+  // the entry fresh, an in-flight load is skipped, a cold-load failure
   // bails out (below) rather than retrying forever against a broken endpoint -
   // that case waits for an explicit `refresh()`, which the surfaces expose as
-  // a retry control.
+  // a retry control - and a FAILED revalidation of a stale entry stamps
+  // `attemptedAt`, so the entry reads fresh for another `staleMs` and the
+  // next try is a window away, not the next render.
   useEffect(() => {
     if (!key) return;
     if (entry.revalidating) return;

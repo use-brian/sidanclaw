@@ -139,6 +139,12 @@ export type EnrichmentWindow = {
    * "cannot be matched by name", not "has no name".
    */
   participants?: Array<{ sender_id: string; display_name: string; phone?: string }>
+  /**
+   * The provider these messages were archived from ("whatsapp", "wechat").
+   * Absent or empty means the store could not name one, and no provider
+   * identity should be minted from `sender_id`.
+   */
+  source?: string
   message_count: number
   window_start: string
   window_end: string

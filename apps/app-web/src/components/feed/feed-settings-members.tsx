@@ -252,7 +252,7 @@ function DraftAccessToggle(props: {
             : props.titles.grant
       }
       className={
-        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed " +
+        "relative inline-flex h-8 w-14 sm:h-6 sm:w-11 items-center rounded-full transition-colors disabled:cursor-not-allowed " +
         (props.checked
           ? "bg-primary"
           : "bg-muted ring-1 ring-border") +
@@ -261,8 +261,8 @@ function DraftAccessToggle(props: {
     >
       <span
         className={
-          "inline-block h-5 w-5 transform rounded-full bg-background shadow transition-transform " +
-          (props.checked ? "translate-x-5" : "translate-x-0.5") +
+          "inline-block h-7 w-7 sm:h-5 sm:w-5 transform rounded-full bg-background shadow transition-transform " +
+          (props.checked ? "translate-x-6 sm:translate-x-5" : "translate-x-0.5") +
           (props.pending ? " animate-pulse" : "")
         }
       />

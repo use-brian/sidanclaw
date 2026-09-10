@@ -9,6 +9,15 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const data = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("../idb", () => ({
+  idbGet: async (key: string) => data.get(key) ?? null,
+  idbUpdate: async (key: string, fn: (v: unknown) => unknown) => {
+    const next = fn(data.get(key) ?? null); data.set(key, next); return next;
+  },
+}));
+vi.mock("../offline-pages", () => ({ readLocalPage: async () => null, patchLocalPage: async () => {} }));
+
 vi.mock("@/lib/api/views", () => ({
   renameView: vi.fn(async () => ({ renamed: true })),
   setViewIcon: vi.fn(async () => ({})),
@@ -95,5 +104,26 @@ describe("[COMP:app-web/offline-writes] offlineWrite", () => {
     await flushWriteQueue();
     expect(renameView).toHaveBeenCalledWith("v2", "Offline title");
     expect(pendingCount()).toBe(0);
+  });
+});
+
+describe("[COMP:app-web/offline-writes] replay races", () => {
+  it("keeps a newer coalesced edit made while replay is in flight", async () => {
+    setOnline(false);
+    const write = (name: string) => offlineWrite({ kind: "view.rename", coalesceKey: "rename:race", payload: { id: "race", name }, exec: async () => {} });
+    await write("old");
+    vi.mocked(renameView).mockImplementationOnce(async () => { await write("new"); return {} as never; });
+    await flushWriteQueue();
+    expect(pendingCount()).toBe(1);
+    await flushWriteQueue();
+    expect(renameView).toHaveBeenLastCalledWith("race", "new");
+    expect(pendingCount()).toBe(0);
+  });
+  it("does not drop edits after repeated server failures", async () => {
+    setOnline(false);
+    await offlineWrite({ kind: "view.rename", coalesceKey: null, payload: { id: "keep", name: "Retain" }, exec: async () => {} });
+    vi.mocked(renameView).mockRejectedValue(new Error("offline"));
+    for (let n = 0; n < 7; n++) await flushWriteQueue();
+    expect(pendingCount()).toBe(1);
   });
 });

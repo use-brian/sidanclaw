@@ -192,7 +192,7 @@ export function CrmConfigDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm" />
-        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-3xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-xl">
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex h-[100dvh] w-full max-w-none -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-none border border-border bg-background shadow-xl sm:h-auto sm:max-h-[85dvh] sm:w-[calc(100%-2rem)] sm:max-w-3xl sm:rounded-2xl">
           <div className="flex items-center justify-between border-b border-border px-5 py-4">
             <div>
               <Dialog.Title className="flex items-center gap-2 text-base font-semibold"><Settings2 className="size-4" aria-hidden />{t.configTitle}</Dialog.Title>
@@ -350,19 +350,19 @@ function PipelineConfigRow({ workspaceId, pipeline, livePipelines, busy, onMutat
           disabled={busy || Boolean(pipeline.archivedAt)}
           aria-label={t.pipelineName}
           onChange={(event) => setName(event.target.value)}
-          className="h-8 min-w-36 flex-1 rounded-md border border-border bg-background px-2 text-sm font-medium outline-none"
+          className="h-9 min-w-36 flex-1 rounded-md border border-border bg-background px-2 text-[16px] font-medium outline-none md:h-8 md:text-sm"
         />
         {pipeline.isDefault ? <span className="text-[10px] text-muted-foreground">{t.defaultPipeline}</span> : null}
         {!pipeline.archivedAt ? (
           <>
-            <Button size="icon-xs" variant="ghost" disabled={busy || index <= 0} aria-label={t.moveUp} onClick={() => void move(-1)}><ArrowUp aria-hidden /></Button>
-            <Button size="icon-xs" variant="ghost" disabled={busy || index === livePipelines.length - 1} aria-label={t.moveDown} onClick={() => void move(1)}><ArrowDown aria-hidden /></Button>
-            <Button size="icon-xs" variant="ghost" disabled={busy || name.trim() === pipeline.name || !name.trim()} aria-label={t.save} onClick={() => void onMutate(() => updateCrmPipeline(workspaceId, pipeline.id, { name: name.trim() }))}><Save aria-hidden /></Button>
-            {!pipeline.isDefault ? <Button size="icon-xs" variant="ghost" disabled={busy} aria-label={t.makeDefault} onClick={() => void (async () => {
+            <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || index <= 0} aria-label={t.moveUp} onClick={() => void move(-1)}><ArrowUp aria-hidden /></Button>
+            <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || index === livePipelines.length - 1} aria-label={t.moveDown} onClick={() => void move(1)}><ArrowDown aria-hidden /></Button>
+            <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || name.trim() === pipeline.name || !name.trim()} aria-label={t.save} onClick={() => void onMutate(() => updateCrmPipeline(workspaceId, pipeline.id, { name: name.trim() }))}><Save aria-hidden /></Button>
+            {!pipeline.isDefault ? <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy} aria-label={t.makeDefault} onClick={() => void (async () => {
               const confirmed = await confirmDialog({ title: t.makeDefaultTitle, description: t.makeDefaultDescription.replace("{name}", pipeline.name), confirmLabel: t.makeDefault, cancelLabel: t.cancel });
               if (confirmed) await onMutate(() => updateCrmPipeline(workspaceId, pipeline.id, { isDefault: true }));
             })()}><Star aria-hidden /></Button> : null}
-            <Button size="icon-xs" variant="ghost" disabled={busy || pipeline.isDefault} aria-label={t.archivePipeline} onClick={() => void (async () => {
+            <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || pipeline.isDefault} aria-label={t.archivePipeline} onClick={() => void (async () => {
               const confirmed = await confirmDialog({ title: t.archivePipelineTitle, description: t.archivePipelineDescription.replace("{name}", pipeline.name), confirmLabel: t.archive, cancelLabel: t.cancel, variant: "destructive" });
               if (confirmed) await onMutate(() => updateCrmPipeline(workspaceId, pipeline.id, { archived: true }));
             })()}><Archive aria-hidden /></Button>
@@ -424,16 +424,16 @@ function StageConfigRow({ workspaceId, pipelineId, stage, liveStages, busy, onMu
     || requiredFields !== stage.requiredFields.join(", ");
   return (
     <div className={stage.archivedAt ? "grid gap-2 rounded-lg border border-dashed border-border p-2 opacity-75 sm:grid-cols-[minmax(0,1fr)_120px_80px_minmax(0,1fr)_auto]" : "grid gap-2 rounded-lg border border-border p-2 sm:grid-cols-[minmax(0,1fr)_120px_80px_minmax(0,1fr)_auto]"}>
-      <input value={name} disabled={busy || Boolean(stage.archivedAt)} aria-label={t.stageName} onChange={(event) => setName(event.target.value)} className="h-8 rounded-md border border-border bg-background px-2 text-xs" />
+      <input value={name} disabled={busy || Boolean(stage.archivedAt)} aria-label={t.stageName} onChange={(event) => setName(event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-[16px] md:h-8 md:text-xs" />
       <Select value={category} disabled={busy || Boolean(stage.archivedAt)} onValueChange={(value) => setCategory(value as CrmStageCategory)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{(["open", "won", "lost"] as const).map((value) => <SelectItem key={value} value={value}>{t.stageCategories[value]}</SelectItem>)}</SelectContent></Select>
-      <input type="number" min={0} max={100} value={probability} disabled={busy || Boolean(stage.archivedAt)} aria-label={t.stageProbability} onChange={(event) => setProbability(event.target.value)} className="h-8 rounded-md border border-border bg-background px-2 text-xs" />
-      <input value={requiredFields} disabled={busy || Boolean(stage.archivedAt)} aria-label={t.requiredFields} placeholder={t.requiredFieldsPlaceholder} onChange={(event) => setRequiredFields(event.target.value)} className="h-8 rounded-md border border-border bg-background px-2 text-xs" />
+      <input type="number" min={0} max={100} value={probability} disabled={busy || Boolean(stage.archivedAt)} aria-label={t.stageProbability} onChange={(event) => setProbability(event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-[16px] md:h-8 md:text-xs" />
+      <input value={requiredFields} disabled={busy || Boolean(stage.archivedAt)} aria-label={t.requiredFields} placeholder={t.requiredFieldsPlaceholder} onChange={(event) => setRequiredFields(event.target.value)} className="h-9 rounded-md border border-border bg-background px-2 text-[16px] md:h-8 md:text-xs" />
       <div className="flex items-center justify-end gap-1">
         {!stage.archivedAt ? <>
-          <Button size="icon-xs" variant="ghost" disabled={busy || index <= 0} aria-label={t.moveUp} onClick={() => void move(-1)}><ArrowUp aria-hidden /></Button>
-          <Button size="icon-xs" variant="ghost" disabled={busy || index === liveStages.length - 1} aria-label={t.moveDown} onClick={() => void move(1)}><ArrowDown aria-hidden /></Button>
-          <Button size="icon-xs" variant="ghost" disabled={busy || !changed || !name.trim()} aria-label={t.save} onClick={() => void onMutate(() => updateCrmPipelineStage(workspaceId, stage.id, { name: name.trim(), category, probability: Number(probability), requiredFields: requiredFields.split(",").map((value) => value.trim()).filter(Boolean) }))}><Save aria-hidden /></Button>
-          <Button size="icon-xs" variant="ghost" disabled={busy} aria-label={t.archiveStage} onClick={() => void (async () => {
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || index <= 0} aria-label={t.moveUp} onClick={() => void move(-1)}><ArrowUp aria-hidden /></Button>
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || index === liveStages.length - 1} aria-label={t.moveDown} onClick={() => void move(1)}><ArrowDown aria-hidden /></Button>
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || !changed || !name.trim()} aria-label={t.save} onClick={() => void onMutate(() => updateCrmPipelineStage(workspaceId, stage.id, { name: name.trim(), category, probability: Number(probability), requiredFields: requiredFields.split(",").map((value) => value.trim()).filter(Boolean) }))}><Save aria-hidden /></Button>
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy} aria-label={t.archiveStage} onClick={() => void (async () => {
             const confirmed = await confirmDialog({ title: t.archiveStageTitle, description: t.archiveStageDescription.replace("{name}", stage.name), confirmLabel: t.archive, cancelLabel: t.cancel, variant: "destructive" });
             if (confirmed) await onMutate(() => updateCrmPipelineStage(workspaceId, stage.id, { archived: true }));
           })()}><Archive aria-hidden /></Button>
@@ -471,12 +471,12 @@ function FieldConfigRow({ workspaceId, field, liveFields, busy, onMutate }: {
   return (
     <div className={field.archivedAt ? "rounded-lg border border-dashed border-border p-3 opacity-75" : "rounded-lg border border-border p-3"}>
       <div className="flex items-center gap-2">
-        <input value={label} disabled={busy || Boolean(field.archivedAt)} aria-label={t.fieldLabel} onChange={(event) => setLabel(event.target.value)} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs font-medium" />
+        <input value={label} disabled={busy || Boolean(field.archivedAt)} aria-label={t.fieldLabel} onChange={(event) => setLabel(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[16px] font-medium md:h-8 md:text-xs" />
         {!field.archivedAt ? <>
-          <Button size="icon-xs" variant="ghost" disabled={busy || index <= 0} aria-label={t.moveUp} onClick={() => void move(-1)}><ArrowUp aria-hidden /></Button>
-          <Button size="icon-xs" variant="ghost" disabled={busy || index === liveFields.length - 1} aria-label={t.moveDown} onClick={() => void move(1)}><ArrowDown aria-hidden /></Button>
-          <Button size="icon-xs" variant="ghost" disabled={busy || !changed || !label.trim()} aria-label={t.save} onClick={() => void onMutate(() => updateCrmField(workspaceId, field.id, { label: label.trim(), options: options.split(",").map((value) => value.trim()).filter(Boolean), isRequired: required }))}><Save aria-hidden /></Button>
-          <Button size="icon-xs" variant="ghost" disabled={busy} aria-label={t.archiveField} onClick={() => void (async () => {
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || index <= 0} aria-label={t.moveUp} onClick={() => void move(-1)}><ArrowUp aria-hidden /></Button>
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || index === liveFields.length - 1} aria-label={t.moveDown} onClick={() => void move(1)}><ArrowDown aria-hidden /></Button>
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy || !changed || !label.trim()} aria-label={t.save} onClick={() => void onMutate(() => updateCrmField(workspaceId, field.id, { label: label.trim(), options: options.split(",").map((value) => value.trim()).filter(Boolean), isRequired: required }))}><Save aria-hidden /></Button>
+          <Button size="icon-xs" variant="ghost" className="max-md:size-9" disabled={busy} aria-label={t.archiveField} onClick={() => void (async () => {
             const confirmed = await confirmDialog({ title: t.archiveFieldTitle, description: t.archiveFieldDescription.replace("{name}", field.label), confirmLabel: t.archive, cancelLabel: t.cancel, variant: "destructive" });
             if (confirmed) await onMutate(() => archiveCrmField(workspaceId, field.id));
           })()}><Trash2 aria-hidden /></Button>
@@ -484,7 +484,7 @@ function FieldConfigRow({ workspaceId, field, liveFields, busy, onMutate }: {
       </div>
       <div className="mt-1 text-[10px] text-muted-foreground">{field.entityKind === "person" ? t.kindContact : field.entityKind === "company" ? t.kindCompany : t.kindDeal} · {t.fieldTypes[field.fieldType]} · {field.fieldKey}</div>
       {!field.archivedAt ? <div className="mt-2 flex items-center gap-2">
-        {field.options.length > 0 || field.fieldType === "single_select" || field.fieldType === "multi_select" || field.fieldType === "entity_reference" ? <input value={options} aria-label={t.fieldOptions} onChange={(event) => setOptions(event.target.value)} className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs" /> : <span className="flex-1" />}
+        {field.options.length > 0 || field.fieldType === "single_select" || field.fieldType === "multi_select" || field.fieldType === "entity_reference" ? <input value={options} aria-label={t.fieldOptions} onChange={(event) => setOptions(event.target.value)} className="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[16px] md:h-8 md:text-xs" /> : <span className="flex-1" />}
         <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Checkbox checked={required} onCheckedChange={(checked) => setRequired(Boolean(checked))} />{t.requiredField}</label>
       </div> : null}
     </div>
@@ -508,7 +508,7 @@ function ConfigInput({ label, value, onChange, placeholder, type = "text" }: {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none"
+        className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] outline-none md:text-sm"
       />
     </label>
   );

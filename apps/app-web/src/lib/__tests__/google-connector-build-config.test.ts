@@ -18,9 +18,12 @@ describe("[COMP:app-web/connector-oauth-callbacks] Google connector deployment c
     expect(runtimeConfig).toContain("env.GOOGLE_CLIENT_ID");
     expect(runtimeConfig).toContain("env.PUBLIC_GOOGLE_API_KEY");
     expect(runtimeConfig).toContain("env.GOOGLE_PROJECT_NUMBER");
-    expect(nextConfig).not.toContain("NEXT_PUBLIC_GOOGLE_CLIENT_ID:");
-    expect(nextConfig).not.toContain("NEXT_PUBLIC_GOOGLE_API_KEY:");
-    expect(nextConfig).not.toContain("NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER:");
+    expect(nextConfig).toContain("NEXT_PUBLIC_GOOGLE_CLIENT_ID:");
+    expect(nextConfig).toContain("NEXT_PUBLIC_GOOGLE_API_KEY:");
+    expect(nextConfig).toContain("NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER:");
+    expect(turbo.tasks.build.env).toEqual(expect.arrayContaining([
+      "NEXT_PUBLIC_*", "GOOGLE_CLIENT_ID", "GOOGLE_API_KEY", "GOOGLE_PROJECT_NUMBER",
+    ]));
     expect(nextConfig).not.toContain("GOOGLE_CLIENT_SECRET");
     expect(turbo.tasks.build.env).not.toContain("GOOGLE_CLIENT_SECRET");
     expect(callback).toContain("process.env.PUBLIC_GOOGLE_CLIENT_ID");

@@ -372,7 +372,8 @@ export function EmptyPageLanding({
             // scrolling (`overflow-y-auto`); the old 160px clipped multi-line
             // asks too early. Matches the floating dock's composer.
             textareaClassName={cn(
-              "flex-1 min-w-0 resize-none overflow-y-auto bg-transparent px-2.5 py-2 text-sm leading-relaxed",
+              // 16px on a phone (iOS zooms a smaller field on focus, M4).
+              "flex-1 min-w-0 resize-none overflow-y-auto bg-transparent px-2.5 py-2 text-[16px] md:text-sm leading-relaxed",
               "min-h-[44px] max-h-[240px] outline-none focus-visible:shadow-none placeholder:text-muted-foreground",
             )}
             // The Create CTA is rendered in the footer instead (next to the
@@ -395,13 +396,16 @@ export function EmptyPageLanding({
               (`selectSide="bottom"`) since the landing sits near the top of the
               pane; research quota / exhaustion surface on the build turn itself,
               so the landing passes a null quota. */}
-          <div className="flex items-center gap-1.5 px-1 pt-1">
+          {/* `flex-wrap`: with two or more assistants the picker + controls +
+              send do not fit a 312px card, so the strip wraps instead of
+              pushing the send button outside the card (report B row 31). */}
+          <div className="flex flex-wrap items-center gap-1.5 px-1 pt-1">
             <button
               type="button"
               aria-label={tAttach.attach}
               onClick={() => fileInputRef.current?.click()}
               disabled={rec.busy}
-              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50 md:size-7"
             >
               <Paperclip className="size-[18px]" aria-hidden />
             </button>
@@ -415,7 +419,7 @@ export function EmptyPageLanding({
                 onOpenChange={setAssistantPickerOpen}
               >
                 <PopoverTrigger
-                  className="flex min-w-0 max-w-40 shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  className="flex min-w-0 max-w-40 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                   aria-label={t.landing.assistantLabel}
                   title={t.landing.assistantLabel}
                 >
@@ -493,7 +497,7 @@ export function EmptyPageLanding({
               }
               aria-label={t.landing.send}
               title={t.landing.send}
-              className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground md:size-7"
             >
               <ArrowUp className="size-4" aria-hidden />
             </button>

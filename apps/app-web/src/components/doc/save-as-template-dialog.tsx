@@ -21,6 +21,7 @@ import { PAGE_TEMPLATE_CATEGORIES, type PageTemplateCategory } from "@use-brian/
 
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 
 export type SaveAsTemplateInput = {
   name: string;
@@ -104,13 +105,13 @@ export function SaveAsTemplateDialog({
           <label className="flex flex-col gap-1.5 text-sm">
             <span className="font-medium text-foreground">{t.nameLabel}</span>
             <input
-              autoFocus
+              autoFocus={!isPhoneViewport()}
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder={t.namePlaceholder}
               maxLength={256}
-              className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              className="rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[16px] text-foreground outline-none placeholder:text-muted-foreground md:text-sm"
             />
           </label>
 
@@ -122,7 +123,7 @@ export function SaveAsTemplateDialog({
               placeholder={t.descriptionPlaceholder}
               maxLength={2000}
               rows={2}
-              className="resize-none rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              className="resize-none rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[16px] text-foreground outline-none placeholder:text-muted-foreground md:text-sm"
             />
           </label>
 

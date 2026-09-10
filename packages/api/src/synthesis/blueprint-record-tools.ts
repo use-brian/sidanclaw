@@ -531,6 +531,7 @@ export function createBlueprintRecordTools(deps: BlueprintRecordToolDeps): Tool[
     tools.push(
       buildTool({
         name: 'projectBlueprintRecordPage',
+        homeAppToolSet: { app: 'page', set: 'write' },
         description:
           'Create (or refresh) the doc page linked to a blueprint record. Resolve the record by recordId, or by blueprint (name or id) + subject. ' +
           'With `draftMarkdown`, the page body becomes exactly that markdown — use for review-then-send drafts where the page IS the outgoing message. ' +

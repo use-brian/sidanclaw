@@ -59,6 +59,19 @@ describe('[COMP:crm/domain-events] CRM workflow event adapter', () => {
     expect((admitted as WorkflowEventInput | null)?.event).toMatchObject({ domainEventId: envelope.id, definitionKey: 'website_contact' })
   })
 
+  it('dispatches committed inventory boundaries with ticket filters and redacted payloads', async () => {
+    const event = crmDomainEventToDispatchEvent({ ...envelope,
+      eventType: 'association.inventory.available', actorKind: 'system_job', subjectKind: 'ticket',
+      payload: { eventId: envelope.subjectId, eventKey: 'fixture-event', ticketKey: 'standard',
+        capacity: 10, used: 9, revision: 2, attendeeEmail: 'private@example.com', payment: { token: 'private' } },
+    })
+    expect(matchesEvent(event, { source: { type: 'crm' }, match: {
+      inChannels: ['association.inventory.available'], tags: ['standard'], fromBots: true,
+    } })).toBe(true)
+    expect(JSON.stringify(event.payload)).not.toContain('private')
+    expect(event.payload).toMatchObject({ capacity: 10, used: 9, revision: 2 })
+  })
+
   it('strict delivery rejects after attempting every matching workflow', async () => {
     const started: string[] = []
     const dispatcher = createWorkflowEventDispatcher({

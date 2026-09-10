@@ -27,11 +27,14 @@
  * [COMP:app-web/recordings-board]
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useT } from "@/lib/i18n/client";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { listRecordings, type RecordingSummary } from "@/lib/api/recordings";
+import { useCachedResource } from "@/lib/surface-cache";
+import { recordingsCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import {
   formatBytes,
   formatDuration,
@@ -126,53 +129,46 @@ function Row({ rec, workspaceId }: { rec: RecordingSummary; workspaceId: string 
 export function RecordingsPanel() {
   const t = useT();
   const { activeId: workspaceId } = useWorkspaces();
-  const [recordings, setRecordings] = useState<RecordingSummary[]>([]);
   const [status, setStatus] = useState<StatusFilter>("all");
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  // Poll only while something is in flight; the ref keeps the timer's decision
-  // out of the effect's dependency list so a re-render never restarts it.
-  const inFlight = useRef(false);
 
-  const load = useCallback(
-    async (opts: { silent?: boolean } = {}) => {
-      if (!workspaceId) return;
-      if (!opts.silent) setLoading(true);
-      try {
-        const rows = await listRecordings(workspaceId, {
-          ...(statusFilterToQuery(status) ? { status: statusFilterToQuery(status)! } : {}),
-          ...(query.trim() ? { q: query.trim() } : {}),
-          limit: PAGE_SIZE,
-        });
-        setRecordings(rows);
-        setError(false);
-        inFlight.current = hasInFlight(rows);
-      } catch {
-        setError(true);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [workspaceId, status, query],
+  // One cache slot per (status filter, search needle) (N1): a re-open paints
+  // the last-known board on the first frame and revalidates behind it; the
+  // old `setLoading(true)` on every mount is what used to blank it. No spine
+  // primitive covers recordings today, so liveness stays the in-flight poll
+  // below - now a `refresh()` on this key instead of a private row copy.
+  const board = useCachedResource<RecordingSummary[]>(
+    workspaceId ? recordingsCacheKey(workspaceId, status, query) : null,
+    () =>
+      listRecordings(workspaceId ?? "", {
+        ...(statusFilterToQuery(status) ? { status: statusFilterToQuery(status)! } : {}),
+        ...(query.trim() ? { q: query.trim() } : {}),
+        limit: PAGE_SIZE,
+      }),
   );
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  const recordings = board.data;
+  const loading = board.loading;
+  // A cold failure (nothing cached) is the error line; a failed revalidation
+  // keeps the last good rows on screen (the cache's keep-last-good rule).
+  const error = board.data === undefined && board.error !== undefined;
 
   // A recording is transcribed by a background worker, so a row that is queued
   // when the board opens becomes openable with no user action. Poll while any
   // row is moving; stop as soon as none is, so an idle board is not a heartbeat.
+  // The ref keeps the timer's decision out of the effect's dependency list so
+  // a re-render (or a key change) never restarts it.
+  const latest = useRef(board);
+  latest.current = board;
   useEffect(() => {
     const timer = setInterval(() => {
-      if (inFlight.current) void load({ silent: true });
+      const current = latest.current;
+      if (current.data && hasInFlight(current.data)) void current.refresh();
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [load]);
+  }, []);
 
   const groups = useMemo(() => {
-    const visible = recordings.filter((r) => matchesStatusFilter(r, status));
+    const visible = (recordings ?? []).filter((r) => matchesStatusFilter(r, status));
     return groupByDay(visible, new Date());
   }, [recordings, status]);
 
@@ -200,7 +196,7 @@ export function RecordingsPanel() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t.recordings.panelSearchPlaceholder}
           aria-label={t.recordings.panelSearchPlaceholder}
-          className="h-8 w-48 rounded-md border border-border bg-transparent px-2 text-sm"
+          className="h-8 w-48 rounded-md border border-border bg-transparent px-2 text-[16px] md:text-sm"
         />
         {/* Themed SearchableSelect, never the browser-native element. */}
         <SearchableSelect
@@ -217,7 +213,16 @@ export function RecordingsPanel() {
         {error ? (
           <p className="text-sm text-muted-foreground">{t.recordings.panelError}</p>
         ) : loading ? (
-          <p className="text-sm text-muted-foreground">{t.recordings.panelLoading}</p>
+          // Cold cache only (N4): the row recipe's geometry, never a sentence.
+          <div className="flex flex-col gap-1" aria-busy>
+            <Skeleton className="mb-1 h-3 w-16" />
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex items-center gap-3 rounded px-2 py-2">
+                <Skeleton className="h-3.5" style={{ width: `${40 + ((i * 23) % 45)}%` }} />
+                <Skeleton className="ml-auto h-3 w-16 shrink-0" />
+              </div>
+            ))}
+          </div>
         ) : groups.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {query.trim() || status !== "all"

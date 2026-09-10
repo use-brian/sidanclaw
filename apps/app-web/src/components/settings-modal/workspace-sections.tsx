@@ -48,12 +48,16 @@ import { listCustomPageTemplates } from "@/lib/api/views";
 import { buildBlueprintPickerItems } from "@/lib/blueprints";
 import type { CustomPageTemplateSummary } from "@use-brian/doc-model";
 import { getUserInfo } from "@/lib/user";
+import { isPhoneViewport } from "@/lib/viewport";
 import {
   useWorkspaceContext,
   emitWorkspaceIconChanged,
   emitWorkspaceRenamed,
 } from "@/lib/workspace-context";
 import { updateWorkspace } from "@/contexts/workspace-context";
+import { readSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { workspaceDetailCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import { canDeleteWorkspace } from "@/lib/workspace-permissions";
 import { TeamAvatar } from "@/components/team-avatar";
 import {
@@ -69,6 +73,14 @@ import {
 } from "@/components/ui/searchable-select";
 import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MoreHorizontal } from "lucide-react";
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
@@ -150,33 +162,76 @@ type WorkspaceDetail = {
   members: Member[];
 };
 
-function useWorkspaceDetail(workspaceId: string | null) {
-  const [data, setData] = useState<WorkspaceDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const refetch = useCallback(async () => {
-    if (!workspaceId) {
-      setData(null);
-      setLoading(false);
-      return;
-    }
-    try {
-      const res = await authFetch(`${API_URL}/api/workspaces/${workspaceId}`);
-      if (res.ok) {
-        const json = (await res.json()) as WorkspaceDetail;
-        setData(json);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId]);
-
+/**
+ * The workspace detail row (`GET /api/workspaces/:id`) both sections read,
+ * served from the surface cache (instant-navigation contract N1): reopening
+ * Settings paints the name and the roster on the first frame and revalidates
+ * behind it, and General + Members share ONE slot
+ * (`workspaceDetailCacheKey`), so a role change made in one is what the
+ * other paints next. `workspace_config` marks the slot stale through the
+ * spine map. `refetch` resolves once the fresh row is in the cache (callers
+ * await it after a mutation). A failed revalidation keeps the row on screen:
+ * the fetcher returns the previous value instead of rejecting, so a stale
+ * entry never re-runs against a broken endpoint. A cold failure reports
+ * `data: null` with `loading` false, and the next mount retries once.
+ *
+ * Exported for its test only.
+ */
+export function useWorkspaceDetail(workspaceId: string | null) {
+  const key = workspaceId ? workspaceDetailCacheKey(workspaceId) : null;
+  const entry = useCachedResource<WorkspaceDetail>(key, async () => {
+    const res = await authFetch(`${API_URL}/api/workspaces/${workspaceId}`);
+    if (res.ok) return (await res.json()) as WorkspaceDetail;
+    const previous = key ? readSurfaceCache<WorkspaceDetail>(key).data : undefined;
+    if (previous !== undefined) return previous;
+    throw new Error(`HTTP ${res.status}`);
+  });
+  const { refresh } = entry;
+  const coldFailure = entry.data === undefined && entry.error !== undefined;
   useEffect(() => {
-    setLoading(true);
-    void refetch();
-  }, [refetch]);
+    // A section reopened after a failed cold load retries once; the hook
+    // itself never retries a cold failure (a mounted surface must not hammer
+    // a broken endpoint).
+    if (key && coldFailure) void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  const refetch = useCallback(async () => {
+    await refresh();
+  }, [refresh]);
 
-  return { data, loading, refetch };
+  return {
+    data: entry.data ?? null,
+    loading: key !== null && entry.loading,
+    refetch,
+  };
+}
+
+/**
+ * Geometry-matched frame for the General / Members sections while the detail
+ * row is cold: the identity row (icon + name + role), then roster rows. Never
+ * a "Loading..." sentence (N4).
+ */
+function WorkspaceSectionSkeleton() {
+  return (
+    <div className="space-y-6 animate-fade-in" aria-busy="true" aria-hidden="true">
+      <div className="flex items-center gap-4">
+        <Skeleton className="size-14 shrink-0 rounded-xl" />
+        <div className="flex-1 space-y-2">
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-3 w-1/3" />
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-2.5 rounded-lg bg-muted/30 px-3 py-2">
+            <Skeleton className="size-7 shrink-0 rounded-full" />
+            <Skeleton className="h-3.5" style={{ width: `${40 + ((i * 17) % 30)}%` }} />
+            <Skeleton className="ml-auto h-5 w-14 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ── ws-general ──────────────────────────────────────────────
@@ -272,8 +327,14 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
     return [ingestOnly, ...buildBlueprintPickerItems(workspaceBlueprints)];
   }, [t, workspaceBlueprints]);
 
-  if (loading || !data) {
-    return <div className="text-sm text-muted-foreground">{t.workspaceDetailInline.loading}</div>;
+  if (!data) {
+    // Cold slot: the section's frame while the row loads; a plain error line
+    // only once the load has ended with nothing (the next open retries).
+    return loading ? (
+      <WorkspaceSectionSkeleton />
+    ) : (
+      <div className="text-sm text-destructive">{t.workspaceDetailInline.networkError}</div>
+    );
   }
 
   const isOwner = data.role === "owner";
@@ -651,11 +712,11 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
                     value={nameInput}
                     onChange={(e) => setNameInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && rename()}
-                    className="flex-1 text-sm bg-muted/50 border border-border rounded-lg px-3 py-1.5"
-                    autoFocus
+                    className="flex-1 text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-1.5"
+                    autoFocus={!isPhoneViewport()}
                     maxLength={100}
                   />
-                  <button onClick={rename} className="text-xs font-medium text-primary hover:underline">
+                  <button onClick={rename} className="max-sm:min-h-11 max-sm:px-2 text-xs font-medium text-primary hover:underline">
                     {t.workspaceDetailInline.save}
                   </button>
                   <button
@@ -663,7 +724,7 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
                       setEditing(false);
                       setNameInput(data.name);
                     }}
-                    className="text-xs text-muted-foreground hover:underline"
+                    className="max-sm:min-h-11 max-sm:px-2 text-xs text-muted-foreground hover:underline"
                   >
                     {t.workspaceDetailInline.cancel}
                   </button>
@@ -756,7 +817,7 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
                 setEditingPurpose(true);
                 setPurposeError("");
               }}
-              className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+              className="max-sm:min-h-11 max-sm:px-2 text-xs text-muted-foreground hover:text-foreground shrink-0"
             >
               {t.workspaceDetailInline.edit}
             </button>
@@ -777,8 +838,8 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
               placeholder={t.workspaceDetailInline.purposePlaceholder}
               rows={4}
               maxLength={500}
-              autoFocus
-              className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
+              autoFocus={!isPhoneViewport()}
+              className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
             />
             <div className="flex items-center justify-between gap-2">
               <div className="text-[11px] text-muted-foreground">
@@ -792,7 +853,7 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
                     setPurposeError("");
                   }}
                   disabled={purposeSaving}
-                  className="text-xs text-muted-foreground hover:underline disabled:opacity-50"
+                  className="max-sm:min-h-11 max-sm:px-2 text-xs text-muted-foreground hover:underline disabled:opacity-50"
                 >
                   {t.workspaceDetailInline.cancel}
                 </button>
@@ -964,7 +1025,9 @@ export function WorkspaceGeneralSection({ onWorkspaceDeleted }: { onWorkspaceDel
                     <p className="text-[13px] text-muted-foreground">
                       {t.workspaceDetailInline.transferOwnershipDescription}
                     </p>
-                    <div className="flex items-center gap-2">
+                    {/* Wraps at 390px (responsive contract M8): the Select
+                        and the button stack instead of squeezing. */}
+                    <div className="flex flex-wrap items-center gap-2">
                       <Select
                         value={transferTarget}
                         onValueChange={(v) => {
@@ -1175,8 +1238,8 @@ function TypeToConfirmDialog({
               if (e.key === "Enter") void runDelete();
             }}
             placeholder={workspaceName}
-            autoFocus
-            className="mt-2 w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-1.5"
+            autoFocus={!isPhoneViewport()}
+            className="mt-2 w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-1.5"
           />
           <div className="mt-6 flex justify-end gap-2">
             <Button variant="outline" size="sm" disabled={deleting} onClick={onCancel}>
@@ -1239,8 +1302,14 @@ export function WorkspaceMembersSection() {
     void fetchPending();
   }, [fetchPending]);
 
-  if (loading || !data) {
-    return <div className="text-sm text-muted-foreground">{t.workspaceDetailInline.loading}</div>;
+  if (!data) {
+    // Cold slot: the section's frame while the row loads; a plain error line
+    // only once the load has ended with nothing (the next open retries).
+    return loading ? (
+      <WorkspaceSectionSkeleton />
+    ) : (
+      <div className="text-sm text-destructive">{t.workspaceDetailInline.networkError}</div>
+    );
   }
 
   const isOwner = data.role === "owner";
@@ -1305,8 +1374,18 @@ export function WorkspaceMembersSection() {
     }
   }
 
-  async function revokeInvite(invitationId: string) {
+  async function revokeInvite(invitationId: string, email: string) {
     if (!data) return;
+    // A 44px Revoke beside Resend is one mis-tap from a destructive write on a
+    // phone; the teamspace modal already confirms the same action.
+    const ok = await confirmDialog({
+      title: t.workspaceDetailInline.revokeInviteConfirmTitle,
+      description: format(t.workspaceDetailInline.revokeInviteConfirmBody, { email }),
+      confirmLabel: t.workspaceDetailInline.revokeInviteConfirm,
+      cancelLabel: t.workspaceDetailInline.cancel,
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
       await authFetch(`${API_URL}/api/workspaces/${data.id}/invitations/${invitationId}`, {
         method: "DELETE",
@@ -1341,8 +1420,16 @@ export function WorkspaceMembersSection() {
     }
   }
 
-  async function removeMember(userId: string) {
+  async function removeMember(userId: string, name: string) {
     if (!data) return;
+    const ok = await confirmDialog({
+      title: t.workspaceDetailInline.removeMemberConfirmTitle,
+      description: format(t.workspaceDetailInline.removeMemberConfirmBody, { name }),
+      confirmLabel: t.workspaceDetailInline.removeMemberConfirm,
+      cancelLabel: t.workspaceDetailInline.cancel,
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
       await authFetch(`${API_URL}/api/workspaces/${data.id}/members/${userId}`, {
         method: "DELETE",
@@ -1375,8 +1462,11 @@ export function WorkspaceMembersSection() {
             }}
             placeholder={t.workspaceDetailInline.inviteEmailsPlaceholder}
             rows={2}
-            autoFocus
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
+            // No autofocus on a phone (responsive contract M4): inert on iOS,
+            // and on Android it pops the keyboard over the section picker
+            // before the user has read the form.
+            autoFocus={!isPhoneViewport()}
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
           />
           <div className="flex items-center gap-2">
             <Select
@@ -1398,7 +1488,7 @@ export function WorkspaceMembersSection() {
             placeholder={t.workspaceDetailInline.inviteMessagePlaceholder}
             rows={2}
             maxLength={1000}
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 resize-none outline-none"
           />
           <button
             onClick={sendInvites}
@@ -1466,19 +1556,37 @@ export function WorkspaceMembersSection() {
                         : format(t.workspaceDetailInline.expiresInDays, { days })}
                     </div>
                   </div>
+                  {/* One per-row menu (the share dialog's RoleMenu shape)
+                      instead of two 11px links 8px apart: a 44px trigger on a
+                      phone, and Revoke sits behind a menu AND its confirm. */}
                   <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => resendInvite(inv.email, inv.role)}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
-                    >
-                      {t.workspaceDetailInline.resend}
-                    </button>
-                    <button
-                      onClick={() => revokeInvite(inv.id)}
-                      className="text-[11px] text-red-400 hover:text-red-300"
-                    >
-                      {t.workspaceDetailInline.revoke}
-                    </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-label={format(t.workspaceDetailInline.rowActionsAria, {
+                              name: inv.email,
+                            })}
+                            className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted sm:size-7"
+                          >
+                            <MoreHorizontal className="size-4" aria-hidden />
+                          </button>
+                        }
+                      />
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => resendInvite(inv.email, inv.role)}>
+                          {t.workspaceDetailInline.resend}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => revokeInvite(inv.id, inv.email)}
+                        >
+                          {t.workspaceDetailInline.revoke}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
               );
@@ -1519,27 +1627,39 @@ export function WorkspaceMembersSection() {
                   {m.role}
                 </span>
                 {isOwner && m.role !== "owner" && (
-                  <>
-                    <button
-                      onClick={() => changeRole(m.userId, m.role === "admin" ? "member" : "admin")}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
-                      title={
-                        m.role === "admin"
-                          ? t.workspaceDetailInline.demoteToMember
-                          : t.workspaceDetailInline.promoteToAdmin
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <button
+                          type="button"
+                          aria-label={format(t.workspaceDetailInline.rowActionsAria, {
+                            name: m.userName ?? m.email ?? m.userId,
+                          })}
+                          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted sm:size-7"
+                        >
+                          <MoreHorizontal className="size-4" aria-hidden />
+                        </button>
                       }
-                    >
-                      {m.role === "admin"
-                        ? t.workspaceDetailInline.demote
-                        : t.workspaceDetailInline.promote}
-                    </button>
-                    <button
-                      onClick={() => removeMember(m.userId)}
-                      className="text-[11px] text-red-400 hover:text-red-300"
-                    >
-                      {t.workspaceDetailInline.remove}
-                    </button>
-                  </>
+                    />
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() =>
+                          changeRole(m.userId, m.role === "admin" ? "member" : "admin")
+                        }
+                      >
+                        {m.role === "admin"
+                          ? t.workspaceDetailInline.demoteToMember
+                          : t.workspaceDetailInline.promoteToAdmin}
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => removeMember(m.userId, m.userName ?? m.email ?? "")}
+                      >
+                        {t.workspaceDetailInline.remove}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
               </div>
             </div>

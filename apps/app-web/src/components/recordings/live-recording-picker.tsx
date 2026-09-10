@@ -40,7 +40,7 @@ export function LiveRecordingPicker({
         placeholder={t.liveDestinationLabel}
         aria-label={t.liveDestinationLabel}
         searchPlaceholder={t.liveDestinationSearch}
-        popupClassName="w-80"
+        popupClassName="w-[min(20rem,calc(100vw-2rem))]"
       />
     </div>
   );

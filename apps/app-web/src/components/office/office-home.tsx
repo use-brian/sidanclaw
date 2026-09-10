@@ -1,17 +1,21 @@
 "use client";
 
 /** Permission-filtered Office home and generation state. [COMP:app-web/office-home] */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { FileSpreadsheet, FileText, Presentation, Plus } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { isOfficeStartFailed, listOfficeArtifacts, officeJobFailureKind, type OfficeArtifact, type OfficeFamily } from "@/lib/office/api";
+import { useCachedResource } from "@/lib/surface-cache";
+import { officeListCacheFamily, officeListCacheKey, type OfficeListView } from "@/lib/surface-prefetch";
+import { useOfficeCacheRevalidation } from "@/lib/office/surface-cache";
+import { GridSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 import { OfficeCardPreview } from "./office-card-preview";
 import { OfficeTopbar } from "./office-topbar";
 
-type View = "active" | "archived" | "trash" | "retained";
+type View = OfficeListView;
 type Filter = "all" | OfficeFamily;
 
 export function OfficeHome({ workspaceId, initialArtifacts }: { workspaceId: string; initialArtifacts?: OfficeArtifact[] }) {
@@ -21,19 +25,19 @@ export function OfficeHome({ workspaceId, initialArtifacts }: { workspaceId: str
   const familyParam = searchParams.get("family");
   const view: View = viewParam === "archived" || viewParam === "trash" || viewParam === "retained" ? viewParam : "active";
   const filter: Filter = familyParam === "document" || familyParam === "presentation" || familyParam === "spreadsheet" ? familyParam : "all";
-  const [artifacts, setArtifacts] = useState<OfficeArtifact[] | null>(initialArtifacts ?? null);
-  const [failed, setFailed] = useState(false);
   const base = `/w/${workspaceId}/office`;
-
-  useEffect(() => {
-    if (initialArtifacts && view === "active") return;
-    let live = true;
-    setFailed(false);
-    void listOfficeArtifacts(workspaceId, view)
-      .then((rows) => { if (live) setArtifacts(rows); })
-      .catch(() => { if (live) { setArtifacts([]); setFailed(true); } });
-    return () => { live = false; };
-  }, [initialArtifacts, view, workspaceId]);
+  // Cache-backed (instant-navigation contract N1 / N2): a revisit paints the
+  // last-known cards on the first frame and revalidates behind them, and the
+  // sidebar hover has usually already warmed this key (`warmTargetFor`).
+  // A server-supplied `initialArtifacts` (tests, SSR shells) short-circuits
+  // the cache for the active view. Office has no spine primitive, so the
+  // refresh triggers are mount and tab-visible; a user's own create / trash
+  // drops the family through `invalidateOfficeList`.
+  const seeded = Boolean(initialArtifacts) && view === "active";
+  const list = useCachedResource<OfficeArtifact[]>(seeded ? null : officeListCacheKey(workspaceId, view), () => listOfficeArtifacts(workspaceId, view));
+  useOfficeCacheRevalidation([officeListCacheFamily(workspaceId)]);
+  const artifacts: OfficeArtifact[] | null = list.data ?? initialArtifacts ?? null;
+  const failed = artifacts === null && list.error !== undefined;
 
   const visible = useMemo(
     () => (artifacts ?? []).filter((artifact) => filter === "all" || artifact.family === filter),
@@ -61,7 +65,7 @@ export function OfficeHome({ workspaceId, initialArtifacts }: { workspaceId: str
             <div className="flex max-w-[min(70vw,24rem)] items-center overflow-x-auto rounded-md border p-0.5" aria-label={t.fileFilters}>
               {(["all", "document", "presentation", "spreadsheet"] as const).map((item) => <Link key={item} href={filterHref(item)} aria-current={filter === item ? "page" : undefined} className={filter === item ? "rounded px-2 py-1 text-xs font-medium bg-foreground text-background" : "rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground"}>{item === "all" ? t.all : item === "document" ? t.documents : item === "presentation" ? t.presentations : t.spreadsheets}</Link>)}
             </div>
-            <Link aria-label={t.newArtifact} title={t.newArtifact} className="inline-flex size-8 items-center justify-center gap-2 rounded-md bg-action text-sm font-medium text-action-foreground shadow-sm transition-colors hover:bg-action/85 sm:w-auto sm:px-2.5" href={`${base}/new`}>
+            <Link aria-label={t.newArtifact} title={t.newArtifact} className="inline-flex size-11 items-center justify-center gap-2 rounded-md bg-action text-sm font-medium text-action-foreground shadow-sm transition-colors hover:bg-action/85 sm:h-8 sm:w-auto sm:px-2.5" href={`${base}/new`}>
               <Plus className="size-4" aria-hidden /><span className="hidden sm:inline">{t.newArtifact}</span>
             </Link>
           </div>
@@ -70,7 +74,7 @@ export function OfficeHome({ workspaceId, initialArtifacts }: { workspaceId: str
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <h1 className="sr-only">{t.homeTitle}</h1>
 
-        {artifacts === null ? <p className="py-16 text-center text-sm text-muted-foreground">{t.loading}</p> : failed ? <p className="py-16 text-center text-sm text-destructive">{t.loadFailed}</p> : visible.length === 0 ? view === "active" && filter === "all" ? (
+        {artifacts === null ? failed ? <p className="py-16 text-center text-sm text-destructive">{t.loadFailed}</p> : <div data-office-home-skeleton="true" aria-busy="true"><GridSurfaceSkeleton chrome={false} padded={false} /></div> : visible.length === 0 ? view === "active" && filter === "all" ? (
           <section className="rounded-2xl border border-dashed px-6 py-14 text-center">
             <h2 className="font-medium">{t.firstArtifactEmptyTitle}</h2>
             <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">{t.firstArtifactEmptyBody}</p>

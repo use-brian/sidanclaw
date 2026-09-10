@@ -34,6 +34,7 @@
  */
 
 import { z } from 'zod'
+import { createEntityAliasTools } from '../entities/alias-tools.js'
 import { buildTool, type Tool, type ToolContext } from '../tools/types.js'
 import { isAutonomousToolContext } from '../tools/capability-gate.js'
 import type { AccessContext } from '../security/access-context.js'
@@ -1256,148 +1257,6 @@ export function createBrainHealingTools(deps: HealingToolsDeps): Tool[] {
     },
   })
 
-  // ── 9. noteAlias ──────────────────────────────────────────────────
-
-  const noteAlias = buildTool({
-    name: 'noteAlias',
-    description:
-      'Register an alternate name for an existing entity. After this, ' +
-      'search and duplicate review can rank the entity for that alias. ' +
-      'For people, an alias is never mutation identity and later extraction ' +
-      'still creates a distinct person unless a stable provider binding or ' +
-      'explicit target id supplies authority. ' +
-      'Use when the user says "AC is the same as Acme Corp", "tonic ' +
-      'is short for acme-labs/tonic", or "acme-labs/gateway ' +
-      'is the gateway repo". Aliases are stored lowercase but ' +
-      'case-insensitively matched. Returns a conflict error (with the ' +
-      'other entity id) if the alias is already bound to a different ' +
-      'live entity in this workspace; resolve via dedupeEntities or ' +
-      'pick a different alias.',
-    inputSchema: z.object({
-      entity_id: z
-        .string()
-        .uuid()
-        .describe('The canonical entity id that the alias should resolve to.'),
-      alias: z
-        .string()
-        .min(1)
-        .max(200)
-        .describe(
-          'The alternate name to register. Lowercased + trimmed for storage; ' +
-            'case-insensitive on lookup.',
-        ),
-    }),
-    isConcurrencySafe: false,
-    isReadOnly: false,
-
-    async execute(input, context) {
-      // Pre-flight: ensure the workspace context is set; the underlying
-      // store call is RLS-gated so we don't need to thread workspaceId
-      // through, but a missing workspace context means this assistant
-      // has no brain to teach.
-      const gate = workspaceGate(context.workspaceId, 'noteAlias')
-      if (gate) return gate
-      try {
-        const result = await deps.entities.addAlias(
-          context.userId,
-          input.entity_id,
-          input.alias,
-        )
-        if (result.kind === 'not_found') {
-          return notFoundFailure({
-            kind: 'Entity',
-            id: input.entity_id,
-            discoveryTool: 'searchBrain / getEntity',
-            extra: `The alias "${input.alias}" was NOT registered. The record may also be above this assistant's clearance, which reads the same as missing.`,
-            idSource: 'a searchBrain / getEntity / listContacts result, never a display name',
-          })
-        }
-        if (result.kind === 'conflict') {
-          // D5: prose first, structured tail after — a multi-key object would
-          // reach the model as raw JSON it has to parse to read a sentence.
-          return {
-            data:
-              `noteAlias did not register "${input.alias}" on entity ${input.entity_id}: that alias is already bound to a DIFFERENT live entity, ${result.conflictingEntityId}, and one alias cannot resolve to two records. Nothing was changed. ` +
-              `Decide which case this is: if the two records are the same thing, merge them first (mergeEntities with survivor_id ${input.entity_id} and merged_id ${result.conflictingEntityId}, or the other way round) and the alias question disappears; if they are genuinely different, pick a more specific alias. ` +
-              'Retrying this exact alias unchanged will keep failing. ' +
-              `(conflicting_entity_id: ${result.conflictingEntityId})`,
-            isError: true,
-          }
-        }
-        return {
-          data: {
-            entityId: result.entity.id,
-            displayName: result.entity.displayName,
-            aliases: result.entity.aliases,
-          },
-        }
-      } catch (err) {
-        return toolFailure(err, {
-          tool: 'noteAlias',
-          target: `alias "${input.alias}" on entity ${input.entity_id}`,
-          mutating: true,
-          next: 'Entity ids come from searchBrain / getEntity and are superseded by a merge — re-resolve there if this one is stale.',
-        })
-      }
-    },
-  })
-
-  // ── 10. splitAlias ────────────────────────────────────────────────
-
-  const splitAlias = buildTool({
-    name: 'splitAlias',
-    description:
-      'Remove a previously-registered alias from an entity. Use when ' +
-      'the user says "actually AC is NOT Acme Corp" or "stop treating ' +
-      'X as Y". The next extraction of the removed alias will resolve ' +
-      'as a new entity (or whatever else matches it). Idempotent — ' +
-      'removing an alias that was not registered is a no-op.',
-    inputSchema: z.object({
-      entity_id: z.string().uuid(),
-      alias: z.string().min(1).max(200),
-    }),
-    isConcurrencySafe: false,
-    isReadOnly: false,
-    // Tier-C write-gate (see undoReclassification): removes an alias
-    // binding. Idempotent / re-noteable, so interactive stays silent; the
-    // autonomous path gates.
-    resolveConfirmation: async (context) => isAutonomousToolContext(context),
-
-    async execute(input, context) {
-      const gate = workspaceGate(context.workspaceId, 'splitAlias')
-      if (gate) return gate
-      try {
-        const updated = await deps.entities.removeAlias(
-          context.userId,
-          input.entity_id,
-          input.alias,
-        )
-        if (!updated) {
-          return notFoundFailure({
-            kind: 'Entity',
-            id: input.entity_id,
-            discoveryTool: 'searchBrain / getEntity',
-            extra: `The alias "${input.alias}" was NOT removed. The record may also be above this assistant's clearance, which reads the same as missing. (Removing an alias the entity never had is a no-op, not this error — this error means the ENTITY did not resolve.)`,
-            idSource: 'a searchBrain / getEntity / listContacts result, never a display name',
-          })
-        }
-        return {
-          data: {
-            entityId: updated.id,
-            displayName: updated.displayName,
-            aliases: updated.aliases,
-          },
-        }
-      } catch (err) {
-        return toolFailure(err, {
-          tool: 'splitAlias',
-          target: `alias "${input.alias}" on entity ${input.entity_id}`,
-          mutating: true,
-          next: 'Entity ids come from searchBrain / getEntity and are superseded by a merge — re-resolve there if this one is stale.',
-        })
-      }
-    },
-  })
 
   return [
     listBrainCandidates,
@@ -1408,8 +1267,7 @@ export function createBrainHealingTools(deps: HealingToolsDeps): Tool[] {
     dedupeEntities,
     mergeEntitiesTool,
     undoEntityMergeTool,
-    noteAlias,
-    splitAlias,
+    ...createEntityAliasTools(deps.entities),
   ]
 }
 

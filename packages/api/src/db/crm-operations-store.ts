@@ -10,6 +10,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg'
 import {
   CrmOperationsError,
+  CrmLocaleWordingsSchema,
   crmOperationsSha256,
   mayTransitionCrmEntitlement,
   mayTransitionCrmParticipation,
@@ -20,7 +21,20 @@ import {
   type CrmSegmentPredicate,
 } from '@use-brian/core'
 import { getPool } from './client.js'
+import { readCrmPrivacyPolicy, saveCrmPrivacyPolicy } from '../crm-operations/privacy-policy.js'
+import { releaseCrmAddressSuppression } from '../crm-operations/suppression-tombstones.js'
+import { saveCrmManagedMailboxPolicy, saveCrmMailboxIntegrationGrant } from '../crm-operations/delivery-policy.js'
+import { saveCrmEntitlementPlanRecord, saveCrmEventRecord } from './association-store.js'
+import { prepareProviderEntitlementPeriod, requireProviderEntitlementActor } from '../crm-operations/entitlement-periods.js'
+import { actorAuditIdentity } from '@use-brian/core'
+import { lockAssociationInventory, refreshAssociationInventory } from '../association/inventory.js'
+import type { PlanInput, EventInput } from '../association/domain.js'
+import { authorizeCrmIntegrationCommand } from '../crm-operations/integration-authority.js'
+import type { CrmOperationsCommand } from '@use-brian/core'
 import { loadCrmSegmentCatalog } from './crm-segment-store.js'
+import { crmEvidenceRequestHash, resolveCrmEvidenceReplay, type CrmEvidenceRequest } from '../crm-operations/evidence-replay.js'
+import { executeCrmConfigCommand } from './crm-config-commands.js'
+import type { CrmConfigCommand } from '@use-brian/core'
 
 export type CrmOperationsRecord = Record<string, unknown>
 
@@ -43,6 +57,7 @@ export type StoredIntakeDefinition = {
   maxPayloadBytes: number
   schemaHash: string
   schemaSnapshot: Record<string, unknown>
+  verificationAcknowledgedByUserId?: string | null
   createdByUserId: string | null
 }
 
@@ -62,6 +77,7 @@ export type AuditIdentity = {
 
 export type IdempotencyClaim =
   | { kind: 'claimed'; claimId: string }
+  | { kind: 'retired'; claimId: string }
   | {
     kind: 'duplicate'
     claimId: string
@@ -72,8 +88,16 @@ export type IdempotencyClaim =
   | { kind: 'conflict'; claimId: string; storedHash: string }
 
 export type CrmOperationsTransaction = {
+  configureCatalog(command: CrmConfigCommand): ReturnType<typeof executeCrmConfigCommand>
+  savePrivacyPolicy(command: Extract<CrmOperationsCommand, { kind: 'save_privacy_policy' }>): ReturnType<typeof saveCrmPrivacyPolicy>
+  releaseAddressSuppression(command: Extract<CrmOperationsCommand, { kind: 'release_address_suppression' }>): ReturnType<typeof releaseCrmAddressSuppression>
+  saveMailboxIntegrationGrant(command: Extract<CrmOperationsCommand, {kind:'save_mailbox_integration_grant'}>): ReturnType<typeof saveCrmMailboxIntegrationGrant>
+  saveManagedMailboxPolicy(command: Extract<CrmOperationsCommand, { kind: 'save_managed_mailbox_policy' }>): ReturnType<typeof saveCrmManagedMailboxPolicy>
+  authorizeIntegration(command: CrmOperationsCommand): Promise<void>
+  saveEntitlementPlan(input: PlanInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
+  saveEvent(input: EventInput): Promise<{ record: CrmOperationsRecord; created: boolean }>
   getIntakeDefinition(definitionKey: string): Promise<StoredIntakeDefinition | null>
-  intakeCredentialMayUse(credentialId: string, definitionId: string): Promise<boolean>
+  intakeCredentialReplayScope(credentialId: string, definitionId: string): Promise<string | null>
   claimIdempotency(params: {
     actorScope: string
     credentialId: string | null
@@ -103,6 +127,7 @@ export type CrmOperationsTransaction = {
     requestHash: string
     fields: Record<string, unknown>
     submittedAt: string
+    identityVerificationEvidence?: Record<string, unknown> | null
   }): Promise<CrmOperationsRecord>
   createFollowUpTask(params: {
     contactId: string
@@ -120,10 +145,13 @@ export type CrmOperationsTransaction = {
   getConsentPurpose(purposeKey: string): Promise<CrmOperationsRecord | null>
   appendConsent(params: {
     contactId: string
-    purpose: CrmOperationsRecord
+    purpose: CrmOperationsRecord | null
+    purposeKey: string
+    locale?: 'en' | 'zh' | 'zh-CN' | 'ja'
     action: 'granted' | 'withdrawn'
     source: string
     occurredAt: string
+    requestedOccurredAt?: string
     provider?: string
     providerEventId?: string
     metadata: Record<string, unknown>
@@ -136,6 +164,7 @@ export type CrmOperationsTransaction = {
     reasonCode: string
     source: string
     occurredAt: string
+    requestedOccurredAt?: string
     provider?: string
     providerEventId?: string
     metadata: Record<string, unknown>
@@ -161,6 +190,7 @@ export type CrmOperationsTransaction = {
     createdByUserId: string | null
   }): Promise<{ record: CrmOperationsRecord; created: boolean }>
   createIntakeCredential(params: {
+    rotateFromCredentialId?: string
     credentialId: string
     label: string
     definitionIds: string[]
@@ -179,6 +209,9 @@ export type CrmOperationsTransaction = {
     wordingVersion: string
     wording: string
     wordingHash: string
+    defaultLocale: string | null
+    localeWordings: Record<string, string>
+    localeWordingHashes: Record<string, string>
     archived: boolean
     createdByUserId: string | null
   }): Promise<{ record: CrmOperationsRecord; created: boolean }>
@@ -195,6 +228,7 @@ export type CrmOperationsTransaction = {
   getSegmentCatalog(entityKind: 'person' | 'company' | 'deal'): Promise<CrmSegmentCatalog>
   archiveSegment(segmentId: string, expectedVersion?: number): Promise<CrmOperationsRecord | null>
   grantEntitlement(params: CrmOperationsRecord): Promise<{ record: CrmOperationsRecord; created: boolean }>
+  expireDueEntitlement(entitlementId:string):Promise<CrmOperationsRecord|null>
   updateEntitlement(entitlementId: string, changes: CrmOperationsRecord): Promise<CrmOperationsRecord | null>
   recordParticipation(params: CrmOperationsRecord): Promise<{ record: CrmOperationsRecord; created: boolean }>
   updateParticipation(participationId: string, status: string): Promise<CrmOperationsRecord | null>
@@ -249,6 +283,14 @@ function actorAssistantId(actor: CrmOperationsActor): string | null {
 function createTransaction(client: PoolClient, context: CrmOperationsContext): CrmOperationsTransaction {
   const workspaceId = context.workspaceId
   return {
+    configureCatalog: (command) => executeCrmConfigCommand(client, context, command),
+    savePrivacyPolicy: (command) => saveCrmPrivacyPolicy(client, context, command),
+    releaseAddressSuppression: (command) => releaseCrmAddressSuppression(client, context, command),
+    saveMailboxIntegrationGrant: (command) => saveCrmMailboxIntegrationGrant(client,context,command),
+    saveManagedMailboxPolicy: (command) => saveCrmManagedMailboxPolicy(client, context, command),
+    authorizeIntegration: (command) => authorizeCrmIntegrationCommand(client, context, command),
+    saveEntitlementPlan: (input) => saveCrmEntitlementPlanRecord(client, workspaceId, input),
+    saveEvent: (input) => saveCrmEventRecord(client, workspaceId, input, context.actor.kind),
     async getIntakeDefinition(definitionKey) {
       const result = await client.query<DbRecord>(
         `SELECT d.id, d.workspace_id AS "workspaceId", d.definition_key AS "definitionKey",
@@ -262,69 +304,76 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                 v.follow_up_due_minutes AS "followUpDueMinutes",
                 v.max_payload_bytes AS "maxPayloadBytes", v.schema_hash AS "schemaHash",
                 v.schema_snapshot AS "schemaSnapshot",
+                v.created_by_user_id AS "verificationAcknowledgedByUserId",
                 d.created_by_user_id AS "createdByUserId"
            FROM crm_intake_definitions d
            JOIN crm_intake_definition_versions v
              ON v.workspace_id = d.workspace_id AND v.definition_id = d.id
             AND v.version = d.current_version
-          WHERE d.workspace_id = $1 AND d.definition_key = $2`,
+          WHERE d.workspace_id = $1 AND d.definition_key = $2 FOR SHARE OF d`,
         [workspaceId, definitionKey],
       )
       return (result.rows[0] as StoredIntakeDefinition | undefined) ?? null
     },
 
-    async intakeCredentialMayUse(credentialId, definitionId) {
-      const result = await client.query(
-        `SELECT 1
+    async intakeCredentialReplayScope(credentialId, definitionId) {
+      const result = await client.query<{ replayScopeId: string }>(
+        `SELECT c.replay_scope_id AS "replayScopeId"
            FROM crm_intake_credentials c
            JOIN crm_intake_credential_definitions b
              ON b.workspace_id = c.workspace_id AND b.credential_id = c.id
           WHERE c.workspace_id = $1 AND c.id = $2 AND b.definition_id = $3
-            AND c.revoked_at IS NULL`,
+            AND c.revoked_at IS NULL
+          FOR SHARE OF c,b`,
         [workspaceId, credentialId, definitionId],
       )
-      return result.rowCount === 1
+      return result.rows[0]?.replayScopeId ?? null
     },
 
     async claimIdempotency(params) {
-      const inserted = await client.query<DbRecord>(
-        `INSERT INTO crm_intake_idempotency (
-           workspace_id, credential_id, actor_scope, definition_id,
-           idempotency_key, request_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (workspace_id, actor_scope, definition_id, idempotency_key)
-         DO NOTHING
-         RETURNING id`,
-        [workspaceId, params.credentialId, params.actorScope, params.definitionId,
-          params.idempotencyKey, params.requestHash],
-      )
-      if (inserted.rows[0]) return { kind: 'claimed', claimId: inserted.rows[0].id as string }
-
-      const existing = await client.query<DbRecord>(
-        `SELECT id, request_hash AS "requestHash", status,
-                submission_id AS "submissionId", contact_id AS "contactId",
-                follow_up_task_id AS "followUpTaskId"
-           FROM crm_intake_idempotency
-          WHERE workspace_id = $1 AND actor_scope = $2 AND definition_id = $3
-            AND idempotency_key = $4
-          FOR UPDATE`,
-        [workspaceId, params.actorScope, params.definitionId, params.idempotencyKey],
-      )
-      const row = existing.rows[0]
-      if (!row || row.requestHash !== params.requestHash || row.status !== 'committed') {
-        return {
-          kind: 'conflict',
-          claimId: String(row?.id ?? ''),
-          storedHash: String(row?.requestHash ?? ''),
+      // Serialize reuse of a retired namespace slot. Lock an existing receipt
+      // before inspecting expiry so retention cannot delete it between reads.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        JSON.stringify(['crm-intake-replay', workspaceId, params.actorScope, params.definitionId, params.idempotencyKey]),
+      ])
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const existing = await client.query<DbRecord>(
+          `SELECT id, request_hash AS "requestHash", status,
+                  submission_id AS "submissionId", contact_id AS "contactId",
+                  follow_up_task_id AS "followUpTaskId",
+                  replay_expires_at<=clock_timestamp() AS expired
+             FROM crm_intake_idempotency
+            WHERE workspace_id=$1 AND actor_scope=$2 AND definition_id=$3 AND idempotency_key=$4
+            FOR UPDATE`,
+          [workspaceId, params.actorScope, params.definitionId, params.idempotencyKey],
+        )
+        const row = existing.rows[0]
+        if (row?.status === 'retired' && row.expired === true) {
+          await client.query('DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND id=$2', [workspaceId, row.id])
+        } else if (row) {
+          if (row.requestHash !== params.requestHash || !['committed', 'retired'].includes(String(row.status))) {
+            return { kind: 'conflict', claimId: String(row.id), storedHash: String(row.requestHash) }
+          }
+          if (row.status === 'retired') return { kind: 'retired', claimId: row.id as string }
+          return { kind: 'duplicate', claimId: row.id as string, submissionId: row.submissionId as string,
+            contactId: row.contactId as string, followUpTaskId: (row.followUpTaskId as string | null) ?? null }
         }
+        const policy = await readCrmPrivacyPolicy(workspaceId, client)
+        const seconds = policy.policy.intakeReplay?.retentionSeconds ?? null
+        const inserted = await client.query<DbRecord>(
+          `INSERT INTO crm_intake_idempotency (
+             workspace_id,credential_id,actor_scope,definition_id,idempotency_key,request_hash,
+             replay_policy_version,replay_expires_at
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,now()+$8::integer*interval '1 second')
+           ON CONFLICT (workspace_id,actor_scope,definition_id,idempotency_key) DO NOTHING RETURNING id`,
+          [workspaceId, params.credentialId, params.actorScope, params.definitionId,
+            params.idempotencyKey, params.requestHash, seconds === null ? null : policy.version, seconds],
+        )
+        if (inserted.rows[0]) return { kind: 'claimed', claimId: inserted.rows[0].id as string }
+        // A pre-migration process may still claim without the advisory lock.
+        // Re-read its committed receipt once; never create a second result.
       }
-      return {
-        kind: 'duplicate',
-        claimId: row.id as string,
-        submissionId: row.submissionId as string,
-        contactId: row.contactId as string,
-        followUpTaskId: (row.followUpTaskId as string | null) ?? null,
-      }
+      throw new CrmOperationsError('conflict', 'Intake receipt changed concurrently. Retry the same request.')
     },
 
     async commitIdempotency(params) {
@@ -339,25 +388,38 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async resolveExternalIdentity(provider, subject) {
-      const result = await client.query<{ contactId: string }>(
-        `SELECT contact_id AS "contactId"
-           FROM association_external_identities
-          WHERE workspace_id = $1 AND provider = $2 AND provider_subject = $3`,
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        JSON.stringify(['crm-intake-identity', workspaceId, 'external_subject', provider, subject]),
+      ])
+      const result = await client.query<{ contactId: string; isLive: boolean }>(
+        `SELECT i.contact_id AS "contactId",
+                (e.kind='person' AND e.valid_to IS NULL AND e.retracted_at IS NULL
+                  AND NOT (e.attributes ? 'crm_archived_at')) AS "isLive"
+           FROM association_external_identities i
+           JOIN entities e ON e.workspace_id=i.workspace_id AND e.id=i.contact_id
+          WHERE i.workspace_id=$1 AND i.provider=$2 AND i.provider_subject=$3`,
         [workspaceId, provider, subject],
       )
-      return result.rows[0]?.contactId ?? null
+      const row = result.rows[0]
+      if (row && !row.isLive) throw new CrmOperationsError('conflict', 'The identity binding requires contact review.', { reason: 'identity_review_required' })
+      return row?.contactId ?? null
     },
 
     async findContactByEmail(email) {
+      const normalized = email.trim().toLowerCase()
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        JSON.stringify(['crm-intake-identity', workspaceId, 'email', normalized]),
+      ])
       const result = await client.query<{ id: string }>(
         `SELECT id FROM entities
           WHERE workspace_id = $1 AND kind = 'person' AND valid_to IS NULL
-            AND retracted_at IS NULL
-            AND lower(COALESCE(attributes->>'email', canonical_id, '')) = $2
-          ORDER BY created_at, id LIMIT 2`,
-        [workspaceId, email.trim().toLowerCase()],
+            AND retracted_at IS NULL AND NOT (attributes ? 'crm_archived_at')
+            AND lower(btrim(COALESCE(NULLIF(btrim(attributes->>'email'),''),canonical_id,'')))=$2
+          ORDER BY created_at,id LIMIT 2`,
+        [workspaceId, normalized],
       )
-      return result.rows.length === 1 ? result.rows[0]!.id : null
+      if (result.rows.length > 1) throw new CrmOperationsError('conflict', 'Multiple live contacts match this email; review is required.', { reason: 'identity_review_required' })
+      return result.rows[0]?.id ?? null
     },
 
     async resolveAttributionUser(preferredUserId) {
@@ -450,8 +512,8 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
            request_fingerprint, subject, message, submitted_data, status,
            queue_key, owner_user_id, submitted_at, definition_id,
            definition_version_id, definition_schema_hash,
-           definition_schema_snapshot
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'new',$9,$10,$11,$12,$13,$14,$15::jsonb)
+           definition_schema_snapshot, identity_verification_evidence
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'new',$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb)
          RETURNING id, workspace_id AS "workspaceId", contact_id AS "contactId",
                    definition_id AS "definitionId", definition_version_id AS "definitionVersionId",
                    status, queue_key AS "queueKey", owner_user_id AS "ownerUserId",
@@ -464,7 +526,8 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
           JSON.stringify(params.fields), params.definition.queueKey,
           params.definition.ownerUserId, params.submittedAt, params.definition.id,
           params.definition.versionId, params.definition.schemaHash,
-          JSON.stringify(params.definition.schemaSnapshot)],
+          JSON.stringify(params.definition.schemaSnapshot),
+          params.identityVerificationEvidence ? JSON.stringify(params.identityVerificationEvidence) : null],
       )
       return first(result)
     },
@@ -504,6 +567,11 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                 applicable_channels AS "applicableChannels",
                 active_wording_version AS "wordingVersion",
                 wording_snapshot AS wording, wording_hash AS "wordingHash",
+                default_locale AS "defaultLocale",locale_wordings AS "localeWordings",
+                locale_wording_hashes AS "localeWordingHashes",
+                (SELECT v.id FROM crm_consent_purpose_versions v
+                  WHERE v.workspace_id=crm_consent_purposes.workspace_id AND v.purpose_id=crm_consent_purposes.id
+                    AND v.version=crm_consent_purposes.active_wording_version) AS "wordingVersionId",
                 archived_at AS "archivedAt"
            FROM crm_consent_purposes
           WHERE workspace_id = $1 AND purpose_key = $2`,
@@ -513,96 +581,96 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async appendConsent(params) {
+      const request: CrmEvidenceRequest = { kind: 'consent', contactId: params.contactId,
+        purposeKey: params.purposeKey, action: params.action, source: params.source,
+        locale: params.locale,
+        occurredAt: params.requestedOccurredAt, metadata: params.metadata }
+      const select = `id, contact_id AS "contactId", purpose, action,
+        wording_version AS "wordingVersion", wording_hash AS "wordingHash",
+        wording_snapshot AS wording, source, occurred_at AS "occurredAt",
+        wording_version_id AS "wordingVersionId",wording_locale AS "wordingLocale",
+        provider, provider_event_id AS "providerEventId", metadata, created_at AS "createdAt"`
+      const replay = () => client.query<DbRecord>(
+        `SELECT ${select}, request_fingerprint AS "__requestHash",
+                to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__occurredAt"
+           FROM association_consent_events
+          WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+        [workspaceId, params.provider, params.providerEventId],
+      )
       if (params.provider && params.providerEventId) {
-        const existing = await client.query<DbRecord>(
-          `SELECT id, contact_id AS "contactId", purpose, action,
-                  wording_version AS "wordingVersion", wording_hash AS "wordingHash",
-                  wording_snapshot AS wording, source, occurred_at AS "occurredAt",
-                  provider, provider_event_id AS "providerEventId", metadata,
-                  created_at AS "createdAt"
-             FROM association_consent_events
-            WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-          [workspaceId, params.provider, params.providerEventId],
-        )
-        if (existing.rows[0]) return { record: existing.rows[0], created: false }
+        const existing = await replay()
+        if (existing.rows[0]) return { record: resolveCrmEvidenceReplay(existing.rows[0], request), created: false }
       }
+      const purpose = params.purpose
+      if (!purpose || purpose.archivedAt || purpose.purposeKey !== params.purposeKey) {
+        throw new CrmOperationsError('catalog_key_invalid', 'Consent purpose is unavailable.', { purposeKey: params.purposeKey })
+      }
+      const locales = CrmLocaleWordingsSchema.parse(purpose.localeWordings ?? {})
+      const localized = params.locale ? locales[params.locale] : undefined
+      const wording = localized ?? purpose.wording
+      const wordingLocale = localized ? params.locale : purpose.defaultLocale ?? null
+      const wordingHash = localized
+        ? (purpose.localeWordingHashes as Record<string, string>)[params.locale!]
+        : purpose.wordingHash
       const result = await client.query<DbRecord>(
         `INSERT INTO association_consent_events (
            workspace_id, contact_id, purpose, purpose_id, action,
            wording_version, wording_hash, wording_snapshot, source, occurred_at,
            provider, provider_event_id, metadata, actor_kind,
-           actor_credential_id, acting_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16)
+           actor_credential_id, acting_user_id, request_fingerprint,wording_version_id,wording_locale
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14,$15,$16,$17,$18,$19)
          ON CONFLICT (workspace_id, provider, provider_event_id)
            WHERE provider IS NOT NULL DO NOTHING
-         RETURNING id, contact_id AS "contactId", purpose, action,
-                   wording_version AS "wordingVersion", wording_hash AS "wordingHash",
-                   wording_snapshot AS wording, source, occurred_at AS "occurredAt",
-                   provider, provider_event_id AS "providerEventId", metadata,
-                   created_at AS "createdAt"`,
-        [workspaceId, params.contactId, params.purpose.purposeKey, params.purpose.id,
-          params.action, params.purpose.wordingVersion, params.purpose.wordingHash,
-          params.purpose.wording, params.source, params.occurredAt,
+         RETURNING ${select}`,
+        [workspaceId, params.contactId, purpose.purposeKey, purpose.id,
+          params.action, purpose.wordingVersion, wordingHash,
+          wording, params.source, params.occurredAt,
           params.provider ?? null, params.providerEventId ?? null,
           JSON.stringify(params.metadata), params.actor.actorKind,
-          params.actor.actorCredentialId, params.actor.actingUserId],
+          params.actor.actorCredentialId, params.actor.actingUserId,
+          params.provider ? crmEvidenceRequestHash(request) : null,
+          purpose.wordingVersionId ?? null,wordingLocale],
       )
       if (result.rows[0]) return { record: result.rows[0], created: true }
-      const existing = await client.query<DbRecord>(
-        `SELECT id, contact_id AS "contactId", purpose, action,
-                wording_version AS "wordingVersion", wording_hash AS "wordingHash",
-                wording_snapshot AS wording, source, occurred_at AS "occurredAt",
-                provider, provider_event_id AS "providerEventId", metadata,
-                created_at AS "createdAt"
-           FROM association_consent_events
-          WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-        [workspaceId, params.provider, params.providerEventId],
-      )
-      return { record: first(existing), created: false }
+      return { record: resolveCrmEvidenceReplay(first(await replay()), request), created: false }
     },
 
     async appendSuppression(params) {
+      const request: CrmEvidenceRequest = { kind: 'suppression', contactId: params.contactId,
+        channel: params.channel, action: params.action, reasonCode: params.reasonCode,
+        source: params.source, occurredAt: params.requestedOccurredAt, metadata: params.metadata }
+      const select = `id, contact_id AS "contactId", channel, action,
+        reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
+        provider, provider_event_id AS "providerEventId", metadata, created_at AS "createdAt"`
+      const replay = () => client.query<DbRecord>(
+        `SELECT ${select}, request_fingerprint AS "__requestHash",
+                to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS "__occurredAt"
+           FROM crm_suppression_events
+          WHERE workspace_id=$1 AND provider=$2 AND provider_event_id=$3`,
+        [workspaceId, params.provider, params.providerEventId],
+      )
       if (params.provider && params.providerEventId) {
-        const existing = await client.query<DbRecord>(
-          `SELECT id, contact_id AS "contactId", channel, action,
-                  reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
-                  provider, provider_event_id AS "providerEventId", metadata,
-                  created_at AS "createdAt"
-             FROM crm_suppression_events
-            WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-          [workspaceId, params.provider, params.providerEventId],
-        )
-        if (existing.rows[0]) return { record: existing.rows[0], created: false }
+        const existing = await replay()
+        if (existing.rows[0]) return { record: resolveCrmEvidenceReplay(existing.rows[0], request), created: false }
       }
       const result = await client.query<DbRecord>(
         `INSERT INTO crm_suppression_events (
            workspace_id, contact_id, channel, action, reason_code, source,
            actor_kind, actor_credential_id, acting_user_id, provider,
-           provider_event_id, occurred_at, metadata
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+           provider_event_id, occurred_at, metadata, request_fingerprint
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
          ON CONFLICT (workspace_id, provider, provider_event_id)
            WHERE provider IS NOT NULL DO NOTHING
-         RETURNING id, contact_id AS "contactId", channel, action,
-                   reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
-                   provider, provider_event_id AS "providerEventId", metadata,
-                   created_at AS "createdAt"`,
+         RETURNING ${select}`,
         [workspaceId, params.contactId, params.channel, params.action,
           params.reasonCode, params.source, params.actor.actorKind,
           params.actor.actorCredentialId, params.actor.actingUserId,
           params.provider ?? null, params.providerEventId ?? null,
-          params.occurredAt, JSON.stringify(params.metadata)],
+          params.occurredAt, JSON.stringify(params.metadata),
+          params.provider ? crmEvidenceRequestHash(request) : null],
       )
       if (result.rows[0]) return { record: result.rows[0], created: true }
-      const existing = await client.query<DbRecord>(
-        `SELECT id, contact_id AS "contactId", channel, action,
-                reason_code AS "reasonCode", source, occurred_at AS "occurredAt",
-                provider, provider_event_id AS "providerEventId", metadata,
-                created_at AS "createdAt"
-           FROM crm_suppression_events
-          WHERE workspace_id = $1 AND provider = $2 AND provider_event_id = $3`,
-        [workspaceId, params.provider, params.providerEventId],
-      )
-      return { record: first(existing), created: false }
+      return { record: resolveCrmEvidenceReplay(first(await replay()), request), created: false }
     },
 
     async updateSubmission(params) {
@@ -635,6 +703,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async saveIntakeDefinition(params) {
+      if (params.definition.identityPolicy !== 'new_or_review') {
+        const member = context.actor.kind === 'user' ? await client.query(
+          `SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND role IN ('owner','admin') FOR SHARE`,
+          [workspaceId, context.actor.userId],
+        ) : null
+        if (!member?.rowCount) throw new CrmOperationsError('not_authorized', 'A current workspace owner or admin must acknowledge backend verification.')
+      }
       if (params.definitionId) {
         const updated = await client.query<DbRecord>(
           `UPDATE crm_intake_definitions
@@ -712,12 +787,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       }
       const created = await client.query<DbRecord>(
         `INSERT INTO crm_intake_credentials (
-           id, workspace_id, label, secret_prefix, secret_hash, created_by_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6)
+           id, workspace_id, label, secret_prefix, secret_hash, created_by_user_id,rotated_from_credential_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7)
          RETURNING id, label, secret_prefix AS "secretPrefix", revoked_at AS "revokedAt",
+                   rotated_from_credential_id AS "rotatedFromCredentialId",
                    last_used_at AS "lastUsedAt", created_at AS "createdAt"`,
         [params.credentialId, workspaceId, params.label, params.secretPrefix,
-          params.secretHash, params.createdByUserId],
+          params.secretHash, params.createdByUserId,params.rotateFromCredentialId ?? null],
       )
       const row = created.rows[0]!
       for (const definitionId of [...new Set(params.definitionIds)]) {
@@ -736,6 +812,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         `UPDATE crm_intake_credentials SET revoked_at = COALESCE(revoked_at, now())
           WHERE workspace_id = $1 AND id = $2
          RETURNING id, label, secret_prefix AS "secretPrefix", revoked_at AS "revokedAt",
+                   rotated_from_credential_id AS "rotatedFromCredentialId",
                    last_used_at AS "lastUsedAt", created_at AS "createdAt"`,
         [workspaceId, credentialId],
       )
@@ -743,12 +820,22 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async saveConsentPurpose(params) {
+      // A separate statement sees rows inserted by the BEFORE trigger; a
+      // RETURNING subquery still uses the original statement snapshot.
+      const withVersion = async (record: CrmOperationsRecord) => {
+        const version = await client.query<{ id: string }>(
+          `SELECT id FROM crm_consent_purpose_versions WHERE workspace_id=$1 AND purpose_id=$2 AND version=$3`,
+          [workspaceId, record.id, record.wordingVersion],
+        )
+        return { ...record, wordingVersionId: first(version).id }
+      }
       if (params.purposeId) {
         const updated = await client.query<DbRecord>(
           `UPDATE crm_consent_purposes
               SET label=$3, description=$4, requires_consent=$5,
                   applicable_channels=$6, active_wording_version=$7,
                   wording_snapshot=$8, wording_hash=$9,
+                  default_locale=$11,locale_wordings=$12::jsonb,locale_wording_hashes=$13::jsonb,
                   archived_at=CASE WHEN $10 THEN COALESCE(archived_at,now()) ELSE NULL END,
                   updated_at=now()
             WHERE workspace_id=$1 AND id=$2
@@ -757,33 +844,37 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                      applicable_channels AS "applicableChannels",
                      active_wording_version AS "wordingVersion",
                      wording_snapshot AS wording, wording_hash AS "wordingHash",
+                     default_locale AS "defaultLocale",locale_wordings AS "localeWordings",locale_wording_hashes AS "localeWordingHashes",
                      archived_at AS "archivedAt", created_at AS "createdAt",
                      updated_at AS "updatedAt"`,
           [workspaceId, params.purposeId, params.label, params.description,
             params.requiresConsent, params.applicableChannels, params.wordingVersion,
-            params.wording, params.wordingHash, params.archived],
+            params.wording, params.wordingHash, params.archived,params.defaultLocale,
+            JSON.stringify(params.localeWordings),JSON.stringify(params.localeWordingHashes)],
         )
         if (!updated.rows[0]) throw new Error('crm consent purpose not found')
-        return { record: updated.rows[0], created: false }
+        return { record: await withVersion(updated.rows[0]), created: false }
       }
       const created = await client.query<DbRecord>(
         `INSERT INTO crm_consent_purposes (
            workspace_id,purpose_key,label,description,requires_consent,
            applicable_channels,active_wording_version,wording_snapshot,
-           wording_hash,archived_at,created_by_user_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10 THEN now() END,$11)
+           wording_hash,archived_at,created_by_user_id,default_locale,locale_wordings,locale_wording_hashes
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $10 THEN now() END,$11,$12,$13::jsonb,$14::jsonb)
          RETURNING id, purpose_key AS "purposeKey", label, description,
                    requires_consent AS "requiresConsent",
                    applicable_channels AS "applicableChannels",
                    active_wording_version AS "wordingVersion",
                    wording_snapshot AS wording, wording_hash AS "wordingHash",
+                   default_locale AS "defaultLocale",locale_wordings AS "localeWordings",locale_wording_hashes AS "localeWordingHashes",
                    archived_at AS "archivedAt", created_at AS "createdAt",
                    updated_at AS "updatedAt"`,
         [workspaceId, params.purposeKey, params.label, params.description,
           params.requiresConsent, params.applicableChannels, params.wordingVersion,
-          params.wording, params.wordingHash, params.archived, params.createdByUserId],
+          params.wording, params.wordingHash, params.archived, params.createdByUserId,
+          params.defaultLocale,JSON.stringify(params.localeWordings),JSON.stringify(params.localeWordingHashes)],
       )
-      return { record: first(created), created: true }
+      return { record: await withVersion(first(created)), created: true }
     },
 
     async saveSegment(params) {
@@ -845,6 +936,13 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async grantEntitlement(params) {
+      if (params.provider) {
+        requireProviderEntitlementActor({ credentialKind: context.actor.kind, credentialId: actorAuditIdentity(context.actor).actorCredentialId },
+          String(params.provider), context.actor.kind === 'provider' ? context.actor.provider : undefined)
+      }
+      const period = await prepareProviderEntitlementPeriod(client, workspaceId, params as Parameters<typeof prepareProviderEntitlementPeriod>[2])
+      if (period) params = { ...params, requestHash: period.requestHash }
+
       const legacyRequestHash = crmOperationsSha256({
         contactId: params.contactId,
         planId: params.planId,
@@ -857,20 +955,20 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         providerMembershipId: params.providerEntitlementId,
       })
       const sameRequest = (fingerprint: unknown) => fingerprint === params.requestHash
-        || fingerprint === legacyRequestHash
+        || (!params.providerPeriodId && fingerprint === legacyRequestHash)
       const existing = await client.query<DbRecord>(
         `SELECT m.id, m.contact_id AS "contactId", m.plan_id AS "planId",
                 p.plan_key AS "planKey", p.name AS "planName", m.status, m.starts_at AS "startsAt",
                 m.ends_at AS "endsAt", m.renewal_mode AS "renewalMode",
                 m.idempotency_key AS "idempotencyKey",
-                m.provider, m.provider_membership_id AS "providerEntitlementId",
+                m.provider, m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                 m.request_fingerprint AS "requestFingerprint",
                 m.created_at AS "createdAt", m.updated_at AS "updatedAt"
            FROM association_memberships m
            JOIN association_membership_plans p
              ON p.workspace_id=m.workspace_id AND p.id=m.plan_id
-          WHERE m.workspace_id=$1 AND m.idempotency_key=$2`,
-        [workspaceId, params.idempotencyKey],
+          WHERE m.workspace_id=$1 AND (m.idempotency_key=$2 OR m.id=$3) ORDER BY (m.idempotency_key=$2) DESC`,
+        [workspaceId, params.idempotencyKey, period?.existingId ?? null],
       )
       if (existing.rows[0]) {
         if (!sameRequest(existing.rows[0].requestFingerprint)) {
@@ -900,14 +998,14 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       const inserted = await client.query<{ id: string }>(
         `INSERT INTO association_memberships (
            workspace_id,contact_id,plan_id,idempotency_key,request_fingerprint,
-           status,starts_at,ends_at,renewal_mode,provider,provider_membership_id
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           status,starts_at,ends_at,renewal_mode,provider,provider_membership_id,provider_period_id,predecessor_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (workspace_id,idempotency_key) DO NOTHING
          RETURNING id`,
         [workspaceId, params.contactId, params.planId, params.idempotencyKey,
           params.requestHash, params.status, params.startsAt, params.endsAt ?? null,
           params.renewalMode, params.provider ?? null,
-          params.providerEntitlementId ?? null],
+          params.providerEntitlementId ?? null, params.providerPeriodId ?? null, params.predecessorId ?? null],
       )
       if (!inserted.rows[0]) {
         const raced = await client.query<DbRecord>(
@@ -916,7 +1014,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                   m.starts_at AS "startsAt", m.ends_at AS "endsAt",
                   m.renewal_mode AS "renewalMode", m.provider,
                   m.idempotency_key AS "idempotencyKey",
-                  m.provider_membership_id AS "providerEntitlementId",
+                  m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                   m.request_fingerprint AS "requestFingerprint",
                   m.created_at AS "createdAt", m.updated_at AS "updatedAt"
              FROM association_memberships m
@@ -943,7 +1041,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                 m.starts_at AS "startsAt", m.ends_at AS "endsAt",
                 m.renewal_mode AS "renewalMode", m.provider,
                 m.idempotency_key AS "idempotencyKey",
-                m.provider_membership_id AS "providerEntitlementId",
+                m.provider_membership_id AS "providerEntitlementId",m.provider_period_id AS "providerPeriodId",m.predecessor_id AS "predecessorId",
                 m.created_at AS "createdAt", m.updated_at AS "updatedAt"
            FROM association_memberships m
            JOIN association_membership_plans p
@@ -954,15 +1052,29 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
       return { record: first(result), created: true }
     },
 
+    async expireDueEntitlement(entitlementId) {
+      if(context.actor.kind!=='system_job' || context.actor.job!=='entitlement_expiry')
+        throw new CrmOperationsError('not_authorized','Due entitlement expiry requires its dedicated system job.')
+      await client.query('SELECT id FROM association_memberships WHERE workspace_id=$1 AND id=$2 FOR UPDATE',[workspaceId,entitlementId])
+      const changed=await client.query<DbRecord>(`UPDATE association_memberships SET status='expired',updated_at=clock_timestamp()
+        WHERE workspace_id=$1 AND id=$2 AND status='active' AND provider IS NULL AND ends_at<=clock_timestamp()
+        RETURNING id,contact_id AS "contactId",plan_id AS "planId",status,starts_at AS "startsAt",ends_at AS "endsAt",updated_at AS "updatedAt"`,[workspaceId,entitlementId])
+      return changed.rows[0] ?? null
+    },
+
     async updateEntitlement(entitlementId, changes) {
-      const current = await client.query<{ status: string; startsAt: Date }>(
-        `SELECT status, starts_at AS "startsAt"
+      if(context.actor.kind==='system_job' && context.actor.job==='entitlement_expiry')
+        throw new CrmOperationsError('not_authorized','Expiry jobs must recheck a due manual entitlement.')
+      const current = await client.query<{ status: string; startsAt: Date; provider: string | null }>(
+        `SELECT status, starts_at AS "startsAt",provider
            FROM association_memberships
           WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
         [workspaceId, entitlementId],
       )
       const entitlement = current.rows[0]
       if (!entitlement) return null
+      if (entitlement.provider) requireProviderEntitlementActor({ credentialKind: context.actor.kind, credentialId: actorAuditIdentity(context.actor).actorCredentialId },
+        entitlement.provider, context.actor.kind === 'provider' ? context.actor.provider : undefined)
       if (typeof changes.status === 'string'
         && !mayTransitionCrmEntitlement(entitlement.status, changes.status)) {
         throw new CrmOperationsError(
@@ -988,7 +1100,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
                    starts_at AS "startsAt",ends_at AS "endsAt",
                    idempotency_key AS "idempotencyKey",
                    renewal_mode AS "renewalMode",provider,
-                   provider_membership_id AS "providerEntitlementId",
+                   provider_membership_id AS "providerEntitlementId",provider_period_id AS "providerPeriodId",predecessor_id AS "predecessorId",
                    created_at AS "createdAt",updated_at AS "updatedAt"`,
         [workspaceId, entitlementId, changes.status ?? null,
           Object.prototype.hasOwnProperty.call(changes, 'endsAt'), changes.endsAt ?? null,
@@ -998,11 +1110,24 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
     },
 
     async recordParticipation(params) {
+      const historical = params.historicalImport === true
+      if (historical) {
+        const actor = context.actor
+        if (params.sourceKind !== 'import' || (actor.kind !== 'user' && actor.kind !== 'import')) {
+          throw new CrmOperationsError('not_authorized', 'Historical participation requires a human admin import.')
+        }
+        const admin = await client.query(
+          `SELECT 1 FROM workspace_members WHERE workspace_id=$1 AND user_id=$2 AND role IN('owner','admin') FOR SHARE`,
+          [workspaceId, actor.userId],
+        )
+        if (!admin.rowCount) throw new CrmOperationsError('not_authorized', 'Historical participation requires a current workspace admin.')
+        await client.query("SELECT set_config('app.crm_historical_actor',$1,true)", [actor.userId])
+      }
       const existing = await client.query<DbRecord>(
         `SELECT id,event_id AS "eventId",attendee_contact_id AS "contactId",
                 attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                 attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                source_id AS "sourceId",request_fingerprint AS "requestFingerprint",
+                source_id AS "sourceId",historical_import AS "historicalImport",request_fingerprint AS "requestFingerprint",
                 checked_in_at AS "checkedInAt",
                 created_at AS "createdAt",updated_at AS "updatedAt"
            FROM association_registrations
@@ -1019,6 +1144,7 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         const { requestFingerprint: _ignored, ...record } = existing.rows[0]
         return { record, created: false }
       }
+      const eventIds = await lockAssociationInventory(client, workspaceId, { eventIds: [String(params.eventId)] })
       const [contact, event] = await Promise.all([
         client.query(
           `SELECT 1 FROM entities
@@ -1027,34 +1153,41 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
           [workspaceId, params.contactId],
         ),
         client.query(
-          `SELECT 1 FROM association_events
-            WHERE workspace_id=$1 AND id=$2`,
+          `SELECT ends_at<=clock_timestamp() AS ended,
+                  capacity IS NOT NULL OR EXISTS(SELECT 1 FROM association_ticket_types t WHERE t.workspace_id=$1 AND t.event_id=e.id) AS controlled
+             FROM association_events e WHERE workspace_id=$1 AND id=$2`,
           [workspaceId, params.eventId],
         ),
       ])
       if (!contact.rowCount) throw new CrmOperationsError('not_found', 'CRM contact was not found.')
       if (!event.rowCount) throw new CrmOperationsError('not_found', 'CRM event was not found.')
+      if (historical && !event.rows[0].ended) {
+        throw new CrmOperationsError('conflict', 'Historical imports require an event that has already ended.', { reason: 'historical_event_not_ended' })
+      }
+      if (!historical && event.rows[0].controlled) {
+        throw new CrmOperationsError('conflict', 'This event requires an Association order to admit participants.', { reason: 'association_order_required' })
+      }
       const result = await client.query<DbRecord>(
         `INSERT INTO association_registrations (
            workspace_id,event_id,attendee_contact_id,attendee_name,attendee_email,
-           attendee_metadata,status,source_kind,source_id,request_fingerprint
-         ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+           attendee_metadata,status,source_kind,source_id,request_fingerprint,historical_import
+         ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11)
          ON CONFLICT DO NOTHING
          RETURNING id,event_id AS "eventId",attendee_contact_id AS "contactId",
                    attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                    attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                   source_id AS "sourceId",checked_in_at AS "checkedInAt",
+                   source_id AS "sourceId",historical_import AS "historicalImport",checked_in_at AS "checkedInAt",
                    created_at AS "createdAt",updated_at AS "updatedAt"`,
         [workspaceId, params.eventId, params.contactId, params.attendeeName,
           params.attendeeEmail ?? null, JSON.stringify(params.metadata ?? {}), params.status,
-          params.sourceKind, params.sourceId, params.requestHash],
+          params.sourceKind, params.sourceId, params.requestHash, historical],
       )
       if (!result.rows[0]) {
         const raced = await client.query<DbRecord>(
           `SELECT id,event_id AS "eventId",attendee_contact_id AS "contactId",
                   attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                   attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                  source_id AS "sourceId",request_fingerprint AS "requestFingerprint",
+                  source_id AS "sourceId",historical_import AS "historicalImport",request_fingerprint AS "requestFingerprint",
                   checked_in_at AS "checkedInAt",
                   created_at AS "createdAt",updated_at AS "updatedAt"
              FROM association_registrations
@@ -1073,10 +1206,12 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
         const { requestFingerprint: _ignored, ...record } = raced.rows[0]
         return { record, created: false }
       }
+      await refreshAssociationInventory(client, workspaceId, eventIds, context.actor.kind)
       return { record: first(result), created: true }
     },
 
     async updateParticipation(participationId, status) {
+      const eventIds = await lockAssociationInventory(client, workspaceId, { registrationId: participationId })
       const current = await client.query<{ status: string; sourceKind: string }>(
         `SELECT status, source_kind AS "sourceKind"
            FROM association_registrations
@@ -1106,10 +1241,11 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
          RETURNING id,event_id AS "eventId",attendee_contact_id AS "contactId",
                    attendee_name AS "attendeeName",attendee_email AS "attendeeEmail",
                    attendee_metadata AS metadata,status,source_kind AS "sourceKind",
-                   source_id AS "sourceId",checked_in_at AS "checkedInAt",
+                   source_id AS "sourceId",historical_import AS "historicalImport",checked_in_at AS "checkedInAt",
                    created_at AS "createdAt",updated_at AS "updatedAt"`,
         [workspaceId, participationId, status],
       )
+      await refreshAssociationInventory(client, workspaceId, eventIds, context.actor.kind)
       return result.rows[0] ?? null
     },
 
@@ -1252,21 +1388,30 @@ function createTransaction(client: PoolClient, context: CrmOperationsContext): C
   }
 }
 
-export function createDbCrmOperationsStore(pool: Pool = getPool()): CrmOperationsStore {
+export function createDbCrmOperationsStore(pool: Pool = getPool(), transactionClient?: PoolClient): CrmOperationsStore {
   return {
     async transaction(context, fn) {
-      const client = await pool.connect()
+      const client = transactionClient ?? await pool.connect()
       try {
-        await client.query('BEGIN')
-        await client.query(`SELECT set_config('app.system_bypass', 'true', true)`)
+        if (!transactionClient) {
+          await client.query('BEGIN')
+          await client.query(`SELECT set_config('app.system_bypass', 'true', true)`)
+        }
         const result = await fn(createTransaction(client, context))
-        await client.query('COMMIT')
+        if (!transactionClient) await client.query('COMMIT')
         return result
       } catch (error) {
-        await client.query('ROLLBACK')
+        if (!transactionClient) await client.query('ROLLBACK')
+        if ((error as { constraint?: string }).constraint === 'crm_intake_credential_rotation_fk') {
+          throw new CrmOperationsError('not_found', 'Intake rotation source is unavailable.')
+        }
+        if ((error as { constraint?: string }).constraint === 'crm_consent_wording_immutable') {
+          throw new CrmOperationsError('conflict', 'Wording versions are immutable. Save changed wording under a new version.',
+            { reason: 'wording_version_immutable' })
+        }
         throw error
       } finally {
-        client.release()
+        if (!transactionClient) client.release()
       }
     },
   }

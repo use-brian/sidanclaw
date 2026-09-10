@@ -54,9 +54,15 @@ describe("[COMP:app-web/support-diagnostics] Support Mode settings card", () => 
     const t = en.settings.privacy;
 
     expect(html).toContain(t.supportTitle);
-    expect(html).toContain(t.supportDurationOneHour);
+    // The duration picker is the project `Select` (never a native `<select>`,
+    // responsive contract M10): SSR renders its trigger with the current
+    // choice's LABEL, and the closed popup holds the other two.
+    expect(html).toContain('role="combobox"');
+    expect(html).toContain(`aria-label="${t.supportDuration}"`);
     expect(html).toContain(t.supportDurationOneDay);
-    expect(html).toContain(t.supportDurationOneWeek);
+    expect(html).not.toContain("<select");
+    // The consent box is the themed `Checkbox`, not a native input.
+    expect(html).toContain('role="checkbox"');
     expect(html).toContain(t.supportIncludeContent);
     expect(html).toContain(t.supportLocalOnly);
   });

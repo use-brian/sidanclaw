@@ -678,15 +678,18 @@ describe("[COMP:app-web/block-drag-handle] hover reveal forces sync layout", () 
     // `visibility = "visible"` reveal. Each token appears once, so a single ordered
     // match proves the sequence (a future edit that drops forceUpdate or reveals
     // first breaks this).
+    // The reveal lives in ONE helper (`revealGrip`) shared by the hover path and
+    // the touch paths (long-press, caret-follow), so every reveal runs the same
+    // forced pass - the token names are `live.*` there.
     expect(src).toMatch(
-      /popup\.show\(\);[\s\S]*popup\.popperInstance\?\.forceUpdate\(\);[\s\S]*element\.style\.visibility = "visible"/,
+      /live\.show\(\);[\s\S]*live\.popperInstance\?\.forceUpdate\(\);[\s\S]*element\.style\.visibility = "visible"/,
     );
   });
 
   it("guards the popper instance access so it can't throw if tippy defers the mount", () => {
     // `?.` not `.` — the reveal must survive a tippy that hasn't created the
     // popper synchronously (its own async pass lands then).
-    expect(src).toContain("popup.popperInstance?.forceUpdate()");
+    expect(src).toContain("live.popperInstance?.forceUpdate()");
   });
 
   // A fresh page's FIRST AI edit replaces + GC's the whole initial Yjs fragment,
@@ -723,18 +726,29 @@ describe("[COMP:app-web/block-drag-handle] hover reveal forces sync layout", () 
     // Ordered span: resolve the dom from `target.pos` → `hasLayoutBox` early-return
     // → only THEN latch `currentNodePos` → `popup.show()`. A future edit that latches
     // before the gate, or drops the gate, breaks this.
+    // The latch + show now happen inside `revealGrip`, so the ordered span is:
+    // resolve the dom -> gate -> only THEN hand off to the reveal helper.
     expect(src).toMatch(
-      /const dom = view\.nodeDOM\(target\.pos\);[\s\S]*!hasLayoutBox\(dom\)\) return false;[\s\S]*currentNodePos = target\.pos;[\s\S]*popup\.show\(\)/,
+      /const dom = view\.nodeDOM\(target\.pos\);[\s\S]*!hasLayoutBox\(dom\)\) return false;[\s\S]*revealGrip\(view, target, dom\);/,
     );
+    // And the helper itself latches before it shows.
+    expect(src).toMatch(/currentNodePos = target\.pos;[\s\S]*live\.show\(\)/);
   });
 
   it("does not commit currentNodePos before the layout gate (no early latch)", () => {
     // Guard the ordering directly: the only `currentNodePos = target.pos` assignment
     // must come AFTER the `hasLayoutBox(dom)) return false` gate, never before it.
+    // The latch is inside `revealGrip`, which the hover path may only reach
+    // AFTER its layout gate - so the ordering to hold is gate -> reveal call.
+    // (The helper is defined above the handler, so its own index is not the
+    // signal; the call site is.)
     const gateIdx = src.indexOf("!hasLayoutBox(dom)) return false;");
-    const latchIdx = src.indexOf("currentNodePos = target.pos;");
+    const revealCallIdx = src.indexOf("revealGrip(view, target, dom);", gateIdx);
     expect(gateIdx).toBeGreaterThan(-1);
-    expect(latchIdx).toBeGreaterThan(gateIdx);
+    expect(revealCallIdx).toBeGreaterThan(gateIdx);
+    // Every touch reveal is gated the same way: `targetAtPoint` refuses an
+    // un-laid-out anchor before the long-press / caret paths can reveal it.
+    expect(src).toMatch(/if \(!\(dom instanceof HTMLElement\) \|\| !hasLayoutBox\(dom\)\) return null;/);
   });
 
   // The dominant cause of "drag icon bugged at the top-left of the comment box"
