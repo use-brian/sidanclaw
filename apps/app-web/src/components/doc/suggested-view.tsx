@@ -14,7 +14,7 @@
  * re-entry via `reloadDock()`, and pushes the Refresh result (one primary-
  * assistant curation turn) back through `setDock`. The composer hands a prompt
  * + chosen assistant into a fresh Personal thread in the Chat operator app.
- * Spec: docs/architecture/features/home-dock.md.
+ * Spec: docs/architecture/features/home-dock.md; docs/home-suggested.md (header).
  *
  * [COMP:app-web/home-suggested]
  */
@@ -42,7 +42,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useT } from "@/lib/i18n/client";
+import { useLocale, useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import { AssistantAvatar } from "@/components/assistant-avatar";
 import { SuggestedFileDrop } from "@/components/doc/suggested-file-drop";
@@ -119,6 +119,7 @@ export function SuggestedView({
   onOpenPanel,
 }: Props) {
   const copy = useT();
+  const locale = useLocale();
   const t = copy.docPage.suggested;
   const tChat = copy.chat;
   const router = useRouter();
@@ -131,6 +132,12 @@ export function SuggestedView({
   const [refreshing, setRefreshing] = useState(false);
   const [noteDismissed, setNoteDismissed] = useState(false);
   const [q, setQ] = useState("");
+  const [mounted, setMounted] = useState(false);
+
+  // Server and hydration share empty labels; only the browser knows local time.
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Revalidate the shared dock once when Home re-mounts (soft-nav back from
   // approvals/brain/etc., where the counts likely moved) — skipped while the
@@ -200,11 +207,11 @@ export function SuggestedView({
     router.push(personalChatHandoffPath(workspaceId, selectedAssistantId));
   }
 
-  const now = new Date();
-  const hours = now.getHours();
+  const now = mounted ? new Date() : null;
+  const hours = now?.getHours() ?? 0;
   const greeting =
     hours < 12 ? t.greetingMorning : hours < 18 ? t.greetingAfternoon : t.greetingEvening;
-  const dateLabel = now.toLocaleDateString(undefined, {
+  const dateLabel = now?.toLocaleDateString(locale === "zh" ? "zh-TW" : locale, {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -229,11 +236,11 @@ export function SuggestedView({
       {/* Header */}
       <div className="flex items-start gap-3">
         <div className="flex-1">
-          <div className="mb-1.5 text-[11.5px] font-bold uppercase tracking-wider text-muted-foreground/70">
+          <div className="mb-1.5 min-h-[1lh] text-[11.5px] font-bold uppercase tracking-wider text-muted-foreground/70">
             {dateLabel}
           </div>
-          <h1 className="text-[28px] font-bold tracking-tight text-foreground">
-            {userName ? `${greeting}, ${userName}` : greeting}
+          <h1 className="min-h-[1lh] text-[28px] font-bold tracking-tight text-foreground">
+            {mounted ? (userName ? `${greeting}, ${userName}` : greeting) : null}
           </h1>
           <p className="mt-1.5 text-[13.5px] text-muted-foreground">{t.subtitle}</p>
         </div>

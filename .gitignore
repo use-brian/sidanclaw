@@ -30,3 +30,5 @@ packages/api/eval-results/
 # goes stale without a diff to show for it.
 home-apps/*.zip
 .gstack/
+apps/app-web/public/excalidraw/
+apps/app-web/desktop/public/excalidraw/

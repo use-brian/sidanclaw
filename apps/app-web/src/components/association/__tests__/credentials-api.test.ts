@@ -17,8 +17,8 @@ describe("[COMP:app-web/association] Credential catalog and member API",()=>{
   it("issues and revokes only via authenticated member routes, preserving explicit rotation",async()=>{
     api.fetch.mockImplementation(async()=>response({oneTimeSecret:"fictional-secret"}));const input={label:"Fictional integration",expiresAt:"2028-01-01T00:00:00Z",grants:[{operation:"crm.records.read",selectors:{}}],revokeCredentialId:"old-id"};
     expect(await createCrmCredential("w",input)).toEqual({oneTimeSecret:"fictional-secret"});await revokeCrmCredential("w","credential/id");
-    expect(new URL(api.fetch.mock.calls[0][0]).pathname).toBe("/api/crm/w/operations/integration-credentials");expect(JSON.parse(api.fetch.mock.calls[0][1].body)).toEqual(input);
-    expect(new URL(api.fetch.mock.calls[1][0]).pathname).toBe("/api/crm/w/operations/integration-credentials/credential%2Fid/revoke");expect(api.fetch.mock.calls[0][1].headers).toEqual({"Content-Type":"application/json"});
+    expect(new URL(api.fetch.mock.calls[0][0], "https://app.example").pathname).toBe("/api/crm/w/operations/integration-credentials");expect(JSON.parse(api.fetch.mock.calls[0][1].body)).toEqual(input);
+    expect(new URL(api.fetch.mock.calls[1][0], "https://app.example").pathname).toBe("/api/crm/w/operations/integration-credentials/credential%2Fid/revoke");expect(api.fetch.mock.calls[0][1].headers).toEqual({"Content-Type":"application/json"});
   });
   it("uses complete CRM catalog readers and exposes no definition or consent payloads",async()=>{
     api.definitions.mockResolvedValue(Array.from({length:103},(_,i)=>({id:`definition-${i}`,label:`Definition ${i}`,fields:["private-schema"]})));
@@ -37,6 +37,6 @@ describe("[COMP:app-web/association] Managed-mailbox member API",()=>{
   it("keeps mailbox policy and credential binding versions independent",async()=>{
     const {getCrmMailboxPolicy,saveCrmMailboxPolicy,getCrmMailboxGrant,saveCrmMailboxGrant}=await import("@/lib/api/crm-administration");api.fetch.mockImplementation(async()=>response({}));
     await getCrmMailboxPolicy("w","mailbox");await saveCrmMailboxPolicy("w","mailbox",{expectedVersion:4,confirmed:true,providerKey:"outreach",managed:true,purposeKeys:["updates"],templatePurposes:{}});await getCrmMailboxGrant("w","mailbox","key");await saveCrmMailboxGrant("w","mailbox","key",{expectedVersion:2,confirmed:true,enabled:false});
-    expect(api.fetch.mock.calls.map(c=>new URL(c[0]).pathname)).toEqual(["/api/crm/w/operations/mailbox-policies/mailbox","/api/crm/w/operations/mailbox-policies/mailbox","/api/crm/w/operations/mailbox-policies/mailbox/integration-grants/key","/api/crm/w/operations/mailbox-policies/mailbox/integration-grants/key"]);expect(JSON.parse(api.fetch.mock.calls[1][1].body).expectedVersion).toBe(4);expect(JSON.parse(api.fetch.mock.calls[3][1].body)).toEqual({expectedVersion:2,confirmed:true,enabled:false});
+    expect(api.fetch.mock.calls.map(c=>new URL(c[0], "https://app.example").pathname)).toEqual(["/api/crm/w/operations/mailbox-policies/mailbox","/api/crm/w/operations/mailbox-policies/mailbox","/api/crm/w/operations/mailbox-policies/mailbox/integration-grants/key","/api/crm/w/operations/mailbox-policies/mailbox/integration-grants/key"]);expect(JSON.parse(api.fetch.mock.calls[1][1].body).expectedVersion).toBe(4);expect(JSON.parse(api.fetch.mock.calls[3][1].body)).toEqual({expectedVersion:2,confirmed:true,enabled:false});
   });
 });

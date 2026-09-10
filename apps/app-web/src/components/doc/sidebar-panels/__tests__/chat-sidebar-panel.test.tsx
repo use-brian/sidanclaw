@@ -14,6 +14,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n/client";
 import { en } from "@/lib/i18n/dictionaries/en";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -121,6 +122,7 @@ function buttonNamed(name: string): HTMLButtonElement {
 }
 
 beforeEach(() => {
+  resetSurfaceCache();
   vi.clearAllMocks();
   navigation.search = "v=workspace&s=room-1";
   viewApi.listWorkspaceAssistants.mockResolvedValue([

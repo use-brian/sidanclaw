@@ -51,6 +51,7 @@ import type {
   TmpId,
 } from './page-types.js'
 import { bindingConfigSchema } from '../views/schemas.js'
+import { drawingBlockSchema } from '@use-brian/shared/drawing'
 import {
   chartBlockSchema,
   coerceHeadingLevel,
@@ -273,6 +274,11 @@ function applyOne(
           )
         }
       }
+      if (merged.kind === 'drawing') {
+        if ('scene' in op.patch) delete merged.preview
+        Object.assign(merged, drawingBlockSchema.parse(merged))
+      }
+
       // Mirror the binding guard for charts: an `edit` patch touching a chart's
       // `data` / `binding` / `chartType` is waved through by the open `patch`
       // record, so re-validate the MERGED chart through `chartBlockSchema` (the

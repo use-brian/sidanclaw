@@ -4,6 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { resolveOssGitCommitSha } from "./build-info.config";
+import { resolveCollabSingletonAliases } from "../../scripts/collab-singletons.mjs";
+
+const collabSingletonAliases = resolveCollabSingletonAliases(import.meta.url);
 
 /**
  * Desktop bundle build — "Approach B" of
@@ -48,7 +51,9 @@ export default defineConfig({
   // (`@tailwindcss/postcss`), which would double-process and error.
   css: { postcss: {} },
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
+      ...collabSingletonAliases,
       // Shim Next's client APIs onto react-router / DOM so app-web's
       // `"use client"` components run unmodified under Vite. Order: longer/more
       // specific specifiers first.

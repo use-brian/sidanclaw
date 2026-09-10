@@ -60,6 +60,7 @@ export function buildOutline(
     data: 0,
     chart: 0,
     diagram: 0,
+    drawing: 0,
     callout: 0,
     code: 0,
     quote: 0,
@@ -133,6 +134,8 @@ function previewFor(block: Block): string {
         : 'inline'
       return truncate(`chart (${block.chartType}, ${src})${title}`)
     }
+    case 'drawing':
+      return truncate(`${block.title?.trim() ? `"${block.title.trim()}" ` : ''}drawing (Excalidraw, ${block.scene.elements.length} elements)`)
     case 'diagram': {
       const title = block.title ? ` "${block.title}"` : ''
       return truncate(`diagram (${block.syntax})${title}`)
