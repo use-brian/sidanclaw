@@ -51,6 +51,7 @@ function ctx(overrides: { workspaceId?: string | null } = {}) {
     channelId: 'web-1',
     workspaceId:
       overrides.workspaceId === undefined ? WORKSPACE_ID : overrides.workspaceId,
+    activeCapabilities: new Set(['page', 'home_app:page:read']),
     abortSignal: new AbortController().signal,
   }
 }
