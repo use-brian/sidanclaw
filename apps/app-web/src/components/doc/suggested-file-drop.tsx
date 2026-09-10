@@ -1,13 +1,16 @@
 "use client";
 
 /**
- * Home "Add files to your brain" drop block. Drag files onto it (or pick them),
- * then "Add to brain" runs deterministic ingest. Ordinary files use Pipeline B;
- * a single LinkedIn ZIP uses the dedicated lossless queue. Per-file status
+ * Shared "Add files to your brain" intake for Home, Brain, and the workspace
+ * fallback dialog. Drag files onto it (or pick them), then "Add to brain" runs
+ * deterministic ingest.
+ * Ordinary files use Pipeline B; audio/video uses the recording pipeline so
+ * the required cost + blueprint confirmation happens before transcription; a
+ * single LinkedIn ZIP uses the dedicated lossless queue. Per-file status
  * renders inline.
  *
  * Reuses `useFileDrop` for drag state; the ingest SDK is `lib/api/ingest.ts`.
- * Lives on the Suggested-for-you surface, under the build bar.
+ * It lives under the Home build bar and at the top of Brain Entries.
  *
  * Spec: docs/architecture/features/files.md -> "Direct ingest".
  * [COMP:app-web/home-file-drop]
@@ -29,6 +32,11 @@ import {
   totalAdded,
   type IngestFileResult,
 } from "@/lib/api/ingest";
+import { isRecordingFile } from "@/lib/api/recordings";
+import {
+  useRecordingUpload,
+  type RecordingUploadStatus,
+} from "@/lib/recordings/use-recording-upload";
 
 /** Match the server's per-request cap (MAX_INGEST_FILES in routes/files.ts). */
 const MAX_FILES = 5;
@@ -64,16 +72,46 @@ type StagedItem = {
   file: File;
   status: ItemStatus;
   result?: IngestFileResult;
+  recordingId?: string;
   error?: string;
 };
 
-export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
-  const t = useT().docPage.suggested;
+export type IngestFileBatch = {
+  id: number;
+  files: File[];
+};
+
+export function SuggestedFileDrop({
+  workspaceId,
+  assistantId,
+  incomingBatch,
+  offline = false,
+  appearance = "card",
+  onBusyChange,
+}: {
+  workspaceId: string;
+  assistantId?: string | null;
+  incomingBatch?: IngestFileBatch | null;
+  offline?: boolean;
+  appearance?: "card" | "dialog";
+  onBusyChange?: (busy: boolean) => void;
+}) {
+  const copy = useT();
+  const t = copy.docPage.suggested;
   const [items, setItems] = useState<StagedItem[]>([]);
   const [busy, setBusy] = useState(false);
+  const [activeMediaId, setActiveMediaId] = useState<string | null>(null);
+  const incomingBatchId = useRef<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Polls outlive no unmount: this block sits on the Home surface, which is torn
-  // down the moment the user navigates to Brain / Studio / anywhere else.
+  const recording = useRecordingUpload(workspaceId, assistantId ?? "");
+  const {
+    run: runRecording,
+    dismiss: dismissRecording,
+    status: recordingStatus,
+    uploadProgress: recordingProgress,
+  } = recording;
+  // Polls outlive no unmount: this block is torn down when its Home/Brain
+  // surface changes.
   const unmounted = useRef(false);
   useEffect(() => {
     unmounted.current = false;
@@ -90,7 +128,14 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
       // is dropped by the edge before any handler runs, so the request would
       // reject with a bare `TypeError: Failed to fetch` that names neither the
       // size nor the limit. Telling the user here also costs them nothing.
-      const { accepted, tooLarge } = partitionByIngestSize(incoming);
+      // Explicit Brain intake treats every audio/video file as a recording,
+      // including a short voice memo. Media goes direct to signed storage and
+      // therefore must not inherit the ordinary multipart 30 MiB ceiling.
+      const media = incoming.filter(isRecordingFile);
+      const ordinary = incoming.filter((file) => !isRecordingFile(file));
+      const { accepted, tooLarge } = partitionByIngestSize(ordinary);
+      const acceptedSet = new Set([...media, ...accepted]);
+      const acceptedInOrder = incoming.filter((file) => acceptedSet.has(file));
       const limit = formatFileSize(MAX_INGEST_FILE_BYTES);
       setItems((prev) => {
         // Keep only unresolved (pending) items plus the new batch, capped.
@@ -102,7 +147,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         // no chip, no message, and nothing to click. Error chips are not
         // uploads and never evict a file that could still be sent.
         const room = Math.max(0, MAX_FILES - pending.length);
-        const staged = accepted.slice(0, room).map((file) => ({
+        const staged = acceptedInOrder.slice(0, room).map((file) => ({
           localId: crypto.randomUUID(),
           file,
           status: "pending" as const,
@@ -112,7 +157,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
             file,
             error: format(t.ingestTooLarge, { size: formatFileSize(file.size), limit }),
           })),
-          ...accepted.slice(room).map((file) => ({
+          ...acceptedInOrder.slice(room).map((file) => ({
             file,
             error: format(t.ingestTooManyFiles, { max: String(MAX_FILES) }),
           })),
@@ -128,7 +173,17 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
     [t.ingestTooLarge, t.ingestTooManyFiles],
   );
 
-  const drop = useFileDrop(addFiles, { disabled: busy });
+  useEffect(() => {
+    if (!incomingBatch || incomingBatchId.current === incomingBatch.id) return;
+    incomingBatchId.current = incomingBatch.id;
+    addFiles(incomingBatch.files);
+  }, [addFiles, incomingBatch]);
+
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+
+  const drop = useFileDrop(addFiles, { disabled: busy || offline });
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) addFiles(e.target.files);
@@ -176,7 +231,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
 
   const addToBrain = useCallback(async () => {
     const pending = items.filter((i) => i.status === "pending");
-    if (pending.length === 0 || busy) return;
+    if (pending.length === 0 || busy || offline) return;
     setBusy(true);
     const pendingIds = new Set(pending.map((p) => p.localId));
     setItems((prev) =>
@@ -187,12 +242,16 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
       if (zipItems.length > 0 && pending.length !== 1) {
         throw new Error(t.linkedinArchiveAlone);
       }
+      const ordinary = pending.filter((item) => !isRecordingFile(item.file));
+      const media = pending.filter((item) => isRecordingFile(item.file));
       const results = zipItems.length === 1
         ? [await ingestLinkedInArchive(workspaceId, zipItems[0].file)]
-        : await ingestFiles(workspaceId, pending.map((p) => p.file));
-      // `results` is positional over `pending`; pair them out here rather than
+        : ordinary.length > 0
+          ? await ingestFiles(workspaceId, ordinary.map((p) => p.file))
+          : [];
+      // `results` is positional over `ordinary`; pair them out here rather than
       // inside the updater, which React may run twice.
-      const queued = pending.flatMap((p, idx) => {
+      const queued = ordinary.flatMap((p, idx) => {
         const r = results[idx];
         return r?.ok && r.status === "queued" && r.jobId
           ? [{ localId: p.localId, jobId: r.jobId }]
@@ -201,7 +260,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
       setItems((prev) => {
         let idx = 0;
         return prev.map((i) => {
-          if (!pendingIds.has(i.localId)) return i;
+          if (!pendingIds.has(i.localId) || isRecordingFile(i.file)) return i;
           const r = results[idx++];
           const status = statusForIngestResult(r);
           if (status === "error") {
@@ -211,6 +270,58 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         });
       });
       for (const job of queued) void watchJob(job.localId, job.jobId);
+
+      // Recording uploads are sequential. Each file owns a separate cost +
+      // blueprint decision, so overlapping confirms would make the selection
+      // ambiguous.
+      for (const [mediaIndex, item] of media.entries()) {
+        if (!assistantId) {
+          setItems((prev) =>
+            prev.map((i) =>
+              i.localId === item.localId
+                ? { ...i, status: "error", error: t.ingestMediaNeedsAssistant }
+                : i,
+            ),
+          );
+          continue;
+        }
+        setActiveMediaId(item.localId);
+        const outcome = await runRecording(item.file);
+        if (outcome.outcome === "cancelled") {
+          // A cancel spends nothing and leaves the file ready to retry. Stop
+          // here rather than immediately opening the next recording dialog.
+          const notStarted = new Set(
+            media.slice(mediaIndex).map((remaining) => remaining.localId),
+          );
+          setItems((prev) =>
+            prev.map((i) =>
+              notStarted.has(i.localId) ? { ...i, status: "pending" } : i,
+            ),
+          );
+          break;
+        }
+        if (outcome.outcome === "failed") {
+          setItems((prev) =>
+            prev.map((i) =>
+              i.localId === item.localId
+                ? { ...i, status: "error", error: outcome.message }
+                : i,
+            ),
+          );
+          continue;
+        }
+        setItems((prev) =>
+          prev.map((i) =>
+            i.localId === item.localId
+              ? {
+                  ...i,
+                  status: "done",
+                  recordingId: outcome.recording.recordingId,
+                }
+              : i,
+          ),
+        );
+      }
     } catch (err) {
       // `fetch` rejects with a bare `TypeError` for anything that never reached
       // a handler: offline, DNS, CORS, or a body the edge refused. Its message
@@ -220,19 +331,37 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         err instanceof TypeError ? t.ingestUnreachable : (err as Error).message;
       setItems((prev) =>
         prev.map((i) =>
-          pendingIds.has(i.localId) ? { ...i, status: "error", error: message } : i,
+          pendingIds.has(i.localId) && i.status === "ingesting"
+            ? { ...i, status: "error", error: message }
+            : i,
         ),
       );
     } finally {
+      setActiveMediaId(null);
+      dismissRecording();
       setBusy(false);
     }
-  }, [items, busy, workspaceId, watchJob, t.ingestFailed, t.ingestUnreachable, t.linkedinArchiveAlone]);
+  }, [
+    items,
+    busy,
+    offline,
+    workspaceId,
+    assistantId,
+    runRecording,
+    dismissRecording,
+    watchJob,
+    t.ingestFailed,
+    t.ingestMediaNeedsAssistant,
+    t.ingestUnreachable,
+    t.linkedinArchiveAlone,
+  ]);
 
   return (
     <section
       {...drop.dropProps}
       className={cn(
-        "relative mt-4 rounded-2xl border bg-card p-4 transition-colors",
+        "relative rounded-2xl transition-colors",
+        appearance === "card" ? "mt-4 border bg-card p-4" : "bg-transparent pr-9",
         drop.isDragging ? "border-primary/60 bg-primary/[0.04]" : "border-border",
       )}
     >
@@ -247,7 +376,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          disabled={busy}
+          disabled={busy || offline}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1.5 text-[12.5px] font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
         >
           {t.ingestCta}
@@ -256,11 +385,21 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
           ref={inputRef}
           type="file"
           multiple
+          disabled={busy || offline}
           onChange={onPick}
           className="hidden"
           aria-hidden
         />
       </div>
+
+      {offline && (
+        <p
+          role="status"
+          className="mt-3 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-700/60 dark:bg-amber-950 dark:text-amber-100"
+        >
+          {t.ingestOffline}
+        </p>
+      )}
 
       {items.length > 0 && (
         <ul className="mt-3 flex flex-col gap-1.5">
@@ -274,7 +413,13 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
                 {i.file.name}
               </span>
               <span className="shrink-0 text-[11.5px] text-muted-foreground">
-                <StatusLabel item={i} t={t} />
+                <StatusLabel
+                  item={i}
+                  t={t}
+                  recordings={copy.recordings}
+                  recordingStatus={activeMediaId === i.localId ? recordingStatus : undefined}
+                  recordingProgress={recordingProgress}
+                />
               </span>
               {i.status === "pending" && (
                 <button
@@ -305,7 +450,7 @@ export function SuggestedFileDrop({ workspaceId }: { workspaceId: string }) {
           <button
             type="button"
             onClick={addToBrain}
-            disabled={pendingCount === 0 || busy}
+            disabled={pendingCount === 0 || busy || offline}
             className="inline-flex items-center gap-1.5 rounded-lg bg-action px-3 py-1.5 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
           >
             {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
@@ -336,14 +481,41 @@ function StatusIcon({ status }: { status: ItemStatus }) {
 function StatusLabel({
   item,
   t,
+  recordings,
+  recordingStatus,
+  recordingProgress,
 }: {
   item: StagedItem;
   t: ReturnType<typeof useT>["docPage"]["suggested"];
+  recordings: ReturnType<typeof useT>["recordings"];
+  recordingStatus?: RecordingUploadStatus;
+  recordingProgress: number;
 }) {
   if (item.status === "pending") return <>{t.ingestReady}</>;
-  if (item.status === "ingesting") return <>{t.ingestAdding}</>;
+  if (item.status === "ingesting") {
+    if (recordingStatus === "uploading") {
+      return (
+        <>
+          {recordings.uploadingProgress.replace(
+            "{percent}",
+            String(Math.round(recordingProgress * 100)),
+          )}
+        </>
+      );
+    }
+    if (recordingStatus === "estimating") return <>{recordings.estimating}</>;
+    if (recordingStatus === "processing") return <>{recordings.processing}</>;
+    return <>{t.ingestAdding}</>;
+  }
   if (item.status === "analyzing") return <>{t.ingestAnalyzing}</>;
   if (item.status === "error") return <span className="text-rose-600 dark:text-rose-400">{item.error ?? t.ingestFailed}</span>;
+  if (item.recordingId) {
+    return (
+      <span className="text-emerald-600 dark:text-emerald-400">
+        {recordings.detailStatusQueued}
+      </span>
+    );
+  }
   if (item.result?.linkedinImport) {
     const imported = item.result.linkedinImport;
     return imported.status === "completed" ? (

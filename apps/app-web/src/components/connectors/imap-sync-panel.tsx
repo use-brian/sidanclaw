@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Connected-card panel for the Company Email (imap) connector: archive sync
  * status ("Syncing mailbox history" / "Up to date") + the backfill consent
@@ -17,7 +19,7 @@ import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { authFetch } from "@/lib/auth-fetch";
 import { useT } from "@/lib/i18n/client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type ImapSyncStatus = {
   email: string;
@@ -396,12 +398,12 @@ export function ImapSyncPanel({ instanceId }: { instanceId?: string } = {}) {
             }}
             placeholder={tm.sendAsPlaceholder}
             disabled={aliasSaving}
-            className="flex-1 min-w-0 text-xs bg-background border border-border rounded-lg px-2.5 py-1 disabled:opacity-50"
+            className="flex-1 min-w-0 text-[16px] md:text-xs bg-background border border-border rounded-lg px-2.5 py-1 disabled:opacity-50"
           />
           <button
             type="submit"
             disabled={aliasSaving || !aliasDraft.trim()}
-            className="text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-50 transition-colors"
+            className="min-h-11 sm:min-h-0 text-xs font-medium border border-border px-3 py-1 rounded-lg text-muted-foreground hover:bg-muted disabled:opacity-50 transition-colors"
           >
             {tm.sendAsAdd}
           </button>

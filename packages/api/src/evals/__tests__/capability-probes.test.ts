@@ -1,3 +1,4 @@
+import { homeAppToolRequirements } from '@use-brian/shared'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -138,10 +139,10 @@ describe('[COMP:evals/capability-probes] fixture workspace', () => {
       const out = await tool.execute({} as never, {} as never)
       // Ack is one of three shapes: the empty-workspace read ack, a plain
       // "Done." / id-bearing string write ack, proposeWorkflow's semantic
-      // ack, or an object ack `{ pageId | id, ... }` for the object-returning
+      // ack, or an object ack `{ pageId | id | entityId, ... }` for the object-returning
       // writes. Normalise object acks to a string so one matcher covers all.
       const text = typeof out.data === 'string' ? out.data : JSON.stringify(out.data)
-      expect(text).toMatch(/^Done\.$|no data yet|shown to the user|Created |Saved |"pageId"|"id"/)
+      expect(text).toMatch(/^Done\.$|no data yet|shown to the user|Created |Saved |"pageId"|"id"|"entityId"/)
       // The write ack must read as a plain success: meta framing ("no real
       // write occurred") reads as a blocked write and manufactures
       // phantom-permission narratives in the SUT.
@@ -223,6 +224,7 @@ describe('[COMP:evals/capability-probes] fixture workspace', () => {
     for (const tool of fixture.tools.values()) {
       const cap = (tool as { requiresCapability?: string }).requiresCapability
       if (cap) needed.add(cap)
+      for (const setCapability of homeAppToolRequirements(tool)) needed.add(setCapability)
     }
     expect(needed.size).toBeGreaterThan(0)
     for (const cap of needed) {
@@ -288,5 +290,34 @@ describe('[COMP:evals/capability-probes] probe files', () => {
         }
       }
     }
+  })
+})
+
+describe('[COMP:evals/capability-probes] CRM alias regression', () => {
+  it('grades the native operation green and name-appending or replacement workarounds red', () => {
+    const probes = (JSON.parse(readFileSync(join(PROBES_DIR, 'crm.json'), 'utf8')) as unknown[]).map((p) => ProbeSchema.parse(p))
+    const aliasProbe = probes.find((p) => p.id === 'crm-native-contact-alias')!
+    const injected = new Set(buildFixtureWorkspace().tools.keys())
+    const native = { name: 'noteAlias', input: { entity_id: '11111111-1111-4111-8111-111111111111', alias: 'Momo' } }
+    expect(runHardChecks(aliasProbe, 'crm', { text: 'Saved the native alias.', toolCalls: [native], toolResults: [] }, injected).pass).toBe(true)
+    for (const name of ['updateContact', 'saveContact', 'setCrmCustomFields', 'mergeEntities']) {
+      const failed = runHardChecks(aliasProbe, 'crm', {
+        text: 'Updated the contact.', toolCalls: [native, { name, input: { name: 'Morgan Vale (Momo)' } }], toolResults: [],
+      }, injected)
+      expect(failed.pass).toBe(false)
+      expect(failed.failures.join(' ')).toContain(`banned tool "${name}"`)
+    }
+  })
+
+  it('returns alias evidence from the write stub without needing reclassifier dependencies', async () => {
+    const fixture = buildFixtureWorkspace()
+    const note = await fixture.tools.get('noteAlias')!.execute(
+      { entity_id: 'entity-fixture', alias: ' Momo ' }, {} as never,
+    )
+    expect(note.data).toEqual({ entityId: 'entity-fixture', aliases: ['momo'] })
+    const removed = await fixture.tools.get('splitAlias')!.execute(
+      { entity_id: 'entity-fixture', alias: 'Momo' }, {} as never,
+    )
+    expect(removed.data).toEqual({ entityId: 'entity-fixture', aliases: [] })
   })
 })

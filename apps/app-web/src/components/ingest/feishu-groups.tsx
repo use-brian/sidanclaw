@@ -141,7 +141,7 @@ function FeishuGroupRow({
           onClick={() => void toggle()}
           disabled={busy || !canManage}
           className={
-            "shrink-0 rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 " +
+            "inline-flex h-9 shrink-0 items-center rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-50 sm:h-7 " +
             (group.enabled
               ? "border border-border text-muted-foreground hover:text-destructive"
               : "bg-action text-action-foreground hover:bg-action/90")

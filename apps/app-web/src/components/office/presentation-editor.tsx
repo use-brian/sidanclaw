@@ -2,7 +2,7 @@
 
 /** Adaptive slide and multi-object editing over canonical commands. [COMP:app-web/office-presentation-editor] */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { ChevronDown, ChevronUp, Copy, ImagePlus, MoreHorizontal, Plus, Shapes, Table2, Trash2, Type, ChartColumn, Workflow } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, ImagePlus, MoreHorizontal, Pencil, Plus, Shapes, Table2, Trash2, Type, ChartColumn, Workflow } from "lucide-react";
 import {
   arrangePresentationObjects,
   clonePresentationObjects,
@@ -41,6 +41,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { useT } from "@/lib/i18n/client";
 import { admitOfficeImageResource } from "@/lib/office/api";
 import { cn } from "@/lib/utils";
+import { isPhoneViewport } from "@/lib/viewport";
 import { PresentationGeometryToolbar, PresentationObjectFrame } from "./presentation-object-frame";
 import { PresentationFormattingToolbar } from "./presentation-formatting-toolbar";
 import { PresentationDataDialog } from "./presentation-data-dialog";
@@ -49,8 +50,13 @@ import { PresentationSlideVisual } from "./presentation-slide-visual";
 type Geometry = PresentationObject["geometry"];
 type Marquee = { startX: number; startY: number; x: number; y: number; width: number; height: number; baseIds: string[] };
 type RailResize = { pointerId: number; startX: number; startWidth: number };
+type SlideHold = { timer: number; pointerId: number; startX: number; startY: number };
 
 const PRESENTATION_SLIDE_RAIL_MIN_WIDTH = 112;
+/** A touch on a thumbnail becomes a reorder drag only after this hold; a
+ *  shorter touch (or one that moves first) pans the filmstrip (report B row 19). */
+export const PRESENTATION_SLIDE_TOUCH_HOLD_MS = 300;
+const PRESENTATION_SLIDE_TOUCH_SLOP_PX = 8;
 const PRESENTATION_SLIDE_RAIL_DEFAULT_WIDTH = 160;
 const PRESENTATION_SLIDE_RAIL_MAX_WIDTH = 360;
 const PRESENTATION_SLIDE_RAIL_KEYBOARD_STEP = 16;
@@ -80,7 +86,10 @@ export function PresentationEditor({ snapshot, baseVersion, role, suggestMode, o
   const rootRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const railResizeRef = useRef<RailResize | null>(null);
+  const slideHoldRef = useRef<SlideHold | null>(null);
+  const releaseTouchPanRef = useRef<(() => void) | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const [editTextRequest, setEditTextRequest] = useState(0);
   const [slideId, setSlideId] = useState(snapshot.slides[0].id);
   const [selectedSlideIds, setSelectedSlideIds] = useState<string[]>([snapshot.slides[0].id]);
   const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
@@ -418,19 +427,66 @@ export function PresentationEditor({ snapshot, baseVersion, role, suggestMode, o
     setMarquee(null);
   }
 
+  function clearSlideHold() {
+    const hold = slideHoldRef.current;
+    if (!hold) return;
+    window.clearTimeout(hold.timer);
+    slideHoldRef.current = null;
+  }
+
+  function releaseTouchPan() {
+    releaseTouchPanRef.current?.();
+    releaseTouchPanRef.current = null;
+  }
+
+  // Touch: the drag starts only after a still hold, so a swipe on the
+  // filmstrip pans it (`touch-pan-x` below md) instead of silently reordering
+  // (report B row 19). Once the hold fires, the pan the browser would begin
+  // from this gesture is blocked for the rest of it.
+  function beginSlideHold(event: ReactPointerEvent<HTMLButtonElement>, id: string, index: number) {
+    clearSlideHold();
+    const target = event.currentTarget;
+    const pointerId = event.pointerId;
+    const timer = window.setTimeout(() => {
+      slideHoldRef.current = null;
+      setDragSlideId(id);
+      setDragSlideIndex(index);
+      target.setPointerCapture?.(pointerId);
+      const rail = railRef.current;
+      const block = (touch: TouchEvent) => touch.preventDefault();
+      rail?.addEventListener("touchmove", block, { passive: false });
+      releaseTouchPanRef.current = () => rail?.removeEventListener("touchmove", block);
+    }, PRESENTATION_SLIDE_TOUCH_HOLD_MS);
+    slideHoldRef.current = { timer, pointerId, startX: event.clientX, startY: event.clientY };
+  }
+
+  useEffect(() => () => { clearSlideHold(); releaseTouchPan(); }, []);
+
   function updateSlideDrag(event: ReactPointerEvent<HTMLElement>) {
+    const hold = slideHoldRef.current;
+    if (hold && hold.pointerId === event.pointerId && (Math.abs(event.clientX - hold.startX) > PRESENTATION_SLIDE_TOUCH_SLOP_PX || Math.abs(event.clientY - hold.startY) > PRESENTATION_SLIDE_TOUCH_SLOP_PX)) clearSlideHold();
     if (!dragSlideId || !railRef.current) return;
+    // Below md the rail is a horizontal filmstrip (report B row 18): the drop
+    // index and the auto-scroll run along x instead of y.
+    const horizontal = isPhoneViewport();
     const thumbnails = [...railRef.current.querySelectorAll<HTMLElement>("[data-slide-thumbnail]")];
-    setDragSlideIndex(presentationSlideDropIndex(event.clientY, thumbnails.map((thumbnail) => {
+    setDragSlideIndex(presentationSlideDropIndex(horizontal ? event.clientX : event.clientY, thumbnails.map((thumbnail) => {
       const rect = thumbnail.getBoundingClientRect();
-      return { top: rect.top, height: rect.height };
+      return horizontal ? { top: rect.left, height: rect.width } : { top: rect.top, height: rect.height };
     })));
     const rect = railRef.current.getBoundingClientRect();
+    if (horizontal) {
+      if (event.clientX < rect.left + 32) railRef.current.scrollLeft -= 16;
+      if (event.clientX > rect.right - 32) railRef.current.scrollLeft += 16;
+      return;
+    }
     if (event.clientY < rect.top + 32) railRef.current.scrollTop -= 16;
     if (event.clientY > rect.bottom - 32) railRef.current.scrollTop += 16;
   }
 
   function finishSlideDrag(event: ReactPointerEvent<HTMLElement>) {
+    clearSlideHold();
+    releaseTouchPan();
     const sourceIndex = dragSlideId ? snapshot.slides.findIndex((item) => item.id === dragSlideId) : -1;
     if (dragSlideId && dragSlideIndex !== null && sourceIndex >= 0 && sourceIndex !== dragSlideIndex) emit(reorderSlideCommand(snapshot.artifactId, baseVersion, dragSlideId, dragSlideIndex));
     const captureTarget = event.target as HTMLElement;
@@ -440,6 +496,8 @@ export function PresentationEditor({ snapshot, baseVersion, role, suggestMode, o
   }
 
   function cancelSlideDrag() {
+    clearSlideHold();
+    releaseTouchPan();
     setDragSlideId(null);
     setDragSlideIndex(null);
   }
@@ -478,24 +536,26 @@ export function PresentationEditor({ snapshot, baseVersion, role, suggestMode, o
   }
 
   return (
-    <div ref={rootRef} className={cn("grid min-h-0 flex-1 grid-cols-[6.5rem_0_minmax(0,1fr)] md:grid-cols-[var(--presentation-slide-rail-width)_0.5rem_minmax(0,1fr)]", railResizing && "select-none")} style={{ "--presentation-slide-rail-width": `${railWidth}px` } as CSSProperties} data-office-editor="presentation" data-properties-open={primary ? "true" : "false"} tabIndex={-1}>
-      <nav ref={railRef} data-slide-rail="true" className="overflow-y-auto border-r bg-muted/30 p-2 md:border-r-0" aria-label={t.slideRail} onPointerMove={updateSlideDrag} onPointerUp={finishSlideDrag} onPointerCancel={cancelSlideDrag}>
+    <div ref={rootRef} className={cn("flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[var(--presentation-slide-rail-width)_0.5rem_minmax(0,1fr)]", railResizing && "select-none")} style={{ "--presentation-slide-rail-width": `${railWidth}px` } as CSSProperties} data-office-editor="presentation" data-properties-open={primary ? "true" : "false"} tabIndex={-1}>
+      {/* Below md the rail is a horizontal filmstrip above the canvas (report
+          B row 18): a permanent 104px side rail left a 224px canvas at 360. */}
+      <nav ref={railRef} data-slide-rail="true" className="flex shrink-0 gap-2 overflow-x-auto border-b bg-muted/30 p-2 md:block md:min-h-0 md:overflow-y-auto md:border-b-0" aria-label={t.slideRail} onPointerMove={updateSlideDrag} onPointerUp={finishSlideDrag} onPointerCancel={cancelSlideDrag}>
         {snapshot.slides.map((item, index) => {
           const sourceIndex = dragSlideId ? snapshot.slides.findIndex((candidate) => candidate.id === dragSlideId) : -1;
           const insertion = dragSlideIndex === index && sourceIndex !== index ? index < sourceIndex ? "before" : "after" : undefined;
-          return <div key={item.id} data-slide-thumbnail="true" data-slide-index={index} data-slide-insertion={insertion} data-slide-dragging={dragSlideId === item.id ? "true" : undefined} style={{ aspectRatio: slideAspectRatio }} className={cn("relative mb-2 w-full overflow-hidden rounded border bg-white text-slate-900 transition-opacity", selectedSlideIds.includes(item.id) && "ring-2 ring-primary", dragSlideId === item.id && "opacity-55")}>
+          return <div key={item.id} data-slide-thumbnail="true" data-slide-index={index} data-slide-insertion={insertion} data-slide-dragging={dragSlideId === item.id ? "true" : undefined} style={{ aspectRatio: slideAspectRatio }} className={cn("relative w-28 shrink-0 overflow-hidden rounded border bg-white text-slate-900 transition-opacity md:mb-2 md:w-full", selectedSlideIds.includes(item.id) && "ring-2 ring-primary", dragSlideId === item.id && "opacity-55")}>
           <PresentationSlideVisual artifactId={snapshot.artifactId} slide={item} slideSize={snapshot.slideSize} className="pointer-events-none h-full w-full" />
           <span aria-hidden className="absolute left-1 top-1 z-20 rounded bg-background/80 px-1 text-[9px] leading-4 text-foreground shadow-sm">{index + 1}</span>
-          {insertion ? <span aria-hidden data-slide-drop-indicator={insertion} className={cn("pointer-events-none absolute inset-x-0 z-40 h-1 bg-primary shadow-[0_0_0_1px_hsl(var(--background))]", insertion === "before" ? "top-0" : "bottom-0")} /> : null}
-          <button type="button" aria-label={`${index + 1}: ${item.title}`} aria-pressed={selectedSlideIds.includes(item.id)} onPointerDown={(event) => { if (event.button !== 0) return; selectSlide(item.id, event.shiftKey); if (!event.shiftKey) { setDragSlideId(item.id); setDragSlideIndex(index); event.currentTarget.setPointerCapture?.(event.pointerId); event.preventDefault(); } }} className="absolute inset-0 z-30 cursor-grab touch-none active:cursor-grabbing"><span className="sr-only">{item.title}</span></button>
+          {insertion ? <span aria-hidden data-slide-drop-indicator={insertion} className={cn("pointer-events-none absolute z-40 bg-primary shadow-[0_0_0_1px_hsl(var(--background))] max-md:inset-y-0 max-md:w-1 md:inset-x-0 md:h-1", insertion === "before" ? "max-md:left-0 md:top-0" : "max-md:right-0 md:bottom-0")} /> : null}
+          <button type="button" aria-label={`${index + 1}: ${item.title}`} aria-pressed={selectedSlideIds.includes(item.id)} onPointerDown={(event) => { if (event.button !== 0) return; selectSlide(item.id, event.shiftKey); if (event.shiftKey) return; if (event.pointerType === "touch") { beginSlideHold(event, item.id, index); return; } setDragSlideId(item.id); setDragSlideIndex(index); event.currentTarget.setPointerCapture?.(event.pointerId); event.preventDefault(); }} className="absolute inset-0 z-30 cursor-grab touch-pan-x active:cursor-grabbing md:touch-none"><span className="sr-only">{item.title}</span></button>
         </div>;
         })}
-        <button type="button" onClick={addSlide} disabled={!canChange} className="flex w-full items-center justify-center gap-1 rounded border border-dashed p-2 text-xs disabled:opacity-40"><Plus className="size-3" />{t.newSlide}</button>
+        <button type="button" onClick={addSlide} disabled={!canChange} className="flex w-28 shrink-0 items-center justify-center gap-1 rounded border border-dashed p-2 text-xs disabled:opacity-40 md:w-full"><Plus className="size-3" />{t.newSlide}</button>
       </nav>
       <div role="separator" aria-label={t.resizeSlideRail} title={t.resizeSlideRail} aria-orientation="vertical" aria-valuemin={PRESENTATION_SLIDE_RAIL_MIN_WIDTH} aria-valuemax={PRESENTATION_SLIDE_RAIL_MAX_WIDTH} aria-valuenow={railWidth} tabIndex={0} data-slide-rail-resizer="true" data-resizing={railResizing ? "true" : "false"} onPointerDown={startRailResize} onPointerMove={updateRailResize} onPointerUp={finishRailResize} onPointerCancel={finishRailResize} onKeyDown={resizeRailByKeyboard} className="group hidden cursor-col-resize touch-none items-center justify-center border-r bg-muted/20 outline-none hover:bg-primary/10 focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary md:flex">
         <span aria-hidden className="h-12 w-0.5 rounded-full bg-border transition-colors group-hover:bg-primary group-focus-visible:bg-primary" />
       </div>
-      <div className="flex min-h-0 flex-col overflow-auto bg-muted/40">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto bg-muted/40">
         <div className="flex flex-wrap items-center gap-2 border-b bg-background p-1.5" role="toolbar" aria-label={t.editorToolbar}>
           <div role="group" aria-label={t.insert} data-toolbar-group="insert" className="flex max-w-full flex-wrap items-center gap-0.5 rounded-md border bg-muted/20 p-1">
             <strong className="shrink-0 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t.insert}</strong>
@@ -516,6 +576,7 @@ export function PresentationEditor({ snapshot, baseVersion, role, suggestMode, o
           </div>
           {selectedObjects.length ? <div role="group" aria-label={t.objectActions} data-toolbar-group="object" className="flex items-center gap-1 rounded-md border bg-muted/20 p-1">
             <strong className="shrink-0 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t.objectActions}</strong>
+            {primary?.kind === "text" ? <button type="button" disabled={!canChange || selectionHasLocked} onClick={() => setEditTextRequest((count) => count + 1)} data-edit-text-action="true" className="inline-flex shrink-0 items-center gap-1 rounded px-2 py-1.5 text-xs hover:bg-muted disabled:opacity-40"><Pencil className="size-3.5" />{t.editText}</button> : null}
             <DropdownMenu><DropdownMenuTrigger render={<button type="button" className="inline-flex items-center gap-1 rounded px-2 py-1.5 text-xs hover:bg-muted"><MoreHorizontal className="size-4" />{t.arrange}</button>} /><DropdownMenuContent align="start">
               <DropdownMenuItem disabled={selectionHasLocked} onClick={() => reorderObject("bringToFront")}>{t.bringToFront}</DropdownMenuItem><DropdownMenuItem disabled={selectionHasLocked} onClick={() => reorderObject("bringForward")}>{t.bringForward}</DropdownMenuItem><DropdownMenuItem disabled={selectionHasLocked} onClick={() => reorderObject("sendBackward")}>{t.sendBackward}</DropdownMenuItem><DropdownMenuItem disabled={selectionHasLocked} onClick={() => reorderObject("sendToBack")}>{t.sendToBack}</DropdownMenuItem><DropdownMenuSeparator />
               {(["alignLeft", "alignCenter", "alignRight", "alignTop", "alignMiddle", "alignBottom", "distributeHorizontal", "distributeVertical", "centerOnSlide"] as const).map((operation) => <DropdownMenuItem key={operation} disabled={selectionHasLocked || operation.startsWith("distribute") && selectedObjects.length < 3} onClick={() => arrange(operation)}>{t[operation]}</DropdownMenuItem>)}
@@ -525,23 +586,30 @@ export function PresentationEditor({ snapshot, baseVersion, role, suggestMode, o
           {suggestMode ? <span className="rounded-full bg-amber-100 px-2 py-1 text-xs text-amber-900">{t.suggesting}</span> : null}
         </div>
         {imageError ? <p role="alert" className="border-b bg-destructive/5 px-3 py-2 text-xs text-destructive">{imageError}</p> : null}
+        {/* Below md the formatting, accessibility and geometry toolbars are one
+            horizontally scrolling strip that renders UNDER the canvas (report
+            B row 21): stacked above it, selecting an object pushed the slide
+            ~400px down the column and the user scrolled back after every
+            selection. `md:contents` dissolves the wrapper on desktop. */}
+        <div data-presentation-format-strip="true" className="flex shrink-0 flex-col md:contents max-md:order-2 max-md:flex-row max-md:overflow-x-auto max-md:border-b max-md:bg-background max-md:[&>*]:shrink-0">
         {selectedObjects.length ? <PresentationFormattingToolbar objects={selectedObjects} disabled={!canChange || selectionHasLocked} onTextFormat={formatSelectedText} onProperty={formatSelectedProperty} /> : null}
-        {primary ? <div role="toolbar" aria-label={t.accessibilityControls} className="flex flex-wrap items-center gap-2 border-b bg-background px-2 py-1.5">
+        {primary ? <div role="toolbar" aria-label={t.accessibilityControls} className="flex flex-wrap items-center gap-2 border-b bg-background px-2 py-1.5 max-md:flex-nowrap max-md:border-b-0">
           <strong className="shrink-0 text-xs font-semibold">{t.accessibilityControls}</strong>
           {primary.kind === "image" ? <label className="flex items-center gap-1 text-xs"><Checkbox checked={primary.decorative} disabled={!canChange || selectionHasLocked} onCheckedChange={(checked) => updateAccessibility("decorative", checked)} aria-label={t.decorativeImage} />{t.decorativeImage}</label> : null}
-          {(primary.kind === "image" && !primary.decorative) || primary.kind === "shape" || primary.kind === "chart" ? <label className="flex items-center gap-1 text-xs">{t.altText}<input aria-label={t.altText} value={primary.altText ?? ""} disabled={!canChange || selectionHasLocked} onChange={(event) => updateAccessibility("altText", event.target.value)} className="h-7 min-w-48 rounded border px-2" /></label> : null}
-          <button type="button" disabled={!canChange || Boolean(readingOrderDisabledReason(-1))} title={readingOrderDisabledReason(-1)} onClick={() => moveReadingOrder(-1)} className="rounded px-2 py-1 text-xs disabled:opacity-40">{t.readingOrderEarlier}</button>
-          <button type="button" disabled={!canChange || Boolean(readingOrderDisabledReason(1))} title={readingOrderDisabledReason(1)} onClick={() => moveReadingOrder(1)} className="rounded px-2 py-1 text-xs disabled:opacity-40">{t.readingOrderLater}</button>
+          {(primary.kind === "image" && !primary.decorative) || primary.kind === "shape" || primary.kind === "chart" ? <label className="flex items-center gap-1 text-xs">{t.altText}<input aria-label={t.altText} value={primary.altText ?? ""} disabled={!canChange || selectionHasLocked} onChange={(event) => updateAccessibility("altText", event.target.value)} className="h-10 min-w-48 rounded border px-2 text-[16px] md:h-7 md:text-xs" /></label> : null}
+          <button type="button" disabled={!canChange || Boolean(readingOrderDisabledReason(-1))} title={readingOrderDisabledReason(-1)} onClick={() => moveReadingOrder(-1)} className="shrink-0 rounded px-2 py-1 text-xs disabled:opacity-40">{t.readingOrderEarlier}</button>
+          <button type="button" disabled={!canChange || Boolean(readingOrderDisabledReason(1))} title={readingOrderDisabledReason(1)} onClick={() => moveReadingOrder(1)} className="shrink-0 rounded px-2 py-1 text-xs disabled:opacity-40">{t.readingOrderLater}</button>
         </div> : null}
         {selectedForToolbar ? <PresentationGeometryToolbar object={selectedForToolbar} disabled={!canChange || selectionHasLocked} onProperty={updateSelectedGeometry} onDelete={deleteSelectedObjects} /> : null}
-        <div className="flex flex-1 items-center justify-center p-4 lg:p-8">
-          <div data-slide-canvas="true" data-slide-preview-canvas="true" className="relative w-full max-w-5xl overflow-hidden bg-white text-slate-950 shadow" style={{ aspectRatio: slideAspectRatio, containerType: "inline-size" }} onPointerDown={startMarquee} onPointerMove={updateMarquee} onPointerUp={finishMarquee}>
-            {slide.objects.map((object) => <PresentationObjectFrame key={object.id} artifactId={snapshot.artifactId} object={object} externalGeometry={geometryPreview.get(object.id)} selected={selectedObjectIds.includes(object.id)} primary={primary?.id === object.id} canChange={canChange && !selectionHasLocked} slideSize={snapshot.slideSize} otherObjects={slide.objects.filter((candidate) => !selectedObjectIds.includes(candidate.id))} onSelect={(additive) => selectObject(object.id, additive)} onText={(targetId, runs) => emit(textCommand(snapshot.artifactId, baseVersion, targetId, runs))} onGeometryPreview={previewSingleGeometry} onGeometry={(targetId, geometry) => emit(propertyCommand(snapshot.artifactId, baseVersion, targetId, ["geometry"], geometry))} onMovePreview={previewSelection} onMove={commitSelectionGeometry} onSnapGuides={setSnapGuides} />)}
+        </div>
+        <div className="flex flex-1 items-center justify-center p-4 max-md:order-1 lg:p-8">
+          <div data-slide-canvas="true" data-slide-preview-canvas="true" className="relative w-full max-w-5xl overflow-hidden bg-white text-slate-950 shadow" style={{ aspectRatio: slideAspectRatio, containerType: "inline-size" }} onPointerDown={startMarquee} onPointerMove={updateMarquee} onPointerUp={finishMarquee} onPointerCancel={finishMarquee}>
+            {slide.objects.map((object) => <PresentationObjectFrame key={object.id} artifactId={snapshot.artifactId} object={object} externalGeometry={geometryPreview.get(object.id)} selected={selectedObjectIds.includes(object.id)} primary={primary?.id === object.id} editTextRequest={primary?.id === object.id ? editTextRequest : 0} canChange={canChange && !selectionHasLocked} slideSize={snapshot.slideSize} otherObjects={slide.objects.filter((candidate) => !selectedObjectIds.includes(candidate.id))} onSelect={(additive) => selectObject(object.id, additive)} onText={(targetId, runs) => emit(textCommand(snapshot.artifactId, baseVersion, targetId, runs))} onGeometryPreview={previewSingleGeometry} onGeometry={(targetId, geometry) => emit(propertyCommand(snapshot.artifactId, baseVersion, targetId, ["geometry"], geometry))} onMovePreview={previewSelection} onMove={commitSelectionGeometry} onSnapGuides={setSnapGuides} />)}
             {marquee ? <div data-selection-marquee="true" className="pointer-events-none absolute border border-primary bg-primary/10" style={{ left: `${marquee.x / snapshot.slideSize.widthPt * 100}%`, top: `${marquee.y / snapshot.slideSize.heightPt * 100}%`, width: `${marquee.width / snapshot.slideSize.widthPt * 100}%`, height: `${marquee.height / snapshot.slideSize.heightPt * 100}%` }} /> : null}
             {snapGuides.map((guide, index) => <span key={`${guide.axis}-${guide.positionPt}-${index}`} data-snap-guide={guide.source} className="pointer-events-none absolute z-50 bg-fuchsia-500" style={guide.axis === "x" ? { left: `${guide.positionPt / snapshot.slideSize.widthPt * 100}%`, top: 0, width: 1, height: "100%" } : { top: `${guide.positionPt / snapshot.slideSize.heightPt * 100}%`, left: 0, height: 1, width: "100%" }} />)}
           </div>
         </div>
-        <label className="border-t bg-background p-3 text-xs font-medium">{t.speakerNotes}<textarea disabled={!canChange} value={slide.notes.map((run) => run.text).join("")} onChange={(event) => emit(propertyCommand(snapshot.artifactId, baseVersion, slide.id, ["notes"], runsWithText(slide.notes, event.target.value)))} className="mt-1 min-h-16 w-full resize-y rounded border p-2 font-normal" /></label>
+        <label className="border-t bg-background p-3 text-xs font-medium max-md:order-3">{t.speakerNotes}<textarea disabled={!canChange} value={slide.notes.map((run) => run.text).join("")} onChange={(event) => emit(propertyCommand(snapshot.artifactId, baseVersion, slide.id, ["notes"], runsWithText(slide.notes, event.target.value)))} className="mt-1 min-h-16 w-full resize-y rounded border p-2 text-[16px] font-normal md:text-xs" /></label>
       </div>
       <PresentationDataDialog mode={dataDialog ?? "table"} open={dataDialog !== null} object={dataDialog === "table" && primary?.kind === "table" ? primary : dataDialog === "chart" && primary?.kind === "chart" ? primary : null} onClose={() => setDataDialog(null)} onApply={applyDataObject} />
     </div>

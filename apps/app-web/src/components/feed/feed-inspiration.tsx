@@ -482,7 +482,7 @@ function InspirationConfigForm({
                 }
               }}
               placeholder={td.keywordPlaceholder}
-              className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <button
               type="button"
@@ -776,12 +776,12 @@ function ConfigModal({
             type="button"
             onClick={onClose}
             aria-label={td.closeAria}
-            className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            className="inline-flex items-center justify-center h-11 w-11 sm:h-7 sm:w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <XIcon />
           </button>
         </div>
-        <div className="px-5 py-4 max-h-[70vh] overflow-y-auto">{children}</div>
+        <div className="px-5 py-4 max-h-[70dvh] overflow-y-auto">{children}</div>
       </div>
     </div>
   );

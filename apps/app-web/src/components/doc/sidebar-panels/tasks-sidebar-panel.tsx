@@ -17,11 +17,17 @@
  *     localStorage via `tasks-view.ts`): apply on click, save the current
  *     URL state, hover-delete.
  *
- * Fetches its own row copy for the counts (the "sidebar fetches its own
- * copy" pattern) — cheap against the flat list endpoint, refreshed on the
- * brain-refresh signal the surface fires after mutations.
+ * Reads the SURFACE's cache key (`surfaceDataKey("tasks", wid)`, built in
+ * `lib/surface-prefetch.ts`) for the counts instead of fetching its own copy:
+ * the panel remounts on every surface entry, and its old private
+ * `fetchWorkspaceTasks` paid a second request and blanked the counts each
+ * time while the identical rows sat in the surface cache. Live updates come
+ * from the ONE spine map (`lib/surface-cache-invalidation.ts` marks
+ * `tasks:<wid>` stale on BRAIN_REFRESH_EVENT), so there is no listener here.
+ * Counts paint from cached rows; the skeleton pills show only when nothing is
+ * cached (instant-navigation contract N1 / N3 / N4).
  *
- * [COMP:app-web/tasks-surface] (the sidebar-panel flavour)
+ * [COMP:app-web/tasks-sidebar-panel]
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -30,8 +36,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
-import { BRAIN_REFRESH_EVENT } from "@/lib/brain-events";
-import { fetchWorkspaceTasks, type TaskRow } from "@/lib/api/tasks";
+import { Skeleton } from "@/components/skeleton";
+import { isPhoneViewport } from "@/lib/viewport";
+import { useCachedResource } from "@/lib/surface-cache";
+import { surfaceDataKey } from "@/lib/surface-prefetch";
+import { fetchWorkspaceTasks } from "@/lib/api/tasks";
 import {
   QUICK_FILTERS,
   quickFilterCounts,
@@ -71,19 +80,11 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // ── Live counts (own fetch; refreshed on the surface's mutate signal) ──
-  const [rows, setRows] = useState<TaskRow[] | null>(null);
-  const refresh = useCallback(() => {
-    fetchWorkspaceTasks(workspaceId)
-      .then(setRows)
-      .catch(() => setRows([]));
-  }, [workspaceId]);
-  useEffect(() => {
-    setRows(null);
-    refresh();
-    window.addEventListener(BRAIN_REFRESH_EVENT, refresh);
-    return () => window.removeEventListener(BRAIN_REFRESH_EVENT, refresh);
-  }, [refresh]);
+  // ── Live counts from the surface's own cache slot ──────────────────────
+  const tasks = useCachedResource(surfaceDataKey("tasks", workspaceId), () =>
+    fetchWorkspaceTasks(workspaceId),
+  );
+  const rows = tasks.data ?? null;
   const counts = useMemo(
     () => quickFilterCounts(rows ?? [], new Date()),
     [rows],
@@ -142,10 +143,12 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
       <div className="flex flex-col gap-0.5">
         <Link href={base} aria-current={allActive ? "page" : undefined} className={rowCls(allActive)}>
           <span className="min-w-0 flex-1 truncate">{t.allTasks}</span>
-          {rows !== null && (
+          {rows !== null ? (
             <span className="shrink-0 tabular-nums text-[11px] text-sidebar-foreground/50">
               {rows.length}
             </span>
+          ) : (
+            <Skeleton className="h-3 w-5 shrink-0 rounded" data-sidebar-count-skeleton />
           )}
         </Link>
       </div>
@@ -162,7 +165,11 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
               className={rowCls(activeQuick === f)}
             >
               <span className="min-w-0 flex-1 truncate">{quickLabels[f]}</span>
-              <AttentionBadge count={counts[f]} />
+              {rows !== null ? (
+                <AttentionBadge count={counts[f]} />
+              ) : (
+                <Skeleton className="h-[1.1rem] w-5 shrink-0 rounded-full" data-sidebar-count-skeleton />
+              )}
             </Link>
           ))}
         </div>
@@ -178,7 +185,7 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
             type="button"
             aria-label={t.saveViewAria}
             onClick={() => setNaming((v) => !v)}
-            className="flex size-5 shrink-0 items-center justify-center rounded text-sidebar-foreground/50 opacity-0 transition-opacity hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-hover/views:opacity-100"
+            className="flex size-7 shrink-0 items-center justify-center rounded text-sidebar-foreground/50 opacity-100 transition-opacity hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:size-5 md:opacity-0 md:group-hover/views:opacity-100"
           >
             <Plus className="size-3.5" />
           </button>
@@ -187,7 +194,7 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
           {naming && (
             <input
               type="text"
-              autoFocus
+              autoFocus={!isPhoneViewport()}
               value={draftName}
               placeholder={t.viewNamePlaceholder}
               onChange={(e) => setDraftName(e.target.value)}
@@ -205,7 +212,7 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
                 if (draftName.trim().length > 0) saveCurrent();
                 else setNaming(false);
               }}
-              className="h-7 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-[16px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40 md:h-7 md:text-[13px]"
             />
           )}
           {views.length === 0 && !naming ? (
@@ -230,7 +237,7 @@ export function TasksSidebarPanel({ workspaceId }: { workspaceId: string }) {
                   type="button"
                   aria-label={`${t.deleteView}: ${v.name}`}
                   onClick={() => removeView(v.id)}
-                  className="absolute right-1 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded text-sidebar-foreground/50 opacity-0 transition-opacity hover:bg-sidebar-accent hover:text-destructive group-hover/view:opacity-100"
+                  className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-sidebar-foreground/50 opacity-100 transition-opacity hover:bg-sidebar-accent hover:text-destructive md:size-5 md:opacity-0 md:group-hover/view:opacity-100"
                 >
                   <Trash2 className="size-3" />
                 </button>

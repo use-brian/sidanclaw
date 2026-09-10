@@ -69,6 +69,8 @@ import { homeLandingPath } from "@/lib/suggested-landing";
 import { useDocChatOthersRun } from "@/lib/doc-chat-relay";
 import { useOfflineSync } from "@/lib/offline/use-offline-sync";
 import { useWorkspaceEvents } from "@/lib/workspace-events";
+import { useSurfaceCacheInvalidation } from "@/lib/surface-cache-invalidation";
+import { SIDEBAR_CLOSE_EVENT } from "@/lib/sidebar-close";
 import { cn } from "@/lib/utils";
 import { CHAT_SEED_EVENT, type ChatSeed } from "@/lib/chat-seed";
 import {
@@ -84,6 +86,7 @@ import {
 } from "@/lib/desktop-titlebar";
 import { DocSidebar } from "./doc-sidebar";
 import { InboxPanel } from "./inbox-panel";
+import { WorkspaceFileDropBoundary } from "./workspace-file-drop";
 import { useSidebarData } from "./doc-sidebar-data";
 import {
   TeamspaceCreateDialog,
@@ -154,6 +157,12 @@ export function WorkspaceChrome({
   // their existing listeners. Mounted on the chrome so every surface —
   // workflow, approvals, brain, skills — stays live without its own stream.
   useWorkspaceEvents(workspaceId);
+  // The ONE spine-to-cache map (instant-navigation contract N3): each domain
+  // event marks the surface-cache prefixes it feeds stale, so a cached
+  // surface (Tasks, CRM, Workflow, the Brain graph) repaints behind its paint
+  // without carrying a listener of its own - and a task or deal an assistant
+  // writes from chat reaches the OPEN list, not just the sidebar counts.
+  useSurfaceCacheInvalidation(workspaceId);
 
   // Keep macOS native traffic lights and the zoomable web chrome in the same
   // coordinate system. The three OS buttons stay fixed when Electron's View
@@ -273,6 +282,31 @@ export function WorkspaceChrome({
   // to highlight the matching sidebar row. Pathname-derived (NOT the centre
   // pane's fetched metadata), so it's correct on every surface; `null` off `/p`.
   const activeId = activeSurface === "p" ? pageIdFromPathname(pathname) : null;
+
+  // ── Drawer hygiene (responsive contract M7) ──────────────────────────────
+  // Below `md` the sidebar is a drawer over the page, and every action
+  // launched from inside it that opens a modal / sheet or navigates must
+  // close it - otherwise the user lands on an open drawer over a dimmed page
+  // and pays a backdrop tap to get back to work. Two signals cover every
+  // launcher without each row having to know about the chrome:
+  //  - a NAVIGATION (a page row, an operator-panel row, an app-bar icon, the
+  //    top-nav icons): the URL moves, so close on any pathname / search
+  //    change while the drawer is open;
+  //  - a MODAL / SHEET (Settings, Invite members, the teamspace dialogs):
+  //    the URL does not move, so the launcher dispatches `doc:sidebar-close`
+  //    (`lib/sidebar-close.ts`) and this is the one listener.
+  // `setSidebarOpen` is a plain state setter, so closing an already-closed
+  // drawer is free; the effects never open it.
+  const searchKey = searchParams?.toString() ?? "";
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [pathname, searchKey, setSidebarOpen]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onClose = () => setSidebarOpen(false);
+    window.addEventListener(SIDEBAR_CLOSE_EVENT, onClose);
+    return () => window.removeEventListener(SIDEBAR_CLOSE_EVENT, onClose);
+  }, [setSidebarOpen]);
 
   // ── The ONE assistant chat dock, hoisted to chrome ───────────────────────
   // Mounted once here so it persists across every `/w/[id]/*` navigation: a
@@ -541,9 +575,10 @@ export function WorkspaceChrome({
   // switch (never both at once).
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Final routes (N6): `/studio` is a redirect to its first section.
     const SURFACE_BY_KEY: Record<string, string> = {
       "2": "brain",
-      "3": "studio",
+      "3": "studio/connectors",
       "4": "workflow",
     };
     const onKey = (e: KeyboardEvent) => {
@@ -571,12 +606,17 @@ export function WorkspaceChrome({
   }, [router, workspaceId, homeHref]);
 
   return (
-    <div className="relative flex h-full w-full overflow-hidden">
-      {offlineState.offline && (
+    <WorkspaceFileDropBoundary
+      workspaceId={workspaceId}
+      assistantId={chatAssistantId}
+      offline={offlineState.offline}
+      className="relative flex h-full w-full overflow-hidden"
+    >
+      {(offlineState.offline || offlineState.pending > 0) && (
         <div
           role="status"
           aria-live="polite"
-          className="pointer-events-none fixed bottom-3 left-1/2 z-[70] flex max-w-[min(34rem,calc(100vw-1.5rem))] -translate-x-1/2 items-start gap-2.5 rounded-xl border border-amber-300/60 bg-amber-50/95 px-3.5 py-2.5 text-amber-950 shadow-lg backdrop-blur dark:border-amber-700/60 dark:bg-amber-950/95 dark:text-amber-100"
+          className="pointer-events-none fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] left-1/2 z-[70] flex max-w-[min(34rem,calc(100vw-1.5rem))] -translate-x-1/2 items-start gap-2.5 rounded-xl border border-amber-300/60 bg-amber-50/95 px-3.5 py-2.5 text-amber-950 shadow-lg backdrop-blur dark:border-amber-700/60 dark:bg-amber-950/95 dark:text-amber-100"
         >
           <span
             aria-hidden
@@ -584,11 +624,11 @@ export function WorkspaceChrome({
           />
           <span className="min-w-0">
             <strong className="block text-xs font-semibold">
-              {t.offlineBannerTitle}
+              {offlineState.offline ? t.offlineBannerTitle : t.offlineSyncPendingTitle}
             </strong>
             <span className="block text-[11px] leading-relaxed opacity-80">
               {offlineState.pending > 0
-                ? format(t.offlineBannerPending, {
+                ? format(offlineState.offline ? t.offlineBannerPending : t.offlineSyncPendingBody, {
                     count: offlineState.pending,
                   })
                 : t.offlineBannerBody}
@@ -657,8 +697,15 @@ export function WorkspaceChrome({
           onDuplicate={handleDuplicate}
           onDelete={handleDelete}
           onMove={handleMove}
-          onNewTeamspace={() => setCreateTeamspaceOpen(true)}
-          onTeamspaceSettings={(id, tab) => setTeamspaceModal({ id, tab })}
+          // Dialogs launched from the drawer close it (M7) - same as Settings.
+          onNewTeamspace={() => {
+            setCreateTeamspaceOpen(true);
+            setSidebarOpen(false);
+          }}
+          onTeamspaceSettings={(id, tab) => {
+            setTeamspaceModal({ id, tab });
+            setSidebarOpen(false);
+          }}
           onLeaveTeamspace={handleLeaveTeamspace}
           onDeleteTeamspace={handleDeleteTeamspace}
           inboxOpen={inboxOpen}
@@ -710,7 +757,11 @@ export function WorkspaceChrome({
         // data-doc-mobile-menu: in the desktop shell a narrow window drops to
         // this mobile layout, so globals.css nudges this below the traffic lights.
         data-doc-mobile-menu
-        className="fixed left-2 top-2 z-20 inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
+        // 44px (responsive contract M3): this is the first tap of every admin
+        // flow on a phone. `left-1 top-0` keeps the whole target inside the
+        // `h-11` topbar row and the `w-12` spacer every surface reserves for
+        // it (doc.md → "Mobile hamburger clearance").
+        className="fixed left-1 top-0 z-20 inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
       >
         <svg
           width="18"
@@ -800,6 +851,6 @@ export function WorkspaceChrome({
           />
         </div>
       )}
-    </div>
+    </WorkspaceFileDropBoundary>
   );
 }

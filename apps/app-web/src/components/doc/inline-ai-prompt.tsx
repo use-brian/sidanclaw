@@ -202,7 +202,7 @@ export function InlineAiPrompt({
             rows={1}
             placeholder={t.placeholder}
             // No inner focus treatment — the outer box owns the focus ring.
-            className="min-h-9 max-h-32 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-1.5 text-sm text-foreground shadow-none outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 placeholder:text-muted-foreground/60"
+            className="min-h-9 max-h-32 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-1.5 text-[16px] text-foreground shadow-none outline-none focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 placeholder:text-muted-foreground/60 md:text-sm"
           />
           <button
             type="button"

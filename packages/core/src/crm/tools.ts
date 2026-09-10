@@ -222,16 +222,13 @@ const idShape = uuidId()
 const tagShape = z.array(z.string().min(1).max(64)).max(20)
 const externalRefShape = z.record(z.unknown())
 
-/**
- * Supersession-aware not-found copy (the CRM twin of tasks'
- * `taskNotFoundMessage`): every update mints a NEW row id, so the dominant
- * miss is a stale id from an earlier edit. Name the id, the mechanic, the
- * discovery tools, and forbid the blind retry.
- */
+/** CRM updates preserve ids; a miss is not evidence of a replacement row. */
 function crmNotFound(kind: 'Contact' | 'Company' | 'Deal', id: string): string {
   const listTool = kind === 'Contact' ? 'listContacts' : kind === 'Company' ? 'listCompanies' : 'listDeals'
-  return `${kind} ${id} not found in this workspace. If you edited this ${kind.toLowerCase()} earlier, that edit returned a NEW id (every update supersedes the row) — reuse the id from that result, or call ${listTool} / searchBrain to re-resolve. Do NOT retry this exact id.`
+  return `${kind} ${id} not found or not accessible in this workspace. Ordinary CRM updates keep the same id. Check the workspace and use ${listTool} / searchBrain to resolve a visible live record; do not recreate or delete a record to work around this error. Do NOT retry this exact id unchanged.`
 }
+
+const NATIVE_ALIAS_GUIDANCE = 'For an alternate name or nickname of an existing record, use noteAlias with its explicit entity_id (the CRM id). Aliases are a native field, separate from the canonical name; never append them to the name or substitute a custom field, tag, memory, deletion, or replacement record. Use splitAlias to remove an incorrect alias. Only rename when the user requests a canonical name change. Verify alias saves from the persisted aliases returned by the tool. '
 
 function workspaceGate(workspaceId: string | null | undefined): { data: string; isError: true } | null {
   if (!workspaceId) {
@@ -351,18 +348,14 @@ async function existingCompanyMatchIds(
 
 // ── Row formatters ──────────────────────────────────────────────────
 
-// Every projection emits `entity_id` alongside `id`. `id` is the
-// CRM-row id (contacts.id / companies.id / deals.id) — the right
-// argument for getContact / updateContact / etc. `entity_id` is the
-// underlying entities-table row — the right argument for createEdge
-// source_id / target_id. Surfacing both lets the model chain into
-// edge writes without a second lookup; without `entity_id` the model
-// guesses (passes the CRM id) and hits the entity_links FK constraint.
+// CRM rows are entities. Both id and entity_id identify the same stable row.
 function compactContact(row: ContactListRow): {
   id: string
   entity_id: string | null
+  aliases: string[]
   name: string
   email: string | null
+  phone: string | null
   company_id: string | null
   tags: string[]
   updated_at: string
@@ -370,8 +363,10 @@ function compactContact(row: ContactListRow): {
   return {
     id: row.id,
     entity_id: row.entityId,
+    aliases: row.aliases ?? [],
     name: row.name,
     email: row.email,
+    phone: row.phone,
     company_id: row.companyId,
     tags: row.tags,
     updated_at: row.updatedAt.toISOString(),
@@ -381,6 +376,7 @@ function compactContact(row: ContactListRow): {
 function fullContact(row: ContactRecord): {
   id: string
   entity_id: string | null
+  aliases: string[]
   name: string
   email: string | null
   phone: string | null
@@ -393,6 +389,7 @@ function fullContact(row: ContactRecord): {
   return {
     id: row.id,
     entity_id: row.entityId,
+    aliases: row.aliases ?? [],
     name: row.name,
     email: row.email,
     phone: row.phone,
@@ -407,6 +404,7 @@ function fullContact(row: ContactRecord): {
 function compactCompany(row: CompanyListRow): {
   id: string
   entity_id: string | null
+  aliases: string[]
   name: string
   domain: string | null
   tags: string[]
@@ -415,6 +413,7 @@ function compactCompany(row: CompanyListRow): {
   return {
     id: row.id,
     entity_id: row.entityId,
+    aliases: row.aliases ?? [],
     name: row.name,
     domain: row.domain,
     tags: row.tags,
@@ -425,6 +424,7 @@ function compactCompany(row: CompanyListRow): {
 function fullCompany(row: CompanyRecord): {
   id: string
   entity_id: string | null
+  aliases: string[]
   name: string
   domain: string | null
   tags: string[]
@@ -435,6 +435,7 @@ function fullCompany(row: CompanyRecord): {
   return {
     id: row.id,
     entity_id: row.entityId,
+    aliases: row.aliases ?? [],
     name: row.name,
     domain: row.domain,
     tags: row.tags,
@@ -447,6 +448,8 @@ function fullCompany(row: CompanyRecord): {
 function compactDeal(row: DealListRow): {
   id: string
   entity_id: string | null
+  aliases: string[]
+  name: string
   contact_id: string | null
   company_id: string | null
   stage: DealStage
@@ -457,6 +460,8 @@ function compactDeal(row: DealListRow): {
   return {
     id: row.id,
     entity_id: row.entityId,
+    aliases: row.aliases ?? [],
+    name: row.name,
     contact_id: row.contactId,
     company_id: row.companyId,
     stage: row.stage,
@@ -469,6 +474,8 @@ function compactDeal(row: DealListRow): {
 function fullDeal(row: DealRecord): {
   id: string
   entity_id: string | null
+  aliases: string[]
+  name: string
   contact_id: string | null
   company_id: string | null
   stage: DealStage
@@ -481,6 +488,8 @@ function fullDeal(row: DealRecord): {
   return {
     id: row.id,
     entity_id: row.entityId,
+    aliases: row.aliases ?? [],
+    name: row.name,
     contact_id: row.contactId,
     company_id: row.companyId,
     stage: row.stage,
@@ -554,6 +563,7 @@ export function createCrmTools(
     name: 'saveContact',
     requiresCapability: 'crm',
     description:
+      NATIVE_ALIAS_GUIDANCE +
       'Create a new contact in the current workspace. A name, email, phone, alias, or fuzzy match never selects an existing person: people can legitimately share them. Use updateContact only when you have an explicit contact id. Provider adapters may resolve an existing person through a server-verified stable external identity, but free-form external_ref is metadata and never write authority. ' +
       'When asked to save a contact, call saveContact FIRST with whatever fields you have — name and email alone are enough; company_id is optional. Never let a company lookup or company creation block the contact save: save the contact, then link the company afterwards (via updateContact) once its id is known. ' +
       'If you do pass company_id, it must be an existing company in this workspace (use listCompanies to confirm); cross-workspace links are rejected by the DB. ' +
@@ -653,7 +663,7 @@ export function createCrmTools(
   const getContact = buildTool({
     name: 'getContact',
     requiresCapability: 'crm',
-    description: 'Fetch the full contact record by id, including phone, external_ref, and created_at. Use this when listContacts (compact projection) doesn\'t have what you need.',
+    description: 'Fetch the full contact record by id, including native aliases, phone, external_ref, and created_at. Use this when listContacts (compact projection) doesn\'t have what you need.',
     inputSchema: z.object({ id: idShape }),
     isConcurrencySafe: true,
     isReadOnly: true,
@@ -675,11 +685,11 @@ export function createCrmTools(
     name: 'listContacts',
     requiresCapability: 'crm',
     description:
-      'List contacts in the current workspace, filtered by any combination of query (substring on name+email), tag, or company_id. ' +
-      'Returns a compact projection (id, name, email, company_id, tags, updated_at) sized for downstream tool calls. Use getContact for the full record. ' +
+      'List contacts in the current workspace, filtered by any combination of query (substring on name, aliases, email, and phone), tag, or company_id. ' +
+      'Returns a compact projection (id, name, aliases, email, phone, company_id, tags, updated_at) sized for downstream tool calls. Use getContact for the full record. ' +
       'Default limit is 25 (max 100). If multiple contacts match, ASK the user to disambiguate by id — do not pick the first match.',
     inputSchema: z.object({
-      query: z.string().min(1).max(128).optional().describe('ILIKE substring on name and email.'),
+      query: z.string().min(1).max(128).optional().describe('Case-insensitive substring on name, native aliases, email, or phone. Phone searches also match normalized digits.'),
       tag: z.string().min(1).max(64).optional(),
       company_id: idShape.optional(),
       limit: tolerantInt({ min: 1, max: 100 }).optional().default(25),
@@ -709,6 +719,7 @@ export function createCrmTools(
     name: 'updateContact',
     requiresCapability: 'crm',
     description:
+      NATIVE_ALIAS_GUIDANCE +
       'Patch fields on an existing contact. Pass only the fields to change. To clear a nullable field (email, phone, company_id), pass `null` explicitly — omitting a key leaves it unchanged. ' +
       'Pass `links` to ADD relationship edges; pass `closeLinks` to close existing relationships (e.g. recording that the contact left a previous employer). At least one of fields, tags, links, or closeLinks is required.',
     inputSchema: z.object({
@@ -818,7 +829,8 @@ export function createCrmTools(
     name: 'saveCompany',
     requiresCapability: 'crm',
     description:
-      'Upsert a company in the current workspace by display name. If an active company with the same name (case-insensitive) already exists, its tags (union), domain (incoming wins if non-empty), and external_ref (shallow merge) are merged into a superseding version — no duplicate row is created. Use updateCompany when you have an explicit id and need to patch other fields.',
+      NATIVE_ALIAS_GUIDANCE +
+      'Upsert a company in the current workspace by display name. If an active company with the same name (case-insensitive) already exists, its tags (union), domain (incoming wins if non-empty), and external_ref (shallow merge) are merged in place, preserving the same id; no duplicate row is created. Use updateCompany when you have an explicit id and need to patch other fields.',
     inputSchema: z.object({
       name: z.string().min(1).max(256).describe('Display name (e.g. "Acme Corp").'),
       domain: z.string().max(256).optional().describe('Primary web domain (e.g. "acme.com"). Used to disambiguate against synced sources.'),
@@ -929,9 +941,9 @@ export function createCrmTools(
     name: 'listCompanies',
     requiresCapability: 'crm',
     description:
-      'List companies in the current workspace, filtered by query (substring on name+domain) or tag. Returns a compact projection (id, name, domain, tags, updated_at). Default limit is 25 (max 100).',
+      'List companies in the current workspace, filtered by query (substring on name, aliases, and domain) or tag. Returns a compact projection (id, name, aliases, domain, tags, updated_at). Default limit is 25 (max 100).',
     inputSchema: z.object({
-      query: z.string().min(1).max(128).optional().describe('ILIKE substring on name and domain.'),
+      query: z.string().min(1).max(128).optional().describe('Case-insensitive substring on name, native aliases, and domain.'),
       tag: z.string().min(1).max(64).optional(),
       limit: tolerantInt({ min: 1, max: 100 }).optional().default(25),
     }),
@@ -959,6 +971,7 @@ export function createCrmTools(
     name: 'updateCompany',
     requiresCapability: 'crm',
     description:
+      NATIVE_ALIAS_GUIDANCE +
       'Patch fields on an existing company. Pass only the fields to change. Pass `null` for `domain` to clear it. ' +
       'Pass `links` to ADD relationship edges and `closeLinks` to close existing ones (e.g. "this company was acquired by X" closes the competes_with edge with X, opens an acquired_by). At least one of fields, tags, links, or closeLinks is required.',
     inputSchema: z.object({

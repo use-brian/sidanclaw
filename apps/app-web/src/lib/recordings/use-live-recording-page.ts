@@ -46,8 +46,7 @@ export function decodeLiveDestination(value: string): {
 export function useLiveRecordingPage(workspaceId: string, assistantId: string) {
   const t = useT().recorder;
   const router = useRouter();
-  const currentRef = useRef<LiveRecordingPage | null>(null);
-  const failedWindowsRef = useRef(0);
+  const failedWindowsRef = useRef(new WeakMap<LiveRecordingPage, number>());
 
   const prepare = useCallback(async (): Promise<LiveRecordingPage | null> => {
     const pages = await listViews({ workspaceId, state: "saved" }).catch(() => []);
@@ -80,8 +79,7 @@ export function useLiveRecordingPage(workspaceId: string, assistantId: string) {
       workspaceId,
       ...decodeLiveDestination(choice),
     });
-    currentRef.current = page;
-    failedWindowsRef.current = 0;
+    failedWindowsRef.current.set(page, 0);
     // The sidebar lists only refetch on their own mutation handlers plus this
     // bus — a page created server-side by /live/start is otherwise invisible
     // until the user navigates away and back (the mount-only-fetch trap,
@@ -93,10 +91,8 @@ export function useLiveRecordingPage(workspaceId: string, assistantId: string) {
     return page;
   }, [router, t, workspaceId]);
 
-  const streamWindow = useCallback(async (win: LiveWindow): Promise<void> => {
-    const page = currentRef.current;
-    if (!page) return;
-    const missedBefore = failedWindowsRef.current;
+  const streamWindow = useCallback(async (win: LiveWindow, page: LiveRecordingPage): Promise<void> => {
+    const missedBefore = failedWindowsRef.current.get(page) ?? 0;
     try {
       if (win.blob.size === 0) throw new Error("empty live window")
       const chunkId = crypto.randomUUID();
@@ -108,7 +104,7 @@ export function useLiveRecordingPage(workspaceId: string, assistantId: string) {
         missedWindows: missedBefore,
         ...win,
       });
-      failedWindowsRef.current = 0;
+      failedWindowsRef.current.set(page, 0);
       // Same-tab pane append (other tabs converge via the pane's poll).
       if (!result.duplicate) {
         dispatchLiveTranscriptWindow({
@@ -123,7 +119,7 @@ export function useLiveRecordingPage(workspaceId: string, assistantId: string) {
     } catch {
       // Window failures are isolated. The durable local recording continues,
       // and the next independently-decodable window still gets a chance.
-      failedWindowsRef.current += 1;
+      failedWindowsRef.current.set(page, missedBefore + 1);
     }
   }, [assistantId, workspaceId]);
 

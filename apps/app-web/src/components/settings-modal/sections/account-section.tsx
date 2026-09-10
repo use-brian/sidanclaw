@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 // Ported from apps/web/src/app/(app)/settings/account/page.tsx
 // (AccountPage → AccountSection). The earlier app-web port was a thinner
 // stub (initials bubble, no name-save, no avatar upload); this gap-fills it
@@ -15,7 +17,9 @@ import {
 import { authFetch } from "@/lib/auth-fetch";
 import { signOutActiveAccount } from "@/lib/account-logout";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { Button } from "@/components/ui/button";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
   updateDisplayName,
@@ -46,7 +50,7 @@ import { isOssEdition, isHostedEdition } from "@/lib/edition";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import { primaryAuthUrl } from "@/lib/primary-auth";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /** A transient status banner: success or error feedback after an action. */
 type Status = { kind: "success" | "error"; text: string } | null;
@@ -190,23 +194,29 @@ export function AccountSection() {
               className="hidden"
               onChange={onPickPhoto}
             />
-            <button
+            {/* `Button size="sm"` carries the phone floor (44px below `sm`);
+                the 12px text links were ~16px-tall targets (report A row 18). */}
+            <Button
               type="button"
+              variant="link"
+              size="sm"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading || removing}
-              className="text-[12px] text-primary hover:underline disabled:opacity-50"
+              className="px-0 text-[12px]"
             >
               {uploading ? t.settings.common.save + "…" : t.settings.account.changePhoto}
-            </button>
+            </Button>
             {hasAvatar && (
-              <button
+              <Button
                 type="button"
+                variant="link"
+                size="sm"
                 onClick={onRemovePhoto}
                 disabled={uploading || removing}
-                className="text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+                className="px-0 text-[12px] text-muted-foreground hover:text-foreground"
               >
                 {t.settings.account.removePhoto}
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -239,7 +249,7 @@ export function AccountSection() {
                 // launcher prompt / ~/.usebrian/config.json), so it is read-only
                 // here — an in-app edit would be re-clobbered on the next boot.
                 disabled={savingName || isOssEdition()}
-                className="flex-1 text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 disabled:opacity-60"
+                className="flex-1 min-w-0 text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 disabled:opacity-60"
               />
               {!isOssEdition() && (
                 <button
@@ -260,7 +270,7 @@ export function AccountSection() {
                 type="email"
                 defaultValue={userInfo?.email ?? ""}
                 disabled
-                className="w-full text-sm bg-muted border border-border rounded-lg px-3 py-2 text-muted-foreground"
+                className="w-full text-[16px] md:text-sm bg-muted border border-border rounded-lg px-3 py-2 text-muted-foreground"
               />
             </div>
           )}
@@ -1208,16 +1218,18 @@ function HandleSection() {
       </p>
       {editing ? (
         <div className="space-y-2">
-          <div className="flex gap-2">
-            <div className="flex items-center bg-muted/50 border border-border rounded-lg px-3">
+          {/* Wraps at 360px instead of crowding Save / Cancel onto a second
+              line beside a fixed 192px box (report A row 18). */}
+          <div className="flex flex-wrap gap-2">
+            <div className="flex min-w-0 flex-1 items-center bg-muted/50 border border-border rounded-lg px-3">
               <span className="text-sm text-muted-foreground">@</span>
               <input
                 type="text"
                 value={input}
                 onChange={(e) => { setInput(e.target.value); setError(""); }}
                 onKeyDown={(e) => e.key === "Enter" && saveHandle()}
-                className="text-sm bg-transparent py-2 pl-1 focus:outline-none w-48"
-                autoFocus
+                className="min-w-0 flex-1 text-[16px] md:text-sm bg-transparent py-2 pl-1 focus:outline-none"
+                autoFocus={!isPhoneViewport()}
               />
             </div>
             <button
@@ -1244,12 +1256,15 @@ function HandleSection() {
           <span className="text-sm font-mono bg-muted/50 px-3 py-2 rounded-lg">
             @{handle ?? t.settings.account.handleLoading}
           </span>
-          <button
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
             onClick={() => setEditing(true)}
-            className="text-[12px] text-primary hover:underline"
+            className="px-0 text-[12px]"
           >
             {t.settings.account.change}
-          </button>
+          </Button>
         </div>
       )}
     </div>

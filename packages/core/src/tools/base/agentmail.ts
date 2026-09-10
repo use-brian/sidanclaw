@@ -19,6 +19,7 @@
  * Component tag: [COMP:tools/agentmail]
  */
 
+import { CrmOperationsStableKeySchema, CrmOperationsError } from '../../crm/operations-types.js'
 import { z } from 'zod'
 import { buildTool, type Tool } from '../types.js'
 import { connectorError, type ConnectorApiError } from './_connector-result.js'
@@ -44,6 +45,8 @@ export type AgentmailToolApi = {
   /** Every assistant inbox usable in this workspace. */
   listInboxes(): Promise<AgentmailInboxRef[]>
   send(params: {
+    crmPurposeKey?: string
+    crmTemplateKey?: string
     inboxAddress: string
     to: string[]
     cc?: string[]
@@ -58,6 +61,8 @@ export type AgentmailToolApi = {
     limit?: number
   }): Promise<AgentmailThreadSummary[]>
   createDraft(params: {
+    crmPurposeKey?: string
+    crmTemplateKey?: string
     inboxAddress: string
     to: string[]
     cc?: string[]
@@ -131,6 +136,8 @@ export function createAgentmailTools(api: AgentmailToolApi): Tool[] {
       to: recipientList,
       cc: z.array(z.string()).max(20).optional().describe('CC addresses: copied recipients, visible to everyone on the email.'),
       bcc: z.array(z.string()).max(20).optional().describe('BCC addresses: copied recipients hidden from everyone else on the email.'),
+      crmPurposeKey: CrmOperationsStableKeySchema.optional().describe('Explicit CRM purpose configured for a managed email account.'),
+      crmTemplateKey: CrmOperationsStableKeySchema.optional().describe('Configured CRM template key, when using a managed template.'),
       subject: z.string().describe('Email subject line.'),
       body: z
         .string()
@@ -156,6 +163,8 @@ export function createAgentmailTools(api: AgentmailToolApi): Tool[] {
         const inbox = await resolveInbox(api, input.fromInbox)
         if (!inbox.ok) return { data: inbox.error, isError: true }
         const result = await api.send({
+          ...(input.crmPurposeKey ? { crmPurposeKey:input.crmPurposeKey } : {}),
+          ...(input.crmTemplateKey ? { crmTemplateKey:input.crmTemplateKey } : {}),
           inboxAddress: inbox.address,
           to: input.to,
           cc: input.cc,
@@ -171,6 +180,9 @@ export function createAgentmailTools(api: AgentmailToolApi): Tool[] {
           },
         }
       } catch (err) {
+        if (err instanceof CrmOperationsError && err.details?.reason==='provider_outcome_unknown') {
+          return { data:'The provider may have accepted the email. Verify delivery before retrying.',isError:true }
+        }
         return connectorError({ provider: 'AgentMail', tool: 'agentmailSendMessage', target: `the message to ${Array.isArray(input.to) ? input.to.join(', ') : input.to}`, mutating: true, translate: agentmailTranslate, err })
       }
     },
@@ -227,6 +239,8 @@ export function createAgentmailTools(api: AgentmailToolApi): Tool[] {
       to: recipientList,
       cc: z.array(z.string()).max(20).optional().describe('CC addresses: copied recipients, visible to everyone on the email.'),
       bcc: z.array(z.string()).max(20).optional().describe('BCC addresses: copied recipients hidden from everyone else on the email.'),
+      crmPurposeKey: CrmOperationsStableKeySchema.optional().describe('Explicit CRM purpose configured for a managed email account.'),
+      crmTemplateKey: CrmOperationsStableKeySchema.optional().describe('Configured CRM template key, when using a managed template.'),
       subject: z.string().describe('Email subject line.'),
       body: z
         .string()
@@ -258,6 +272,8 @@ export function createAgentmailTools(api: AgentmailToolApi): Tool[] {
         const inbox = await resolveInbox(api, input.fromInbox)
         if (!inbox.ok) return { data: inbox.error, isError: true }
         const result = await api.createDraft({
+          ...(input.crmPurposeKey ? { crmPurposeKey:input.crmPurposeKey } : {}),
+          ...(input.crmTemplateKey ? { crmTemplateKey:input.crmTemplateKey } : {}),
           inboxAddress: inbox.address,
           to: input.to,
           cc: input.cc,
@@ -276,6 +292,9 @@ export function createAgentmailTools(api: AgentmailToolApi): Tool[] {
           },
         }
       } catch (err) {
+        if (err instanceof CrmOperationsError && err.details?.reason==='provider_outcome_unknown') {
+          return { data:'The provider may have accepted the email. Verify delivery before retrying.',isError:true }
+        }
         return connectorError({ provider: 'AgentMail', tool: 'agentmailCreateDraft', target: `the draft to ${Array.isArray(input.to) ? input.to.join(', ') : input.to}`, mutating: true, translate: agentmailTranslate, err })
       }
     },

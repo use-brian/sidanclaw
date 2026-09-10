@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Temporary, row-bound conversational editor for one Brain Review entry.
  * Separate from EntryThread: this surface receives exactly one confirmed write
@@ -29,7 +31,7 @@ import { requestBrainRefresh } from "@/lib/brain-events";
 import { useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 type Props = {
   workspaceId: string;
@@ -430,15 +432,16 @@ export function EntryEditThread({
             }}
             disabled={busy}
             placeholder={labels.editThreadPlaceholder}
-            className="max-h-40 flex-1 resize-none field-sizing-content bg-transparent text-sm outline-none focus-visible:shadow-none placeholder:text-muted-foreground/60 disabled:opacity-60"
+            className="max-h-40 flex-1 resize-none field-sizing-content bg-transparent text-[16px] md:text-sm outline-none focus-visible:shadow-none placeholder:text-muted-foreground/60 disabled:opacity-60"
           />
+          {/* `size-11 sm:size-6` (C 16 / M3): the tap is the touch send path. */}
           {busy ? (
             <button
               type="button"
               onClick={abortStream}
               aria-label={labels.threadStop}
               title={labels.threadStop}
-              className="mb-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/80 text-background"
+              className="mb-0.5 inline-flex size-11 sm:size-6 shrink-0 items-center justify-center rounded-full bg-foreground/80 text-background"
             >
               <Square className="size-2.5" fill="currentColor" aria-hidden />
             </button>
@@ -450,7 +453,7 @@ export function EntryEditThread({
               aria-label={review.send}
               title={review.send}
               className={cn(
-                "mb-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full transition-colors",
+                "mb-0.5 inline-flex size-11 sm:size-6 shrink-0 items-center justify-center rounded-full transition-colors",
                 draft.trim()
                   ? "bg-action text-action-foreground hover:bg-action/90"
                   : "bg-muted text-muted-foreground",

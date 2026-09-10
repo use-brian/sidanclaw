@@ -1,11 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+/**
+ * Office artifact editor shell. Paints from the surface cache first
+ * (instant-navigation contract N1 / N2): the artifact row and the live
+ * snapshot are two cache keys fetched in PARALLEL (N7), the chrome paints
+ * from the home's list row while both are in flight, and the encrypted
+ * offline package is the cold seed for the snapshot when one is present.
+ * [COMP:app-web/office-editor-shell] [COMP:app-web/office-surface-cache]
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { APP_LEVEL_ASSISTANT_ID } from "@use-brian/shared";
-import { FileCheck2, FileSpreadsheet, FileText, History, ListChecks, MessageSquare, PanelRightClose, PanelRightOpen, Presentation, Route, Share2, Sparkles } from "lucide-react";
+import { FileCheck2, FileSpreadsheet, FileText, History, ListChecks, MessageSquare, MoreHorizontal, PanelRightClose, PanelRightOpen, Presentation, Redo2, Route, Share2, Sparkles, Undo2 } from "lucide-react";
 import type { OfficeCommand } from "@use-brian/office-model";
 import { PresenceAvatars } from "@/components/doc/presence-avatars";
+import { Skeleton } from "@/components/skeleton";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { OfficeJobActivity } from "./job-activity";
 import { DocumentEditor } from "./document-editor";
 import { PresentationEditor } from "./presentation-editor";
@@ -17,12 +27,12 @@ import type { DocumentCommentAnchor, DocumentSuggestionRange } from "./document/
 import { OfficeReview } from "./office-review";
 import { OfficeStartRecovery } from "./office-start-recovery";
 import { useT } from "@/lib/i18n/client";
-import { compileOfficeTemplateDraft, createOfficeComment, detachMissingOfficeComments, getOfficeArtifact, getOfficeSnapshot, initializeOfficeTemplateDraft, isOfficeStartFailed, listOfficeComments, listOfficeSuggestions, OfficeApiError, submitOfficeCommand, syncOfficeOfflineCommands, transitionOfficeLifecycle, waitForOfficeJob, type OfficeArtifact, type OfficeCommentThread, type OfficeLiveSnapshot, type OfficeSuggestion } from "@/lib/office/api";
+import { compileOfficeTemplateDraft, createOfficeComment, detachMissingOfficeComments, getOfficeArtifact, getOfficeSnapshot, initializeOfficeTemplateDraft, isOfficeStartFailed, listOfficeComments, listOfficeSuggestions, OfficeApiError, submitOfficeCommand, syncOfficeOfflineCommands, transitionOfficeLifecycle, waitForOfficeJob, type OfficeArtifact, type OfficeCommentThread, type OfficeFamily, type OfficeLiveSnapshot, type OfficeSuggestion } from "@/lib/office/api";
 import { useCollabProvider } from "@/lib/collab/use-collab-provider";
 import { usePresence, usePublishPresenceActivity, usePublishPresenceIdentity } from "@/lib/collab/use-presence";
 import { getUserInfo } from "@/lib/user";
 import { appendOfficeCommand, applyOfficeUpdate, createOfficeUndoManager, officeCommandIds, yDocToSnapshot } from "@use-brian/office-model";
-import { appendOfflineCommand, classifyOfficeReconnect, listOfflineJournal, loadOfflinePackage, removeOfflineJournalEntry, removeOfflinePackage, type OfficeOfflineStatus, type OfflineJournalEntry } from "@/lib/office/offline";
+import { appendOfflineCommand, classifyOfficeReconnect, listOfflineJournal, loadOfflinePackage, removeOfflineJournalEntry, removeOfflinePackage, type LoadedOfficeOfflinePackage, type OfficeOfflineStatus, type OfflineJournalEntry } from "@/lib/office/offline";
 import { handleOfficeHistoryShortcut, observeOfficeHistory, observeOfficeHistoryReadiness } from "@/lib/office/editor-history";
 import { OfficeTopbar } from "./office-topbar";
 import { cn } from "@/lib/utils";
@@ -33,17 +43,50 @@ import { OfficeHistoryControls } from "./office-history-controls";
 import { OfficeHistory } from "./history/office-history";
 import { OfficeSharing } from "./sharing/office-sharing";
 import { ReclassifyContextButton } from "@/components/context/reclassify-context-dialog";
+import { invalidateSurfaceCache, loadSurfaceCache, mutateSurfaceCache, readSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { invalidateOfficeList, officeArtifactCacheKey, officeSnapshotCacheKey } from "@/lib/surface-prefetch";
+import { officeArtifactFromListCache, useOfficeCacheRevalidation } from "@/lib/office/surface-cache";
+import { isPhoneViewport } from "@/lib/viewport";
+
+type Panel = "activity" | "comments" | "suggestions" | "history" | "sharing" | "review" | "routing";
+
+function packageLive(pkg: LoadedOfficeOfflinePackage): OfficeLiveSnapshot {
+  return { snapshot: pkg.payload.snapshot, seq: pkg.payload.seq, baseVersion: pkg.payload.baseVersion };
+}
 
 export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: string; artifactId: string }) {
+  // Keyed per artifact: every piece of working state below (live snapshot,
+  // offline copy, denial, open panel) belongs to ONE artifact and must start
+  // clean for the next id - a remount is the reset, never an effect.
+  return <OfficeArtifactShell key={artifactId} workspaceId={workspaceId} artifactId={artifactId} />;
+}
+
+function OfficeArtifactShell({ workspaceId, artifactId }: { workspaceId: string; artifactId: string }) {
   const t = useT().office;
   const router = useRouter();
-  const [artifact, setArtifact] = useState<OfficeArtifact | null | undefined>();
-  const [live, setLive] = useState<OfficeLiveSnapshot | null>(null);
+  const templateId = useSearchParams().get("templateId");
+  const artifactKey = officeArtifactCacheKey(artifactId);
+  const snapshotKey = officeSnapshotCacheKey(artifactId);
+  // An authoritative 401 / 403 / 404 evicts and stops both hooks (key null);
+  // it never falls back to a cached or offline copy (N2).
+  const [denied, setDenied] = useState(false);
+  const artifactEntry = useCachedResource<OfficeArtifact>(denied ? null : artifactKey, () => getOfficeArtifact(artifactId));
+  const snapshotEntry = useCachedResource<OfficeLiveSnapshot>(denied ? null : snapshotKey, () => getOfficeSnapshot(artifactId));
+  useOfficeCacheRevalidation([artifactKey, snapshotKey]);
+  // Full offline mode: the network failed and a pinned package took over.
+  const [offline, setOffline] = useState<LoadedOfficeOfflinePackage | null>(null);
+  const [offlineLookup, setOfflineLookup] = useState<"idle" | "missing">("idle");
+  // Cold seed: the package painted while the network is still in flight.
+  const [seed, setSeed] = useState<LoadedOfficeOfflinePackage | null>(null);
+  const [liveLocal, setLiveLocal] = useState<OfficeLiveSnapshot | null>(null);
+  const [listRow] = useState(() => officeArtifactFromListCache(workspaceId, artifactId));
   const [targets, setTargets] = useState<string[]>([]);
   const [commentAnchor, setCommentAnchor] = useState<DocumentCommentAnchor | null>(null);
   const [suggestionRange, setSuggestionRange] = useState<DocumentSuggestionRange | null>(null);
-  const [panel, setPanel] = useState<"activity" | "comments" | "suggestions" | "history" | "sharing" | "review" | "routing">("activity");
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [panel, setPanel] = useState<Panel>("activity");
+  // Closed by default on a phone (report B row 13): open, the stacked panel
+  // took the editor's height; the collapsed strip reopens it in one tap.
+  const [panelOpen, setPanelOpen] = useState(() => !isPhoneViewport());
   const [presentOpen, setPresentOpen] = useState(false);
   const [suggestMode, setSuggestMode] = useState(false);
   const [templateCompileState, setTemplateCompileState] = useState<"idle" | "queued" | "failed">("idle");
@@ -51,7 +94,6 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
   const [cachedComments, setCachedComments] = useState<OfficeCommentThread[] | null>(null);
   const [commentThreads, setCommentThreads] = useState<OfficeCommentThread[]>([]);
   const [suggestions, setSuggestions] = useState<OfficeSuggestion[]>([]);
-  const [offlineCopyAt, setOfflineCopyAt] = useState<string | null>(null);
   const [reconnectStatus, setReconnectStatus] = useState<OfficeOfflineStatus>("synced");
   const [recoveryState, setRecoveryState] = useState<"idle" | "moving" | "failed">("idle");
   const [templateDraftFailed, setTemplateDraftFailed] = useState(false);
@@ -62,66 +104,102 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
   const offlineUndoneCommands = useRef(new Map<string, Extract<OfflineJournalEntry, { kind: "command" }>>());
   const offlineHistoryQueue = useRef<Promise<void>>(Promise.resolve());
   const reconcileHistoryRef = useRef<(action: "undo" | "redo", before: Set<string>, after: Set<string>) => void>(() => undefined);
-  const templateId = useSearchParams().get("templateId");
+  const templateInitRef = useRef(false);
+
+  const artifactRow = artifactEntry.data;
+  const artifactFailed = !denied && artifactRow === undefined && artifactEntry.error !== undefined && !artifactEntry.revalidating && offlineLookup === "missing";
+  // Paint order: the offline copy (network gone) > the fetched row > the cold
+  // seed > the list row the home just painted. `undefined` means nothing is
+  // known yet, `null` means denied or unrecoverable.
+  const artifact: OfficeArtifact | null | undefined = denied || artifactFailed ? null : offline?.payload.artifact ?? artifactRow ?? seed?.payload.artifact ?? listRow ?? undefined;
+  const offlineLive = useMemo(() => (offline ? packageLive(offline) : null), [offline]);
+  const seedLive = useMemo(() => (seed ? packageLive(seed) : null), [seed]);
+  const live: OfficeLiveSnapshot | null = liveLocal ?? offlineLive ?? snapshotEntry.data ?? seedLive;
+  const liveRef = useRef<OfficeLiveSnapshot | null>(live);
+  liveRef.current = live;
+  const snapshotPending = !denied && !offline && snapshotEntry.data === undefined && snapshotEntry.error === undefined;
+  const offlineCopyAt = offline?.savedAt ?? null;
   const collab = useCollabProvider(artifact && live && artifact.lifecycleState === "active" && !isOfficeStartFailed(artifact) ? `office:${artifactId}` : null);
   const currentUser = getUserInfo();
   useEffect(() => chatDockSuppression.suppress(), []);
   usePublishPresenceIdentity(collab.provider, currentUser);
   usePublishPresenceActivity(collab.provider);
   const presence = usePresence(collab.provider);
+
+  // Cold seed: when nothing is cached for this snapshot, the encrypted
+  // package (if the user saved one) paints the editor while the network
+  // answers. Paint only - it never enters offline mode by itself.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (readSurfaceCache<OfficeLiveSnapshot>(snapshotKey).data !== undefined) return;
     let active = true;
-    const load = async () => {
-      try {
-        const nextArtifact = await getOfficeArtifact(artifactId);
-        if (!active) return;
-        setArtifact(nextArtifact);
-        if (nextArtifact.lifecycleState !== "active") await removeOfflinePackage(artifactId).catch(() => undefined);
-        setOfflineCopyAt(null);
-        setCachedComments(null);
-        setReconnectStatus("synced");
-        setSuggestMode(nextArtifact.role === "comment");
-        setTemplateDraftFailed(false);
-        try {
-          setLive(await getOfficeSnapshot(artifactId));
-        } catch (error) {
-          const uninitializedTemplate = nextArtifact.mode === "template" && templateId && error instanceof OfficeApiError && error.status === 409 && error.message === "artifact_not_ready";
-          if (uninitializedTemplate) {
-            try {
-              setLive(await initializeOfficeTemplateDraft({ templateId, workspaceId, draftArtifactId: artifactId }));
-              return;
-            } catch {
-              setTemplateDraftFailed(true);
-            }
-          }
-          if (nextArtifact.job && !["failed", "cancelled"].includes(nextArtifact.job.status)) timer = setTimeout(load, 1500);
-        }
-      } catch (error) {
-        if (!active) return;
-        const denied = error instanceof OfficeApiError && [401, 403, 404].includes(error.status);
-        if (denied) {
-          await removeOfflinePackage(artifactId).catch(() => undefined);
-          if (active) setArtifact(null);
-          return;
-        }
-        const cached = await loadOfflinePackage(artifactId).catch(() => null);
-        if (!active) return;
-        if (!cached) { setArtifact(null); return; }
-        setArtifact(cached.payload.artifact);
-        setLive({ snapshot: cached.payload.snapshot, seq: cached.payload.seq, baseVersion: cached.payload.baseVersion });
-        setCachedComments(cached.payload.comments);
-        setCachedUpdate(Uint8Array.from(atob(cached.payload.yjsUpdate), (character) => character.charCodeAt(0)));
-        setOfflineCopyAt(cached.savedAt);
-        setReconnectStatus("offline");
-        setSuggestMode(cached.payload.artifact.role === "comment");
-      }
-    };
-    void load();
-    const reconnect = () => { void load(); };
+    void loadOfflinePackage(artifactId).then((pkg) => { if (active && pkg) setSeed(pkg); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [artifactId, snapshotKey]);
+
+  // A fetched row is authoritative: leave offline mode, reset the per-load
+  // flags, and drop a package the lifecycle no longer allows.
+  useEffect(() => {
+    if (!artifactRow) return;
+    setOffline(null);
+    setOfflineLookup("idle");
+    setCachedComments(null);
+    setReconnectStatus("synced");
+    setTemplateDraftFailed(false);
+    if (artifactRow.lifecycleState !== "active") void removeOfflinePackage(artifactId).catch(() => undefined);
+  }, [artifactId, artifactRow]);
+
+  useEffect(() => {
+    if (artifact?.role) setSuggestMode(artifact.role === "comment");
+  }, [artifact?.role]);
+
+  // Row fetch failed with no value to show: denial evicts, anything else
+  // tries the pinned package and enters offline mode when one exists.
+  useEffect(() => {
+    const error = artifactEntry.error;
+    if (denied || artifactRow !== undefined || error === undefined || artifactEntry.revalidating) return;
+    if (error instanceof OfficeApiError && [401, 403, 404].includes(error.status)) {
+      setDenied(true);
+      invalidateSurfaceCache(artifactKey);
+      invalidateSurfaceCache(snapshotKey);
+      void removeOfflinePackage(artifactId).catch(() => undefined);
+      return;
+    }
+    let active = true;
+    void loadOfflinePackage(artifactId).catch(() => null).then((cached) => {
+      if (!active) return;
+      if (!cached) { setOfflineLookup("missing"); return; }
+      setOffline(cached);
+      setCachedComments(cached.payload.comments);
+      setCachedUpdate(Uint8Array.from(atob(cached.payload.yjsUpdate), (character) => character.charCodeAt(0)));
+      setReconnectStatus("offline");
+    });
+    return () => { active = false; };
+  }, [artifactEntry.error, artifactEntry.revalidating, artifactId, artifactKey, artifactRow, denied, snapshotKey]);
+
+  // Snapshot fetch failed: an uninitialized template draft is initialized
+  // into the same cache slot; a still-running generation / import job polls
+  // both keys until the snapshot exists.
+  useEffect(() => {
+    const error = snapshotEntry.error;
+    if (denied || offline || !artifactRow || snapshotEntry.data !== undefined || error === undefined || snapshotEntry.revalidating) return;
+    const uninitializedTemplate = artifactRow.mode === "template" && templateId && error instanceof OfficeApiError && error.status === 409 && error.message === "artifact_not_ready";
+    if (uninitializedTemplate && !templateInitRef.current) {
+      templateInitRef.current = true;
+      void loadSurfaceCache(snapshotKey, () => initializeOfficeTemplateDraft({ templateId, workspaceId, draftArtifactId: artifactId })).then((initialized) => {
+        if (initialized === undefined) setTemplateDraftFailed(true);
+      });
+      return;
+    }
+    if (!artifactRow.job || ["failed", "cancelled"].includes(artifactRow.job.status)) return;
+    const timer = setTimeout(() => { void Promise.all([artifactEntry.refresh(), snapshotEntry.refresh()]); }, 1500);
+    return () => clearTimeout(timer);
+  }, [artifactEntry.refresh, artifactId, artifactRow, denied, offline, snapshotEntry.data, snapshotEntry.error, snapshotEntry.refresh, snapshotEntry.revalidating, snapshotKey, templateId, workspaceId]);
+
+  useEffect(() => {
+    const reconnect = () => { void Promise.all([artifactEntry.refresh(), snapshotEntry.refresh()]); };
     window.addEventListener("online", reconnect);
-    return () => { active = false; if (timer) clearTimeout(timer); window.removeEventListener("online", reconnect); };
-  }, [artifactId, templateId, workspaceId]);
+    return () => window.removeEventListener("online", reconnect);
+  }, [artifactEntry.refresh, snapshotEntry.refresh]);
   useEffect(() => {
     if (!cachedUpdate || !collab.doc) return;
     applyOfficeUpdate(collab.doc, cachedUpdate);
@@ -133,11 +211,11 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
     const refresh = () => {
       try {
         const snapshot = yDocToSnapshot(doc);
-        setLive((previous) => ({
+        setLiveLocal({
           snapshot,
-          seq: previous?.seq ?? 0,
-          baseVersion: previous?.baseVersion ?? 1,
-        }));
+          seq: liveRef.current?.seq ?? 0,
+          baseVersion: liveRef.current?.baseVersion ?? 1,
+        });
       } catch {
         // A newly created artifact can connect before its first snapshot is
         // initialized. The generation/import poll above remains the fallback.
@@ -177,8 +255,11 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
         if (result.status === "synced") await Promise.all(commands.map(removeOfflineJournalEntry));
         if (classified.quarantine) {
           await removeOfflinePackage(artifactId).catch(() => undefined);
-          setArtifact(null);
-          setLive(null);
+          invalidateSurfaceCache(artifactKey);
+          invalidateSurfaceCache(snapshotKey);
+          setDenied(true);
+          setOffline(null);
+          setLiveLocal(null);
           return;
         }
       }
@@ -188,7 +269,7 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
         await removeOfflineJournalEntry(entry);
       }
     }).catch(() => undefined);
-  }, [artifactId, collab.status, collab.synced]);
+  }, [artifactId, artifactKey, collab.status, collab.synced, snapshotKey]);
   useEffect(() => {
     const doc = collab.doc;
     if (!doc || artifact?.lifecycleState !== "active" || artifact.role !== "edit" || suggestMode) return;
@@ -251,13 +332,15 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
     const after = new Set(officeCommandIds(doc));
     reconcileHistoryRef.current(action, before, after);
   }
-  if (artifact === undefined) return <div className="flex flex-1 flex-col"><OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: t.editorLoading }]} /><p className="m-auto text-sm text-muted-foreground">{t.editorLoading}</p></div>;
-  if (artifact === null) return <div className="flex flex-1 flex-col"><OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: t.editorFailed }]} /><p className="m-auto text-sm text-destructive">{t.editorFailed}</p></div>;
+  // Nothing known yet (no cached row, no list row, no package): a
+  // geometry-matched skeleton under the bare topbar, never a sentence (N4).
+  if (artifact === undefined) return <div className="flex min-h-0 flex-1 flex-col" data-office-shell-state="loading" aria-busy="true"><OfficeTopbar workspaceId={workspaceId} breadcrumbs={[]} /><OfficeEditorSkeleton /></div>;
+  if (artifact === null) return <div className="flex flex-1 flex-col" data-office-shell-state="failed"><OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: t.editorFailed }]} /><p className="m-auto text-sm text-destructive">{t.editorFailed}</p></div>;
   const Icon = artifact.family === "document" ? FileText : artifact.family === "presentation" ? Presentation : FileSpreadsheet;
-  if (templateDraftFailed) return <div className="flex flex-1 flex-col"><OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: artifact.title }]} /><p className="m-auto text-sm text-destructive">{t.editorFailed}</p></div>;
+  if (templateDraftFailed) return <div className="flex flex-1 flex-col" data-office-shell-state="failed"><OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: artifact.title }]} /><p className="m-auto text-sm text-destructive">{t.editorFailed}</p></div>;
   if (isOfficeStartFailed(artifact)) return <OfficeStartRecovery workspaceId={workspaceId} title={artifact.title} family={artifact.family} canTrash={artifact.role === "edit"} state={recoveryState} onTrash={() => {
     setRecoveryState("moving");
-    void transitionOfficeLifecycle(artifactId, "trash", "Office creation did not start").then(() => router.push(`/w/${workspaceId}/office`)).catch(() => setRecoveryState("failed"));
+    void transitionOfficeLifecycle(artifactId, "trash", "Office creation did not start").then(() => { invalidateOfficeList(workspaceId); invalidateSurfaceCache(artifactKey); router.push(`/w/${workspaceId}/office`); }).catch(() => setRecoveryState("failed"));
   }} />;
   async function apply(command: OfficeCommand) {
     if (!live) return;
@@ -271,12 +354,17 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
       return;
     }
     const result = await submitOfficeCommand(artifactId, live.seq, command, suggestMode || artifact!.role === "comment" ? "suggest" : "apply");
-    if ("snapshot" in result) setLive(result);
+    if ("snapshot" in result) setLiveLocal(result);
   }
   async function refreshArtifact() {
-    const [nextArtifact, nextLive] = await Promise.all([getOfficeArtifact(artifactId), getOfficeSnapshot(artifactId)]);
-    setArtifact(nextArtifact);
-    setLive(nextLive);
+    await Promise.all([artifactEntry.refresh(), snapshotEntry.refresh()]);
+    // The server's snapshot is the truth after a revision / restore; the
+    // collab doc re-derives the working copy on its next update.
+    setLiveLocal(null);
+  }
+  function onLifecycle(next: OfficeArtifact) {
+    mutateSurfaceCache<OfficeArtifact>(artifactKey, () => next);
+    invalidateOfficeList(workspaceId);
   }
   async function requestBrianRevision(instruction: string, requestedTargetIds = targets, anchorOverride?: OfficeCommentThread["anchor"]) {
     if (!artifact || !live || artifact.lifecycleState !== "active" || artifact.role === "view" || offlineCopyAt || collab.status === "disconnected" || requestedTargetIds.length === 0) return null;
@@ -313,7 +401,7 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
     }
   }
   const editorRole = artifact.lifecycleState === "active" ? artifact.role : "view" as const;
-  const editor = live?.snapshot.family === "document" ? <DocumentEditor snapshot={live.snapshot} baseVersion={live.baseVersion} role={editorRole} suggestMode={suggestMode} doc={collab.doc} provider={collab.provider} currentUser={currentUser} synced={collab.synced || Boolean(offlineCopyAt)} onCommand={(command) => void apply(command)} onSelectTargets={setTargets} onSelectCommentAnchor={setCommentAnchor} onSelectSuggestionRange={setSuggestionRange} commentThreads={commentThreads} suggestions={suggestions} /> : live?.snapshot.family === "presentation" ? <PresentationEditor snapshot={live.snapshot} baseVersion={live.baseVersion} role={editorRole} suggestMode={suggestMode} onCommand={(command) => void apply(command)} onSelectTargets={setTargets} /> : live?.snapshot.family === "spreadsheet" ? <SpreadsheetEditor snapshot={live.snapshot} baseVersion={live.baseVersion} role={editorRole} suggestMode={suggestMode} onCommand={(command) => void apply(command)} onSelectTargets={setTargets} onEditImageWithBrian={artifact.role !== "view" && artifact.lifecycleState === "active" && !offlineCopyAt && collab.status !== "disconnected" ? editSpreadsheetImageWithBrian : undefined} /> : <p className="m-auto text-sm text-muted-foreground">{t.running}</p>;
+  const editor = live?.snapshot.family === "document" ? <DocumentEditor snapshot={live.snapshot} baseVersion={live.baseVersion} role={editorRole} suggestMode={suggestMode} doc={collab.doc} provider={collab.provider} currentUser={currentUser} synced={collab.synced || Boolean(offlineCopyAt)} onCommand={(command) => void apply(command)} onSelectTargets={setTargets} onSelectCommentAnchor={setCommentAnchor} onSelectSuggestionRange={setSuggestionRange} commentThreads={commentThreads} suggestions={suggestions} /> : live?.snapshot.family === "presentation" ? <PresentationEditor snapshot={live.snapshot} baseVersion={live.baseVersion} role={editorRole} suggestMode={suggestMode} onCommand={(command) => void apply(command)} onSelectTargets={setTargets} /> : live?.snapshot.family === "spreadsheet" ? <SpreadsheetEditor snapshot={live.snapshot} baseVersion={live.baseVersion} role={editorRole} suggestMode={suggestMode} onCommand={(command) => void apply(command)} onSelectTargets={setTargets} onEditImageWithBrian={artifact.role !== "view" && artifact.lifecycleState === "active" && !offlineCopyAt && collab.status !== "disconnected" ? editSpreadsheetImageWithBrian : undefined} /> : snapshotPending ? <OfficeEditorSkeleton family={artifact.family} /> : <p className="m-auto text-sm text-muted-foreground">{t.running}</p>;
   const showTemplateRouting = artifact.mode === "template" && live?.snapshot.family === "presentation" && Boolean(templateId);
   const templateRoutingBlocked = showTemplateRouting && (!templateRoutingState.ready || templateRoutingState.dirty || templateRoutingState.saving);
   const brianRevisionDisabledReason = targets.length === 0 ? t.brianSelectionRequired
@@ -322,18 +410,36 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
     : offlineCopyAt || collab.status === "disconnected" ? t.brianOfflineUnavailable
     : undefined;
   const canRequestBrianRevision = !brianRevisionDisabledReason && Boolean(live);
+  const canSuggest = artifact.family === "document" && artifact.role === "edit" && artifact.lifecycleState === "active";
+  const toggleSuggestMode = () => { const next = !suggestMode; setSuggestMode(next); if (next) { setPanel("suggestions"); setPanelOpen(true); } };
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: artifact.title }]} right={<div className="flex items-center gap-2"><ReclassifyContextButton workspaceId={workspaceId} primitive="office" rowId={artifactId} />{artifact.family === "document" && artifact.role === "edit" && artifact.lifecycleState === "active" ? <button type="button" aria-pressed={suggestMode} onClick={() => { const next = !suggestMode; setSuggestMode(next); if (next) { setPanel("suggestions"); setPanelOpen(true); } }} className="rounded border px-2 py-1 text-xs aria-pressed:bg-amber-50 aria-pressed:text-amber-950">{suggestMode ? t.editMode : t.suggestMode}</button> : null}<OfficeHistoryControls canUndo={historyState.canUndo} canRedo={historyState.canRedo} onUndo={() => runHistory("undo")} onRedo={() => runHistory("redo")} /><Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden /><PresenceAvatars users={presence} /></div>} />
+    <div className="flex min-h-0 flex-1 flex-col" data-office-shell-state="ready">
+      {/* Below `md` the right cluster folds Suggest + undo / redo into one
+          menu (report B row 12): with Reclassify, the family icon and presence
+          beside them the desktop cluster is wider than a 360px bar. */}
+      <OfficeTopbar workspaceId={workspaceId} breadcrumbs={[{ label: artifact.title }]} right={<div className="flex items-center gap-2"><ReclassifyContextButton workspaceId={workspaceId} primitive="office" rowId={artifactId} /><div className="hidden items-center gap-2 md:flex">{canSuggest ? <button type="button" aria-pressed={suggestMode} onClick={toggleSuggestMode} className="rounded border px-2 py-1 text-xs aria-pressed:bg-amber-50 aria-pressed:text-amber-950">{suggestMode ? t.editMode : t.suggestMode}</button> : null}<OfficeHistoryControls canUndo={historyState.canUndo} canRedo={historyState.canRedo} onUndo={() => runHistory("undo")} onRedo={() => runHistory("redo")} /></div><div className="md:hidden"><DropdownMenu><DropdownMenuTrigger render={<button type="button" aria-label={t.editorActions} title={t.editorActions} className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground" data-office-editor-actions="true"><MoreHorizontal className="size-4" /></button>} /><DropdownMenuContent align="end"><DropdownMenuItem disabled={!historyState.canUndo} onClick={() => runHistory("undo")}><Undo2 />{t.undo}</DropdownMenuItem><DropdownMenuItem disabled={!historyState.canRedo} onClick={() => runHistory("redo")}><Redo2 />{t.redo}</DropdownMenuItem>{canSuggest ? <><DropdownMenuSeparator /><DropdownMenuItem onClick={toggleSuggestMode}><ListChecks />{suggestMode ? t.editMode : t.suggestMode}</DropdownMenuItem></> : null}</DropdownMenuContent></DropdownMenu></div><Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden /><PresenceAvatars users={presence} /></div>} />
+      {/* The topbar breadcrumb truncates to a few characters at 360px; the
+          full title gets its own line on phones (report B row 50). */}
+      <p className="line-clamp-2 border-b px-3 py-1.5 text-xs font-medium md:hidden" data-office-title-line="true">{artifact.title}</p>
       {offlineCopyAt ? <div className="border-b bg-amber-50 px-4 py-2 text-xs text-amber-950">{reconnectStatus === "needs_attention" ? t.offlineNeedsAttention : t.offlineCopy.replace("{time}", new Date(offlineCopyAt).toLocaleString())}</div> : null}
       {artifact.mode === "template" ? <div className="flex items-center justify-between gap-3 border-b bg-amber-50 px-4 py-2 text-xs font-medium text-amber-950"><span>{t.templateMode}</span>{templateId ? <button type="button" title={templateRoutingBlocked ? t.routingSaveBeforePublish : t.templateAdmit} disabled={templateCompileState === "queued" || !live || templateRoutingBlocked} className="rounded bg-amber-950 px-3 py-1.5 text-amber-50 disabled:opacity-50" onClick={() => void publishTemplate()}>{templateRoutingBlocked ? t.routingSaveBeforePublish : templateCompileState === "queued" ? t.templateCompiling : templateCompileState === "failed" ? t.templateCompileFailed : t.templateAdmit}</button> : null}</div> : null}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <main ref={editorRootRef} className="flex min-h-0 flex-1 overflow-hidden bg-muted/30">{editor}</main>
-        <aside className={cn("shrink-0 overflow-y-auto border-t bg-background transition-[width] lg:border-l lg:border-t-0", panelOpen ? showTemplateRouting && panel === "routing" ? "w-full lg:w-80" : "w-full lg:w-64" : "w-full lg:w-12")} data-office-panel={panelOpen ? "open" : "collapsed"}>
+        {/* Below `lg` the panel stacks LAST in this column, and below `sm` the
+            document toolbar is a `fixed inset-x-2 bottom-2` bar over it - so
+            without reserved space the collapsed 40px strip (the ONLY way to
+            reopen Brian / Comments / History / Sharing / File actions) sat
+            entirely under the toolbar (responsive contract M1 / M6). The
+            bottom padding reserves the toolbar's height plus the home
+            indicator; `sm+` uses the in-flow desktop toolbar and needs none.
+            The stacked panel is also capped at 45dvh with its own scroll
+            (report B row 13): open, its content used to take the whole
+            column and `main` collapsed to nothing. */}
+        <aside className={cn("shrink-0 overflow-y-auto border-t bg-background transition-[width] max-sm:pb-[calc(4rem+env(safe-area-inset-bottom))] max-lg:max-h-[45dvh] max-lg:min-h-0 lg:border-l lg:border-t-0", panelOpen ? showTemplateRouting && panel === "routing" ? "w-full lg:w-80" : "w-full lg:w-64" : "w-full lg:w-12")} data-office-panel={panelOpen ? "open" : "collapsed"}>
           {panelOpen ? <>
             <div className="flex items-center justify-between gap-2 border-b p-2">
               <div className="flex min-w-0 items-center gap-2"><span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600"><Sparkles className="size-3.5" aria-hidden /></span><div className="min-w-0"><p className="truncate text-xs font-semibold">{t.brian}</p><p className="truncate text-[11px] text-muted-foreground">{t.workspaceAssistant}</p></div></div>
-              <button type="button" onClick={() => setPanelOpen(false)} aria-label={t.collapseAssistantPanel} title={t.collapseAssistantPanel} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"><PanelRightClose className="size-4" /></button>
+              <button type="button" onClick={() => setPanelOpen(false)} aria-label={t.collapseAssistantPanel} title={t.collapseAssistantPanel} className="flex size-11 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground sm:size-7"><PanelRightClose className="size-4" /></button>
             </div>
             <div className={cn("grid border-b p-1", showTemplateRouting ? "grid-cols-4" : "grid-cols-3")}>
               {showTemplateRouting ? <PanelButton active={panel === "routing"} label={t.routing} icon={<Route className="size-3" />} onClick={() => setPanel("routing")} /> : null}
@@ -348,11 +454,11 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
             {panel === "activity" ? <OfficeJobActivity jobId={artifact.job?.id} snapshot={live?.snapshot} targetIds={targets} canRequestRevision={canRequestBrianRevision} requestDisabledReason={brianRevisionDisabledReason} onRequestRevision={requestBrianRevision} onRevisionCompleted={refreshArtifact} /> : null}
             {panel === "comments" ? <div className="p-3"><OfficeComments artifactId={artifactId} workspaceId={workspaceId} version={artifact.version} targetIds={targets} selectionAnchor={artifact.family === "document" ? commentAnchor : null} anchorKind={artifact.family === "document" ? "block" : artifact.family === "spreadsheet" ? "table_cell" : "object"} canComment={artifact.role !== "view"} offline={collab.status === "disconnected" || Boolean(offlineCopyAt)} initialThreads={cachedComments ?? undefined} onRevisionCompleted={refreshArtifact} onThreadsChange={setCommentThreads} /></div> : null}
             {panel === "suggestions" ? <div className="p-3"><OfficeSuggestions artifactId={artifactId} canDecide={artifact.role === "edit" && artifact.lifecycleState === "active" && !offlineCopyAt} canSuggest={artifact.family === "document" && artifact.role !== "view" && artifact.lifecycleState === "active" && suggestMode} actorId={currentUser?.id} baseVersion={live?.baseVersion} expectedSeq={live?.seq} proposal={suggestionRange} offline={collab.status === "disconnected" || Boolean(offlineCopyAt)} onApplied={refreshArtifact} onSuggestionsChange={setSuggestions} /></div> : null}
-            {panel === "history" ? <div className="p-3"><OfficeHistory artifactId={artifactId} artifactTitle={artifact.title} currentVersion={artifact.version} canEdit={artifact.role === "edit" && artifact.lifecycleState === "active" && !offlineCopyAt} onRestored={refreshArtifact} onCopied={(copiedId) => router.push(`/w/${workspaceId}/office/${copiedId}`)} /></div> : null}
+            {panel === "history" ? <div className="p-3"><OfficeHistory artifactId={artifactId} artifactTitle={artifact.title} currentVersion={artifact.version} canEdit={artifact.role === "edit" && artifact.lifecycleState === "active" && !offlineCopyAt} onRestored={refreshArtifact} onCopied={(copiedId) => { invalidateOfficeList(workspaceId); router.push(`/w/${workspaceId}/office/${copiedId}`); }} /></div> : null}
             {panel === "sharing" ? <div className="p-3"><OfficeSharing artifactId={artifactId} /></div> : null}
-            {panel === "review" ? <OfficeReview artifact={artifact} artifactId={artifactId} workspaceId={workspaceId} snapshot={live?.snapshot ?? undefined} selectedObjectIds={targets} onLifecycle={setArtifact} onPresent={() => setPresentOpen(true)} offlineCopy={Boolean(offlineCopyAt)} /> : null}
+            {panel === "review" ? <OfficeReview artifact={artifact} artifactId={artifactId} workspaceId={workspaceId} snapshot={live?.snapshot ?? undefined} selectedObjectIds={targets} onLifecycle={onLifecycle} onPresent={() => setPresentOpen(true)} offlineCopy={Boolean(offlineCopyAt)} /> : null}
           </> : <div className="flex items-center gap-1 p-1 lg:flex-col">
-            <button type="button" onClick={() => setPanelOpen(true)} aria-label={t.expandAssistantPanel} title={t.expandAssistantPanel} className="rounded p-2 text-muted-foreground hover:bg-muted hover:text-foreground"><PanelRightOpen className="size-4" /></button>
+            <button type="button" onClick={() => setPanelOpen(true)} aria-label={t.expandAssistantPanel} title={t.expandAssistantPanel} className="flex size-11 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground sm:size-8"><PanelRightOpen className="size-4" /></button>
             {showTemplateRouting ? <CompactPanelButton active={panel === "routing"} label={t.routing} icon={<Route className="size-4" />} onClick={() => { setPanel("routing"); setPanelOpen(true); }} /> : null}
             <CompactPanelButton active={panel === "activity"} label={t.brian} icon={<Sparkles className="size-4" />} onClick={() => { setPanel("activity"); setPanelOpen(true); }} />
             <CompactPanelButton active={panel === "comments"} label={t.comments} icon={<MessageSquare className="size-4" />} onClick={() => { setPanel("comments"); setPanelOpen(true); }} />
@@ -366,11 +472,24 @@ export function OfficeEditorShell({ workspaceId, artifactId }: { workspaceId: st
       {presentOpen && live?.snapshot.family === "presentation" ? <PresentationPresenter snapshot={live.snapshot} onClose={() => setPresentOpen(false)} /> : null}
       {/* This shell suppresses the chat dock and has no replacement chat, so the
           workspace recorder rides the sticky fallback cluster. Hidden while
-          presenting - the presenter is a deliberately chrome-free surface. */}
-      {!presentOpen ? <DockRecorderFallback /> : null}
+          presenting - the presenter is a deliberately chrome-free surface.
+          On a phone with a Document open it lifts above the fixed toolbar
+          (56px + gap) so the toolbar's trailing `...` trigger stays
+          reachable (report B row 15). */}
+      {!presentOpen ? <DockRecorderFallback className={artifact.family === "document" ? "max-sm:bottom-20" : undefined} /> : null}
     </div>
   );
 }
 
-function PanelButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: React.ReactNode; onClick(): void }) { return <button type="button" onClick={onClick} className={`flex flex-1 items-center justify-center gap-1 rounded px-2 py-1.5 text-xs ${active ? "bg-muted font-medium" : "text-muted-foreground"}`}>{icon}{label}</button>; }
-function CompactPanelButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: React.ReactNode; onClick(): void }) { return <button type="button" onClick={onClick} aria-label={label} title={label} className={cn("rounded p-2 text-muted-foreground hover:bg-muted hover:text-foreground", active && "bg-muted text-foreground")}>{icon}</button>; }
+/** Editor-shaped cold fallback: a toolbar row and one page / sheet / slide block. */
+function OfficeEditorSkeleton({ family }: { family?: OfficeFamily }) {
+  return <div className="flex min-h-0 w-full flex-1 flex-col animate-fade-in" data-office-editor-skeleton={family ?? "unknown"} aria-hidden>
+    <div className="flex h-11 shrink-0 items-center gap-1.5 border-b bg-background px-3">{Array.from({ length: 8 }).map((_, index) => <Skeleton key={index} className="size-7 rounded" />)}</div>
+    <div className="flex min-h-0 flex-1 justify-center overflow-hidden bg-muted/40 p-4 sm:p-6">
+      {family === "spreadsheet" ? <Skeleton className="h-full w-full rounded-md" /> : family === "presentation" ? <Skeleton className="aspect-video w-full max-w-4xl self-start rounded-md" /> : <Skeleton className="h-full w-full max-w-[612pt] rounded-sm" />}
+    </div>
+  </div>;
+}
+
+function PanelButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: React.ReactNode; onClick(): void }) { return <button type="button" onClick={onClick} className={`flex min-h-11 flex-1 items-center justify-center gap-1 rounded px-2 py-1.5 text-xs sm:min-h-0 ${active ? "bg-muted font-medium" : "text-muted-foreground"}`}>{icon}{label}</button>; }
+function CompactPanelButton({ active, label, icon, onClick }: { active: boolean; label: string; icon: React.ReactNode; onClick(): void }) { return <button type="button" onClick={onClick} aria-label={label} title={label} className={cn("flex size-11 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground sm:size-8", active && "bg-muted text-foreground")}>{icon}</button>; }

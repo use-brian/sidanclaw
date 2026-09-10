@@ -40,7 +40,7 @@ import { listCompanies, listContacts, listDeals } from '../db/crm.js'
 import { listTasks as listWorkspaceTasks } from '../db/tasks.js'
 import { resolveWorkspaceViewpoint } from '../db/workspace-viewpoint.js'
 import type { KnowledgeStore } from '../db/knowledge-store.js'
-import { projectBrainGraphHierarchy } from '../brain-graph-hierarchy.js'
+import { FOCUS_ID_LIMIT, projectBrainGraphHierarchy } from '../brain-graph-hierarchy.js'
 
 const BLOCKED_KNOWLEDGE_URL_PROTOCOLS = new Set([
   'about:', 'blob:', 'chrome:', 'chrome-extension:', 'data:', 'devtools:',
@@ -1040,6 +1040,12 @@ export function brainRoutes(deps: {
    *     `kb_chunk` remain deferred.
    *   - `degree` is computed in-route from the edge list so the client
    *     can size nodes by connection count without a separate query.
+   *   - `focusIds=<id,id,...>` (+ `reveal=1`) marks exact entries: the
+   *     response's `focusNodeIds` lists the visible matches and
+   *     `focusGroupCounts` counts the matches inside each visible group
+   *     (counts only - member ids never leave the server). `reveal` opens
+   *     the bounded scope holding the most matches. Consumed by the
+   *     chat-audit retrieval highlight (features/chat-audit.md).
    *   - The clearance-scoped source sweep is capped at 5000 entries, then the
    *     API projects it into a fixed-budget overview/scope response before any
    *     data crosses the network. When the source cap
@@ -1080,6 +1086,19 @@ export function brainRoutes(deps: {
       typeof req.query.focus === 'string'
         ? req.query.focus.trim().slice(0, 200)
         : null
+    // Exact-id focus (`focusIds=a,b,c` + optional `reveal=1`) - the
+    // chat-audit retrieval highlight. Marks visible matches and counts the
+    // matches inside each visible group; `reveal` opens the scope holding
+    // the most matches. Bounded to FOCUS_ID_LIMIT ids.
+    const focusIds =
+      typeof req.query.focusIds === 'string'
+        ? req.query.focusIds
+            .split(',')
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0 && s.length <= 160)
+            .slice(0, FOCUS_ID_LIMIT)
+        : []
+    const revealFocus = req.query.reveal === '1' || req.query.reveal === 'true'
     const skillFocusId =
       typeof req.query.skillId === 'string' && req.query.skillId.length <= 160
         ? req.query.skillId
@@ -1395,6 +1414,8 @@ export function brainRoutes(deps: {
           truncated,
           scopeId,
           focusQuery,
+          focusIds,
+          revealFocus,
         }),
       )
     } catch (err) {

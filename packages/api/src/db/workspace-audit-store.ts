@@ -25,6 +25,9 @@ export type WorkspaceAuditEventType =
   | 'workspace.icon_changed'
   // Default recording blueprint set/cleared (migration 291)
   | 'workspace.settings_changed'
+  | 'workspace.module_changed'
+  | 'crm.integration_credential_created'
+  | 'crm.integration_credential_revoked'
   | 'member.added'
   | 'member.removed'
   | 'member.role_changed'

@@ -42,6 +42,7 @@ import {
   linkLiveRecordingPage,
   finalizeLiveRecording,
   RecordingApiError,
+  recordingMimeForFile,
   type RecordingQueued,
 } from "@/lib/api/recordings";
 import { setPageLinkedRecording } from "@/lib/api/views";
@@ -219,7 +220,7 @@ export function useRecordingUpload(workspaceId: string, assistantId: string) {
           workspaceId,
           recordingId,
           t,
-          isVideo: file.type.startsWith("video/"),
+          isVideo: recordingMimeForFile(file)?.startsWith("video/") ?? false,
           ...(opts?.existingPageId ? { pinnedPage: true } : {}),
           ...(assembled ? { assembled: true } : {}),
           onStage: (s) => {

@@ -14,24 +14,34 @@
  * the Take-Over view fills the content pane and browser back/forward move
  * between sessions; the active row is marked (`aria-current` + the eye glyph).
  *
- * Discovery data is the same 20s poll of `GET /api/computer/tasks` the live
- * pill + the surface top bar use (`listActiveComputerTasks`). The panel is
- * mounted only while `activeSurface === "computer"` (it unmounts on a surface
- * switch), so a mount-effect poll is the right fit — it self-heals on every
- * tick and tears down its timer on leave; this is NOT the persistent-layout
- * mount-effect anti-pattern (that one is about surfaces that never unmount).
+ * Discovery data is the same poll of `GET /api/computer/tasks` the live pill
+ * + the surface top bar use (`listActiveComputerTasks`), read through the
+ * surface cache (`computer-tasks:<wid>:<viewer>`, instant-navigation
+ * contract N1): re-entering the Browsers surface paints the last-known rows
+ * on the first frame, the poll is the key's `refresh()`, and only a cold
+ * entry paints skeleton rows. The empty-state copy renders only after a
+ * fetch has RESOLVED, never while the first one is in flight - "No live
+ * sessions yet" on a pane that has not asked would be a false statement.
+ * The panel is mounted only while `activeSurface === "computer"` (it
+ * unmounts on a surface switch), so a mount-effect poll is the right fit; it
+ * tears down its timer on leave. Profiles mode reads the SAME key Computer
+ * -> Browser profiles paints from (`browser-profiles:<wid>:<viewer>`), so the
+ * rail and the pane never issue two copies of one request.
  *
  * Spec: docs/architecture/engine/computer-use.md §5;
  * docs/architecture/features/doc.md → "Home operator app-bar".
  * [COMP:app-web/browsers-surface] (the sidebar-panel flavour)
  */
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Cloud, Eye, Laptop, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
+import { Skeleton } from "@/components/skeleton";
+import { useCachedResource } from "@/lib/surface-cache";
+import { browserProfilesCacheKey, computerTasksCacheKey } from "@/lib/surface-prefetch";
 import {
   listActiveComputerTasks,
   listBrowserProfiles,
@@ -75,14 +85,33 @@ const rowCls = (active: boolean) =>
       : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
   );
 
-/** Pure render — exported for SSR tests; polling lives in the wrapper. */
+/** Skeleton rows for a rail whose first fetch has not resolved (N4). */
+function RailRowsSkeleton({ rows }: { rows: number }) {
+  return (
+    <ul aria-busy="true" data-testid="browsers-rail-skeleton" className="flex flex-col gap-0.5">
+      {Array.from({ length: rows }).map((_, i) => (
+        <li key={i} className="flex items-center gap-2.5 rounded-md px-2 py-1.5">
+          <Skeleton className="size-1.5 shrink-0 rounded-full" />
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <Skeleton className="h-3.5" style={{ width: `${52 + ((i * 17) % 30)}%` }} />
+            <Skeleton className="h-2.5 w-14" />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Pure render — exported for SSR tests; polling lives in the wrapper.
+ *  `tasks === null` means nothing has resolved yet (cold): skeleton rows,
+ *  never the empty-state sentence. */
 export function BrowsersSessionList({
   workspaceId,
   tasks,
   activeSessionId,
 }: {
   workspaceId: string;
-  tasks: ComputerTaskSummary[];
+  tasks: ComputerTaskSummary[] | null;
   activeSessionId: string | null;
 }) {
   const t = useT().computer.sessions;
@@ -93,13 +122,15 @@ export function BrowsersSessionList({
     <div className="flex flex-col gap-1 px-1 pt-1">
       <div className="flex items-center justify-between gap-2 pb-0.5">
         <span className={sectionHeaderCls}>{t.railTitle}</span>
-        {tasks.length > 0 ? (
+        {tasks && tasks.length > 0 ? (
           <span className="shrink-0 tabular-nums text-[11px] text-sidebar-foreground/50">
             {tasks.length}
           </span>
         ) : null}
       </div>
-      {tasks.length === 0 ? (
+      {tasks === null ? (
+        <RailRowsSkeleton rows={2} />
+      ) : tasks.length === 0 ? (
         <p className="select-none px-2 py-1 text-[12px] text-sidebar-foreground/40">
           {t.railEmpty}
         </p>
@@ -154,19 +185,20 @@ export function BrowsersProfileList({
   creating,
 }: {
   workspaceId: string;
-  profiles: BrowserProfile[];
+  /** `null` until the first roster resolves (cold): skeleton rows. */
+  profiles: BrowserProfile[] | null;
   activeProfileId: string | null;
   creating: boolean;
 }) {
   const t = useT().computer.profiles;
-  const selectedId = creating ? null : (activeProfileId ?? profiles[0]?.id ?? null);
+  const selectedId = creating ? null : (activeProfileId ?? profiles?.[0]?.id ?? null);
 
   return (
     <div className="flex flex-col gap-1 px-1 pt-1">
       <div className="flex items-center justify-between gap-2 pb-0.5">
         <span className={sectionHeaderCls}>{t.title}</span>
         <div className="flex items-center gap-1">
-          {profiles.length > 0 ? (
+          {profiles && profiles.length > 0 ? (
             <span className="tabular-nums text-[11px] text-sidebar-foreground/50">
               {profiles.length}
             </span>
@@ -187,7 +219,9 @@ export function BrowsersProfileList({
           </Link>
         </div>
       </div>
-      {profiles.length === 0 ? (
+      {profiles === null ? (
+        <RailRowsSkeleton rows={2} />
+      ) : profiles.length === 0 ? (
         <p className="select-none px-2 py-1 text-[12px] text-sidebar-foreground/40">
           {t.sidebarEmpty}
         </p>
@@ -222,50 +256,61 @@ export function BrowsersProfileList({
   );
 }
 
+/**
+ * Chain `refresh()` calls `POLL_MS` apart while `active`. Each tick awaits
+ * the previous load (the cache dedupes an in-flight one), so a slow API can
+ * never stack requests.
+ */
+function usePollRefresh(active: boolean, refresh: () => Promise<unknown>): void {
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      await refresh();
+      if (cancelled) return;
+      timer = setTimeout(() => void tick(), POLL_MS);
+    };
+    // The hook's own mount load covers the first paint; the chain starts one
+    // interval later so a fresh cache entry is not refetched twice at once.
+    timer = setTimeout(() => void tick(), POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [active, refresh]);
+}
+
 /** Polling wrapper rendered by `DocSidebar` for the `computer` surface. */
 export function BrowsersSidebarPanel({ workspaceId }: { workspaceId: string }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const profilesMode = profilesModeFromPathname(pathname);
   const activeSessionId = sessionIdFromPathname(pathname);
-  const [tasks, setTasks] = useState<ComputerTaskSummary[]>([]);
-  const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
 
-  useEffect(() => {
-    if (profilesMode) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const probe = async () => {
-      const found = await listActiveComputerTasks(workspaceId);
-      if (cancelled) return;
-      setTasks(found);
-      timer = setTimeout(() => void probe(), POLL_MS);
-    };
-    void probe();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [profilesMode, workspaceId]);
-
-  useEffect(() => {
-    if (!profilesMode) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const probe = async () => {
-      const found = await listBrowserProfiles(workspaceId).catch(() => null);
-      if (cancelled) return;
-      setProfiles(found?.configured ? found.profiles : []);
-      timer = setTimeout(() => void probe(), POLL_MS);
-    };
-    void probe();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [profilesMode, workspaceId]);
+  // One key per list; `null` disables the one the current mode does not
+  // show, so a mode switch never fetches the other rail's rows.
+  const taskList = useCachedResource(
+    !profilesMode && workspaceId ? computerTasksCacheKey(workspaceId) : null,
+    () => listActiveComputerTasks(workspaceId),
+  );
+  const profileList = useCachedResource(
+    profilesMode && workspaceId ? browserProfilesCacheKey(workspaceId) : null,
+    () => listBrowserProfiles(workspaceId),
+  );
+  usePollRefresh(!profilesMode && Boolean(workspaceId), taskList.refresh);
+  usePollRefresh(profilesMode && Boolean(workspaceId), profileList.refresh);
 
   if (profilesMode) {
+    // A cold failure (`error`, no data) is an empty rail, as before; a
+    // failed REVALIDATION keeps the last good roster (the cache's contract).
+    const profiles: BrowserProfile[] | null = profileList.data
+      ? profileList.data.configured
+        ? profileList.data.profiles
+        : []
+      : profileList.loading
+        ? null
+        : [];
     return (
       <BrowsersProfileList
         workspaceId={workspaceId}
@@ -279,7 +324,7 @@ export function BrowsersSidebarPanel({ workspaceId }: { workspaceId: string }) {
   return (
     <BrowsersSessionList
       workspaceId={workspaceId}
-      tasks={tasks}
+      tasks={taskList.data ?? (taskList.loading ? null : [])}
       activeSessionId={activeSessionId}
     />
   );

@@ -18,7 +18,9 @@ describe("[COMP:app-web/custom-llm-endpoints] endpoint settings block", () => {
       </I18nProvider>,
     );
     expect(html).toContain(en.customLlmEndpoints.heading);
-    expect(html).toContain(en.customLlmEndpoints.loading);
+    // Cold open: one endpoint row's skeleton, never the sentence (N4 / N5).
+    expect(html).toContain('data-testid="custom-llm-skeleton"');
+    expect(html).not.toContain(en.customLlmEndpoints.loading);
   });
 
   it("keeps the fallback toggle copy honest about cost and announcement", () => {

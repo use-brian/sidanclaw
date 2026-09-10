@@ -47,6 +47,38 @@ export type ChatArchiveEnrichmentWorker = {
   runOnce(): Promise<void>
 }
 
+/**
+ * Map the window's senders onto the provider-verified refs Pipeline B needs to
+ * resolve a person to an existing contact instead of creating another.
+ *
+ * Extraction names people from the rendered text, so the ref is keyed on the
+ * same resolved name the store rendered them under. A participant the store
+ * left unnamed is skipped: it either has no name or shares one with another
+ * sender, and in both cases no name can select it safely.
+ *
+ * The namespace is the provider plus the archive connector instance, both read
+ * off the window. Neither may be assumed: a subject id is opaque, so binding a
+ * WeChat id under `provider: 'whatsapp'`, or a JID under another account's
+ * instance, silently attaches one person's identity to another's. A window
+ * missing either yields no refs at all rather than identities that could
+ * collide.
+ */
+export function personExternalRefsFor(
+  window: EnrichmentWindow,
+): Array<{ name: string; externalRef: Record<string, unknown>; phone?: string }> {
+  const instanceId = window.source_ref?.archive_instance_id
+  if (typeof instanceId !== 'string' || instanceId.trim() === '') return []
+  const provider = typeof window.source === 'string' ? window.source.trim().toLowerCase() : ''
+  if (provider === '') return []
+  return (window.participants ?? [])
+    .filter((p) => p.sender_id.trim() !== '' && p.display_name.trim() !== '')
+    .map((p) => ({
+      name: p.display_name,
+      externalRef: { provider, id: p.sender_id, instance_id: instanceId },
+      ...(p.phone ? { phone: p.phone } : {}),
+    }))
+}
+
 export function createChatArchiveEnrichmentWorker(
   deps: ChatArchiveEnrichmentDeps,
 ): ChatArchiveEnrichmentWorker {
@@ -76,6 +108,7 @@ export function createChatArchiveEnrichmentWorker(
         sourceKind: 'channel_window',
         sourceRef: window.source_ref,
         contentRef: window.source_ref,
+        personExternalRefs: personExternalRefsFor(window),
       })
       await deps.client.completeEnrichmentWindow(window.window_id, result.episodeId)
     } catch (err) {

@@ -253,7 +253,7 @@ function WebhookMatchEditor({
             placeholder={t.workflowPage.builder.webhookFilterRawPlaceholder}
             rows={5}
             disabled={disabled}
-            className="w-full text-xs px-2 py-1.5 bg-background border border-border rounded font-mono outline-none focus:ring-2 focus:ring-ring resize-y"
+            className="w-full text-[16px] md:text-xs px-2 py-1.5 bg-background border border-border rounded font-mono outline-none focus:ring-2 focus:ring-ring resize-y"
           />
           <p className="text-[11px] text-muted-foreground/80">
             {t.workflowPage.builder.webhookFilterAdvancedHint}
@@ -271,7 +271,7 @@ function WebhookMatchEditor({
                 onValueChange={(v) => commit(rules, v as WebhookCombine)}
                 disabled={disabled}
               >
-                <SelectTrigger className="w-44 text-xs">
+                <SelectTrigger className="w-full sm:w-44 min-h-11 sm:min-h-0 text-[16px] md:text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -333,14 +333,16 @@ function RuleRow({
         onChange={(e) => onChange({ path: e.target.value })}
         placeholder={t.workflowPage.builder.webhookFilterFieldPlaceholder}
         disabled={disabled}
-        className="flex-1 min-w-[8rem] px-2 py-1.5 bg-background border border-border rounded text-xs font-mono outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+        className="flex-1 min-w-[8rem] min-h-11 sm:min-h-0 px-2 py-1.5 bg-background border border-border rounded text-[16px] md:text-xs font-mono outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
       />
       <Select
         value={rule.op}
         onValueChange={(v) => onChange({ op: v as WebhookOp })}
         disabled={disabled}
       >
-        <SelectTrigger className="w-36 text-xs">
+        {/* Full width on a phone so a rule is [field] / [op] / [value] rather
+            than three clipped fragments (C 63). */}
+        <SelectTrigger className="w-full sm:w-36 min-h-11 sm:min-h-0 text-[16px] md:text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -357,14 +359,14 @@ function RuleRow({
         onChange={(e) => onChange({ value: e.target.value })}
         placeholder={t.workflowPage.builder.webhookFilterValuePlaceholder}
         disabled={disabled}
-        className="flex-1 min-w-[8rem] px-2 py-1.5 bg-background border border-border rounded text-xs font-mono outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+        className="flex-1 min-w-[8rem] min-h-11 sm:min-h-0 px-2 py-1.5 bg-background border border-border rounded text-[16px] md:text-xs font-mono outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
       />
       <button
         type="button"
         onClick={onRemove}
         disabled={disabled}
         aria-label={t.workflowPage.builder.webhookFilterRemoveRule}
-        className="text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 px-1"
+        className="inline-flex size-11 sm:size-auto items-center justify-center text-xs text-red-600 dark:text-red-400 hover:underline disabled:opacity-50 px-1"
       >
         ×
       </button>
@@ -529,7 +531,7 @@ function WebhookCredentials({
           placeholder={t.workflowPage.builder.webhookTestBodyPlaceholder}
           rows={3}
           disabled={disabled}
-          className="w-full text-xs px-2 py-1.5 bg-background border border-border rounded font-mono outline-none focus:ring-2 focus:ring-ring resize-y"
+          className="w-full text-[16px] md:text-xs px-2 py-1.5 bg-background border border-border rounded font-mono outline-none focus:ring-2 focus:ring-ring resize-y"
         />
         <div className="flex items-center gap-2">
           <button

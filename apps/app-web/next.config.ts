@@ -1,9 +1,9 @@
 import type { NextConfig } from "next";
 import dotenv from "dotenv";
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 const GIT_COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
 
@@ -48,7 +48,7 @@ function resolveOssGitCommitSha(): string {
 // Load .env from monorepo root
 dotenv.config({ path: resolve(import.meta.dirname, "..", "..", ".env") });
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = process.env.API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const APP_DEV_HOST = (() => {
   const configured = process.env.AUTHED_APP_URL ?? process.env.NEXT_PUBLIC_AUTHED_APP_URL;
   if (!configured) return null;
@@ -67,58 +67,50 @@ const workspaceRoot = nextPackagePath.slice(
   nextPackagePath.indexOf(`${sep}node_modules${sep}`),
 );
 
+// Keep this in the compiled config: Next's requireFromString cannot resolve
+// sibling config helpers. The browser regression checks parity with Vite's
+// scripts/collab-singletons.mjs, including actual import/require constructors.
+const appRequire = createRequire(import.meta.url);
+const pmRoot = resolve(dirname(appRequire.resolve("@tiptap/pm/view")), "../..");
+const pm = JSON.parse(readFileSync(resolve(pmRoot, "package.json"), "utf8"));
+const pmRequire = createRequire(resolve(pmRoot, "package.json"));
+const collabSingletonAliases: Record<string, string> = Object.fromEntries(
+  ["yjs", "y-prosemirror", ...Object.keys(pm.dependencies).filter(name => name.startsWith("prosemirror-"))]
+    .map(name => {
+      const entry = (name.startsWith("prosemirror-") ? pmRequire : appRequire).resolve(name);
+      const root = resolve(dirname(entry), "..");
+      const manifest = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+      return [name, realpathSync(resolve(root, manifest.module))];
+    }),
+);
+
 const nextConfig: NextConfig = {
+  output: "standalone",
+  outputFileTracingRoot: workspaceRoot,
   ...(APP_DEV_HOST ? { allowedDevOrigins: [APP_DEV_HOST] } : {}),
   // app-web runs both standalone and absorbed into the platform workspace.
   // Follow the physical pnpm store so Turbopack can resolve Next in either.
   turbopack: {
     root: workspaceRoot,
+    resolveAlias: Object.fromEntries(Object.entries(collabSingletonAliases).map(([name, path]) =>
+      [name, `./${relative(import.meta.dirname, path).replaceAll("\\", "/")}`])),
+  },
+  webpack(config) {
+    Object.assign(config.resolve.alias, collabSingletonAliases);
+    return config;
   },
   env: {
     // Public build provenance for Settings. Prefer OSS_GIT_COMMIT_SHA when a
     // source archive omits .git; ordinary checkout builds resolve HEAD.
     NEXT_PUBLIC_OSS_GIT_COMMIT_SHA: OSS_GIT_COMMIT_SHA,
-    // Public OAuth client metadata used by the connector consent launcher.
-    // Interactive account sign-in no longer lives in app-web, but Google
-    // connector authorization still builds its provider URL in the browser.
+    // Preserve hosted build-only public provider metadata. Runtime config can
+    // override these fallbacks; never inline server URLs or client secrets.
     NEXT_PUBLIC_GOOGLE_CLIENT_ID:
-      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ??
-      process.env.GOOGLE_CLIENT_ID ??
-      "",
-    // Google Drive Picker (components/drive-picker.tsx) needs the browser API key
-    // and GCP project number CLIENT-SIDE. Both are non-secret (the API key is a
-    // referrer-restricted browser key; the project number is the Picker appId), so
-    // inlining them as NEXT_PUBLIC_* is safe and required. Without this bridge the
-    // picker's notConfigured guard is permanently true and "Add files from Drive"
-    // only ever surfaces the "not configured" banner. Ported from apps/web/next.config.ts
-    // (dropped when the picker moved here during app consolidation §9 #5).
+      process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "",
     NEXT_PUBLIC_GOOGLE_API_KEY:
-      process.env.NEXT_PUBLIC_GOOGLE_API_KEY ??
-      process.env.GOOGLE_API_KEY ??
-      "",
+      process.env.NEXT_PUBLIC_GOOGLE_API_KEY ?? process.env.GOOGLE_API_KEY ?? "",
     NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER:
-      process.env.NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER ??
-      process.env.GOOGLE_PROJECT_NUMBER ??
-      "",
-    // The un-blanked origin for URLs DISPLAYED to users — see lib/display-api-url.ts.
-    // This is deliberately inlined: client components render it.
-    //
-    // `API_URL` is NOT inlined here. Server-side machine-to-machine callers
-    // (proxy.ts, /api/auth/*, lib/server-fetch.ts) must resolve it at RUNTIME so
-    // a deploy can point them at a private origin (localhost) while the browser
-    // keeps dialing the public one. Inlining froze both to the same public URL,
-    // which sent app-web's own sign-in fetch out through the CDN — where
-    // Cloudflare Access answered with an HTML login page and the handler died on
-    // JSON.parse. Same freezing trap as NODE_ENV in PR #66.
-    NEXT_PUBLIC_DISPLAY_API_URL: API_URL,
-    // Dev defaults to "" (browser uses the /api rewrite). But the dev rewrite
-    // BUFFERS gzip SSE responses, so streaming endpoints (WhatsApp QR connect)
-    // hang. An explicit NEXT_PUBLIC_API_URL override lets dev hit the API
-    // directly (CORS-allowed), bypassing the rewrite.
-    NEXT_PUBLIC_API_URL:
-      process.env.NEXT_PUBLIC_API_URL ??
-      (process.env.NODE_ENV === "development" ? "" : API_URL),
-    NEXT_PUBLIC_CORE_WEB_URL: process.env.NEXT_PUBLIC_CORE_WEB_URL ?? "https://usebrian.ai",
+      process.env.NEXT_PUBLIC_GOOGLE_PROJECT_NUMBER ?? process.env.GOOGLE_PROJECT_NUMBER ?? "",
     // NOTE: no NEXT_PUBLIC_MSGRAPH_* here. The Entra app for Microsoft Teams is
     // resolved per WORKSPACE in the API (its own registration first, then
     // MSGRAPH_CLIENT_ID / MSGRAPH_CLIENT_SECRET from this deployment), and a

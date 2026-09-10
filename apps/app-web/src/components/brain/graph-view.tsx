@@ -1,89 +1,67 @@
 "use client";
 
 /**
- * Force-directed graph view of the workspace brain (canvas-web).
+ * Force-directed graph view of the workspace brain (app-web).
  *
- * The REAL force-directed canvas — ported from apps/web's `graph-view.tsx`.
- * This is the DEFAULT entries surface: the Brain opens on this node/edge
- * canvas (in group colors); the grouped list (`grouped-view.tsx`) is the
- * view-toggle's alternate behind the topbar's List tab.
- *
- * Renders one bounded server projection at a time: overview groups unfold
- * into child groups or real entries through explicit group clicks, while the
- * force simulation never receives the workspace-wide source graph. Real-entry
- * clicks open the shared `BrainDetailDrawer`.
+ * The DEFAULT entries surface: the Brain opens on this node/edge canvas (in
+ * group colors); the grouped list (`grouped-view.tsx`) is the view-toggle's
+ * alternate behind the topbar's List tab. Renders one bounded server
+ * projection at a time: overview groups unfold into child groups or real
+ * entries through explicit group clicks, while the force simulation never
+ * receives the workspace-wide source graph. Real-entry clicks open the
+ * shared `BrainDetailDrawer`.
  *
  * Spec: docs/architecture/brain/graph-view.md.
  *
- * Implementation notes (legibility-first rendering — the pure math lives
- * in `lib/graph-canvas.ts`, unit-tested under [COMP:app-web/graph-canvas]):
+ * Implementation notes (the pure math lives in `lib/graph-canvas.ts`,
+ * unit-tested under [COMP:app-web/graph-canvas]; the frame-budget decision
+ * in `lib/graph-motion.ts`, [COMP:app-web/graph-motion]):
  *
  * - The module is imported in an effect (NOT `next/dynamic` — dynamic()
- *   drops refs, and this canvas needs the instance for force tuning +
- *   bounded camera framing; same pattern as `connections-graph.tsx`). The import
- *   only runs client-side, so SSR stays safe.
+ *   drops refs, and this canvas needs the instance for force tuning, camera
+ *   framing and the motion lease). The import only runs client-side.
+ * - MOTION LEASE. The canvas no longer renders continuously. The library's
+ *   own dirty tracking (`autoPauseRedraw`) paints on pointer moves, zoom,
+ *   engine ticks and prop changes; the ONE thing it cannot see is an eased
+ *   alpha/width that has not reached its target, so the paint callbacks flag
+ *   `easePendingRef` and the post-frame pass flips the library to continuous
+ *   painting until every ease converges. With the pointer gone, the layout
+ *   settled and nothing easing, the animation loop is stopped outright
+ *   (`pauseAnimation`); hidden tabs and off-screen canvases stop too. Any
+ *   input, data or visual-state change wakes it (`wake()`). The always-on
+ *   decorations that forced continuous frames (per-node twinkle, breathing
+ *   halos, drifting aurora, ambient photons, the hover pulse ring) are gone
+ *   or moved: the atmosphere (aurora / dot grid / vignette) is CSS behind a
+ *   transparent canvas (`.graph-backdrop`), so at rest the canvas costs
+ *   nothing and looks the same.
  * - Node sizing: flat log curve clamped to [2.5, 7] graph units
- *   (`nodeRadius`). The old `sqrt(1+min(d,12))*4` curve drew hubs as
- *   ~14-unit discs that blobbed in dense areas.
- * - A custom collision force (`makeCollideForce`) keeps discs from ever
- *   overlapping; charge/link-distance are tuned so clusters separate at
- *   80+ nodes instead of hairballing.
- * - A bounded one-time fit after the hidden warmup frames the layout without
- *   making sparse brains enormous. Scope changes never re-fit the camera.
- * - Warm start: node positions carry across scope and snapshot refreshes
- *   (`mergePositions`), so a brain-write → refresh nudges the layout
- *   instead of re-scrambling the user's mental map. (This replaced the
- *   `key={nodes:edges}` remount, which threw away every position.)
- * - Labels: zoom-tiered with a background-color halo. Hubs (top-decile
- *   degree) fade in near fit zoom, everything else fades in by ~2×;
- *   small graphs (≤30 nodes) label everything from fit. Emphasized
- *   nodes (hover / search match + their neighbours) are always labelled.
- * - Filter dim: the sidebar's primitive chips ghost unselected node
- *   kinds (nodes cap at a low alpha, edges with a ghosted endpoint cap
- *   lower, ambient particles off) instead of unmounting them, so a chip
- *   toggle never reshuffles the layout. See Props.filterKinds.
- * - Search reveal is server-side; hover/search dim transitions EASE (per-frame lerp via `stepToward`
- *   driven by a bounded rAF tick) instead of snapping; the hovered
- *   node's incident edges run directional particles and emphasized
- *   discs get a soft kind-colored glow (`shadowBlur` — device-space,
- *   so it reads the same at any zoom).
- * - Theme colors flow through CSS variables — read at mount via
- *   `getComputedStyle(document.documentElement)`, re-read on theme
- *   change so dark-mode toggles recolor without a remount. Hard-coded
- *   hex would break the project-wide "tokens only" rule.
- * - Visual treatment (the "neural canvas" pass — every shade derives
- *   from a theme token via `shadeHex`/`withAlpha`, no second palette).
- *   The canvas has its own theme-ADAPTIVE token set (`--graph-*`);
- *   both themes anchor the ground to the PAGE background (a hue-shifted
- *   ground read as a foreign surface next to the neutral chrome), and
- *   `hexLuma` classifies the live ground so every effect self-tunes.
- *   Everything below is deliberately SUBTLE — atmosphere the eye finds,
- *   never a poster effect. `onRenderFramePre` paints, in order: drifting
- *   aurora glows (screen space, brand hues, long offset periods), a
- *   world-locked dot grid (pattern tile, `gridStep` tiling), a corner
- *   vignette (darkened background ink), then soft BREATHING
- *   per-community washes (`communityHalos` over live positions).
- *   Discs are orb-shaded cached radial gradients over a cached bloom
- *   sprite (hubs bloom stronger) with a rim (lit on dark, tonal on
- *   light) and a per-node `nodePhase` twinkle; rest-state edges whose
- *   endpoints resolve to the SAME color render as tinted threads
- *   (mixed endpoints stay neutral so bridges don't blend muddy) and
- *   carry a slow ambient particle (≤ AMBIENT_PARTICLE_EDGE_CAP edges);
- *   the hovered node runs a `pulsePhase` expanding ring.
- * - Group-overview (bubble map) regime: a projection containing GROUP
- *   nodes renders as a topic bubble map, not an entry constellation.
- *   Group containers get radius-aware spring lengths
- *   (`radiusAwareLinkDistance`) + bigger collide padding
- *   (`GROUP_COLLIDE_PADDING`) so bubbles spread instead of huddling,
- *   are exempt from community gravity (which squeezed the whole
- *   overview into one mass), always draw a TWO-LINE label (name +
- *   muted count line — the one-line "name · N entries" composition
- *   overlapped every neighbour), and the initial fit uses the group
- *   screen-radius ceiling so the camera frames the map instead of
- *   shrinking it into empty canvas. Community halos + cluster
- *   headings are skipped while groups are present — each bubble IS a
- *   group and labels itself. Aggregate group↔group edges scale their
- *   rest width with `edge.count` (`aggregateEdgeWidth`).
+ *   (`nodeRadius`); a collision force keeps discs apart; charge / link
+ *   distance tuned so communities separate at 80+ nodes.
+ * - Bounded one-time fit after the hidden warmup; scope changes never re-fit.
+ * - Warm start: positions carry across scope and snapshot refreshes
+ *   (`mergePositions`), so a brain-write nudges the layout instead of
+ *   re-scrambling the user's mental map.
+ * - Labels: zoom-tiered with a background halo; hubs near fit, everyone by
+ *   ~2×; small graphs label everything; emphasized nodes always.
+ * - Emphasis tiers, in precedence: hover > audit highlight > search
+ *   spotlight > groups-legend spotlight; the sidebar filter chips CAP the
+ *   tier from below (ghost, never unmount). All transitions ease through
+ *   `stepToward`; `prefers-reduced-motion` snaps them.
+ * - INFORMATION LAYER: a stats strip (entries / links / groups / scope /
+ *   retrieved), a rich hover card (kind, connections, sensitivity, group
+ *   composition), edge-type labels on the hovered node's threads, a
+ *   groups legend (top communities, hover to spotlight), a selected-node
+ *   ring, and +/−/fit zoom controls.
+ * - AUDIT HIGHLIGHT (`highlightIds`, features/chat-audit.md): the ids a
+ *   turn retrieved are sent to the server as an exact-id focus; matched
+ *   entries render in the `--graph-highlight` accent with a glow and a
+ *   permanent label, group bubbles that hold matches carry a count badge,
+ *   and the parent is told which ids the canvas could place.
+ * - Group-overview (bubble map) regime: a projection containing GROUP nodes
+ *   gets radius-aware springs, bigger collide padding, no community gravity
+ *   on containers, always-on two-line labels, the group fit ceiling, and no
+ *   community halos / cluster headings (each bubble labels itself).
+ * - Theme colors flow through CSS variables, re-read on theme change.
  */
 
 import {
@@ -95,6 +73,7 @@ import {
   useState,
 } from "react";
 import type { ComponentType } from "react";
+import { Maximize2, Minus, Plus } from "lucide-react";
 import {
   getBrainGraph,
   isBrainGraphGroupNode,
@@ -131,9 +110,7 @@ import {
   makeClusterForce,
   makeCollideForce,
   mergePositions,
-  nodePhase,
   nodeRadius,
-  pulsePhase,
   radialSeedPositions,
   radiusAwareLinkDistance,
   shadeHex,
@@ -143,6 +120,15 @@ import {
   type CommunityHalo,
   type NodePosition,
 } from "@/lib/graph-canvas";
+import {
+  CAMERA_TWEEN_GRACE_MS,
+  CAMERA_TWEEN_MS,
+  MOTION_IDLE_GRACE_MS,
+  applyCanvasMotion,
+  easeRateFor,
+  resolveCanvasMotion,
+  type CanvasMotionMode,
+} from "@/lib/graph-motion";
 import { detectCommunities } from "@use-brian/shared";
 import {
   graphScopeCacheKey,
@@ -150,7 +136,17 @@ import {
 } from "@/lib/graph-semantic-zoom";
 import { format, useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { useCoarsePointer } from "@/lib/viewport";
 import { BrainGraphLoadingSkeleton } from "@/components/brain/graph-loading";
+
+/**
+ * Minimum pointer-area radius on a coarse (touch) pointer, in SCREEN px
+ * (C 14 / M3): at the initial fit a leaf node is a 6-18px disc, so a finger
+ * landed on whitespace or a neighbour. The paint radius is unchanged - only
+ * the hit disc grows, divided by `globalScale` so it stays 22px on screen at
+ * every zoom.
+ */
+const COARSE_POINTER_MIN_HIT_PX = 22;
 
 type Props = {
   graph: BrainGraph;
@@ -160,34 +156,45 @@ type Props = {
   /** Click handler — receives a synthetic BrainRow so the parent
    *  can hand it straight to `BrainDetailDrawer` without re-fetching.
    *  Only fired for `BrainRow`-shaped node kinds (entities + knowledge);
-   *  skill nodes route through `onSelectSkillNode` instead (a skill is a
-   *  different data shape than a `BrainRow`). */
+   *  skill nodes route through `onSelectSkillNode` instead. */
   onSelect: (row: BrainRow) => void;
-  /** Click handler for a `skill` node — receives the skill row id so the
-   *  parent can resolve + open it from the workspace skill list. Connector
+  /** Click handler for a `skill` node — receives the skill row id. Connector
    *  nodes have no detail surface in v1, so they no-op. */
   onSelectSkillNode?: (skillRowId: string) => void;
-  /** Free-text focus query (the Brain search box). Unlike the list — which
-   *  hard-filters rows — the graph uses the query as a SPOTLIGHT: nodes whose
-   *  name matches stay fully opaque, their 1st-degree neighbours dim slightly
-   *  (still legible — "this is relevant"), and everything else fades back, so
-   *  the user sees what's connected to their search without the non-matches
-   *  disappearing. Empty query OR zero matches → no dimming (the graph is left
-   *  untouched rather than fully greyed). Independent of hover, which still
-   *  works as a transient inspect gesture on top. */
+  /** Free-text focus query (the Brain search box) — a SPOTLIGHT, not a
+   *  filter: matches stay opaque, neighbours dim slightly, the rest fades.
+   *  Empty query OR zero matches → no dimming. */
   focusQuery?: string;
-  /** Selected node kinds from the sidebar's primitive filter chips
-   *  (`primitivesToGraphKinds` in `lib/api/brain.ts`). The list view
-   *  hard-filters its rows; the graph keeps the whole constellation and
-   *  GHOSTS the unselected kinds instead — nodes cap at a low alpha, edges
-   *  with a ghosted endpoint cap lower, ambient particles stop — so a chip
-   *  toggle never reshuffles the layout and the selection reads in context.
-   *  `null`/empty = no filter. A selection whose kinds match nothing on the
-   *  canvas leaves the graph untouched (the same no-anchor rule as a
-   *  zero-match `focusQuery`). The cap applies UNDER the hover / search
-   *  tiers, except the hovered node itself — pointer intent beats the chip.
+  /** Selected node kinds from the sidebar's primitive filter chips. The
+   *  graph GHOSTS the unselected kinds instead of unmounting them. A
+   *  selection matching nothing on the canvas leaves the graph untouched.
    *  Spec: graph-view.md → "Filter dim". */
   filterKinds?: ReadonlySet<BrainGraphNodeKind> | null;
+  /** The row currently open in the detail drawer — drawn with a selection
+   *  ring and a permanent label so the canvas says what is open. */
+  selectedId?: string | null;
+  /**
+   * Chat-audit retrieval highlight (features/chat-audit.md): the brain row
+   * ids a turn retrieved. Requests an exact-id server focus (revealing the
+   * scope with the most matches), lights matched entries in the highlight
+   * accent, badges group bubbles with their match counts, and reports what
+   * it could place through `onHighlightResolved`. `null`/empty = off.
+   */
+  highlightIds?: ReadonlySet<string> | null;
+  /**
+   * Entry NAMES (lower-cased) the turn's brain-row tools looked up
+   * (`getEntity({ id_or_name })`). Matched client-side against the current
+   * projection's node names - a name is not a pointer, so there is no
+   * server reveal and no group counts for these; they simply join the
+   * highlight tier when a visible node carries the name.
+   */
+  highlightNames?: ReadonlySet<string> | null;
+  /** Re-scope the highlight projection around ONE id (the panel's Reveal). */
+  highlightRevealId?: string | null;
+  onHighlightResolved?: (info: {
+    visibleIds: string[];
+    groupCounts: Record<string, number>;
+  }) => void;
   loading?: boolean;
 };
 
@@ -196,8 +203,6 @@ type GraphNodeWithPos = BrainGraphNode & {
   y?: number;
   vx?: number;
   vy?: number;
-  /** Per-node twinkle phase, precomputed once per snapshot (nodePhase). */
-  __phase?: number;
 };
 
 function displayKind(node: BrainGraphNode): BrainGraphNodeKind {
@@ -235,6 +240,10 @@ type ForceGraphInstance = {
   zoom(scale: number, durationMs?: number): void;
   centerAt(x: number, y: number, durationMs?: number): void;
   getGraphBbox(): { x: [number, number]; y: [number, number] } | null;
+  // Methods only: the react-force-graph ref never exposes prop setters, so
+  // `autoPauseRedraw` is driven as a React prop (see `continuousPaint`).
+  pauseAnimation(): unknown;
+  resumeAnimation(): unknown;
 };
 
 type ForceGraphComponent = ComponentType<Record<string, unknown>>;
@@ -266,28 +275,25 @@ export type ThemeColors = {
   foreground: string;
   muted: string;
   border: string;
+  /** The audit-highlight accent (`--graph-highlight`). */
+  highlight: string;
   kinds: Record<BrainGraphNodeKind, string>;
 };
 
 export const FALLBACK_COLORS: ThemeColors = {
   // Light-mode graph ground — mirrors the :root --graph-* tokens in
-  // globals.css (--graph-bg anchors to the page background in both
-  // themes; the support tokens are canvas-tuned). Light is the app
-  // default, so it's the pre-mount/SSR fallback; readThemeColors swaps
-  // in the live values right after mount.
+  // globals.css. Light is the app default, so it's the pre-mount/SSR
+  // fallback; readThemeColors swaps in the live values right after mount.
   background: "#FFFFFF",
   foreground: "#1F2737",
   muted: "#6B7691",
   border: "#D7DDEA",
-  // Light entity palette — source of truth in lib/brain-colors.ts
-  // (mirrors --graph-entity-* / --entity-*); the vivid dark set is
-  // BRAIN_ENTITY_COLORS_VIVID, applied via the .dark tokens at runtime.
+  highlight: "#D97706",
   kinds: BRAIN_ENTITY_COLORS,
 };
 
 // Stable display order for the legend — common entity kinds first, the
-// generic `other` bucket last. The legend renders only the kinds actually
-// present in the current snapshot, in this order.
+// generic `other` bucket last.
 const KIND_ORDER: BrainGraphNodeKind[] = [
   "person",
   "company",
@@ -304,36 +310,36 @@ const KIND_ORDER: BrainGraphNodeKind[] = [
 ];
 
 // Force tuning — stronger repulsion + longer links than the d3 defaults so
-// clusters separate visually at 80+ nodes; the collide force (with the
-// node radii from graph-canvas) guarantees discs never overlap. Numbers
-// from a screenshot pass against the 12/90/500-node Graph Lab fixtures.
+// clusters separate visually at 80+ nodes; the collide force guarantees discs
+// never overlap.
 const CHARGE_STRENGTH = -55;
 // Intra/inter link split: edges WITHIN a detected community stay short and
 // stiff (tight "firework" blobs); bridge edges between communities stretch
-// long and go LOOSE (low spring strength), so they read as connective
-// threads instead of pulling the blobs back into one mass. This split plus
-// the cluster-gravity force is what separates the communities spatially —
-// the Obsidian vault-graph look.
+// long and go LOOSE, so they read as connective threads.
 const LINK_DISTANCE_INTRA = 28;
 const LINK_DISTANCE_INTER = 160;
 const LINK_STRENGTH_INTRA = 0.7;
 const LINK_STRENGTH_INTER = 0.08;
 
-// Ambient particle flow runs on every edge at rest (the "data moving
-// through the brain" cue) up to this edge count; past it, particles stay
-// hover-only — per-edge photon simulation is per-frame work and a dense
-// graph would melt the frame budget for a cue nobody can read anyway.
-const AMBIENT_PARTICLE_EDGE_CAP = 400;
-
 // Filter-dim caps (graph-view.md → "Filter dim") — the ghost tier for node
-// kinds outside the sidebar's primitive-chip selection. Applied as a CAP
-// under the hover/search tiers, so a ghosted kind stays ghosted through
-// hover-neighbour and search-match emphasis. Node alpha sits between the
-// search rest tier (0.12) and the hover rest tier (0.18); the edge values
-// mirror the search spotlight's non-match edge treatment.
+// kinds outside the sidebar's primitive-chip selection.
 const FILTER_DIM_NODE_ALPHA = 0.15;
 const FILTER_DIM_EDGE_ALPHA = 0.08;
 const FILTER_DIM_EDGE_WIDTH = 0.35;
+
+// Emphasis tiers (node alpha targets): the anchor, its 1-hop context, the rest.
+const TIER_REST_HOVER = 0.18;
+const TIER_NEIGHBOR_FOCUS = 0.5;
+const TIER_REST_FOCUS = 0.12;
+const TIER_NEIGHBOR_HIGHLIGHT = 0.45;
+const TIER_REST_HIGHLIGHT = 0.1;
+
+/** How many incident edges get a type label while a node is hovered. */
+const HOVER_EDGE_LABEL_CAP = 12;
+/** Rows in the groups legend before the "+N more" line. */
+const GROUP_LEGEND_ROWS = 8;
+/** Zoom-button step (multiplicative). */
+const ZOOM_STEP = 1.35;
 
 // Exported for the entry reader's mini connections graph
 // (`connections-graph.tsx`) so both canvases read the same `--graph-*`
@@ -345,10 +351,6 @@ export function readThemeColors(): ThemeColors {
     const v = css.getPropertyValue(token).trim();
     return v.length > 0 ? v : fallback;
   };
-  // Each kind reads a dedicated --graph-entity-* token (globals.css) so
-  // the node types stay visually separable on the graph's own ground.
-  // The set is theme-adaptive: standard hues in light, the vivid
-  // (brightened) palette on the dark canvas.
   const kind = (k: BrainGraphNodeKind) =>
     read(`--graph-entity-${k}`, FALLBACK_COLORS.kinds[k]);
   return {
@@ -356,6 +358,7 @@ export function readThemeColors(): ThemeColors {
     foreground: read("--graph-fg", FALLBACK_COLORS.foreground),
     muted: read("--graph-muted", FALLBACK_COLORS.muted),
     border: read("--graph-border", FALLBACK_COLORS.border),
+    highlight: read("--graph-highlight", FALLBACK_COLORS.highlight),
     kinds: {
       person: kind("person"),
       company: kind("company"),
@@ -374,10 +377,8 @@ export function readThemeColors(): ThemeColors {
 }
 
 /**
- * Map a graph node back to the `BrainRow` shape the detail drawer
- * expects. The drawer fetches its own rollup, so the only fields
- * that matter on click are `id`, `kind`, and `name` (the rest is
- * pure projection-side decoration).
+ * Map a graph node back to the `BrainRow` shape the detail drawer expects.
+ * The drawer fetches its own rollup, so only `id`, `kind`, `name` matter.
  */
 function nodeToRow(
   node: BrainGraphNode & {
@@ -392,6 +393,16 @@ function nodeToRow(
   };
 }
 
+/** `works_at` → "works at"; aggregate/related edges are labelled by the caller. */
+function humanizeEdgeType(type: string): string {
+  return type.replace(/[_\-]+/g, " ").trim();
+}
+
+function setKey(set: ReadonlySet<string> | null | undefined): string {
+  if (!set || set.size === 0) return "";
+  return [...set].sort().join(",");
+}
+
 export function BrainGraphView({
   graph: sourceGraph,
   workspaceId,
@@ -401,14 +412,23 @@ export function BrainGraphView({
   onSelectSkillNode,
   focusQuery,
   filterKinds,
+  selectedId,
+  highlightIds,
+  highlightNames,
+  highlightRevealId,
+  onHighlightResolved,
   loading,
 }: Props) {
   const t = useT();
+  const coarsePointer = useCoarsePointer();
   const containerRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+  const hoverCardRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<ForceGraphInstance | null>(null);
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
   const [colors, setColors] = useState<ThemeColors>(FALLBACK_COLORS);
-  const [hoverId, setHoverId] = useState<string | null>(null);
+  const [hoverNode, setHoverNode] = useState<GraphNodeWithPos | null>(null);
+  const hoverId = hoverNode?.id ?? null;
   const [scopedGraph, setScopedGraph] = useState<BrainGraph | null>(null);
   const [scopeHistory, setScopeHistory] = useState<BrainGraph[]>([]);
   const [scopeLoading, setScopeLoading] = useState(false);
@@ -416,9 +436,9 @@ export function BrainGraphView({
   const requestRef = useRef<AbortController | null>(null);
   const requestSequenceRef = useRef(0);
   const transitionOriginRef = useRef<string | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(false);
   // Imported in an effect instead of `next/dynamic` — dynamic() does not
   // forward refs, and this canvas needs the instance for force + camera tuning.
-  // The import only runs client-side, so SSR stays safe.
   const [ForceGraph2D, setForceGraph2D] = useState<ForceGraphComponent | null>(
     () => forceGraphComponentCache,
   );
@@ -433,8 +453,7 @@ export function BrainGraphView({
     };
   }, []);
 
-  // A workspace/viewpoint switch invalidates every navigation scope. The
-  // cache key includes both values, but clearing also bounds retained memory.
+  // A workspace/viewpoint switch invalidates every navigation scope.
   useEffect(() => {
     requestRef.current?.abort();
     requestRef.current = null;
@@ -451,30 +470,30 @@ export function BrainGraphView({
     [],
   );
 
-  // Read theme colors after mount + on theme change. The user can
-  // toggle dark mode via the locale switcher / OS preference; without
-  // this listener the canvas would stay light-mode after a switch.
+  // Theme colors after mount + on theme change; reduced-motion preference.
   useEffect(() => {
     setColors(readThemeColors());
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => setColors(readThemeColors());
     mq.addEventListener("change", onChange);
-    // Also re-read when the documentElement class changes (manual
-    // theme override path). MutationObserver on class attr is cheap.
     const obs = new MutationObserver(onChange);
     obs.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ["class", "data-theme", "data-palette"],
     });
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onMotion = () => setReducedMotion(motion.matches);
+    onMotion();
+    motion.addEventListener("change", onMotion);
     return () => {
       mq.removeEventListener("change", onChange);
+      motion.removeEventListener("change", onMotion);
       obs.disconnect();
     };
   }, []);
+  const easeRate = easeRateFor(reducedMotion);
 
-  // Observe container size — ForceGraph2D wants explicit width/height
-  // numbers. ResizeObserver matches the parent flex layout without
-  // needing the parent to plumb dimensions through.
+  // Observe container size — ForceGraph2D wants explicit width/height.
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -496,13 +515,20 @@ export function BrainGraphView({
   }, []);
 
   const loadProjection = useCallback(
-    async (request: { scopeId?: string | null; focusQuery?: string | null }) => {
+    async (request: {
+      scopeId?: string | null;
+      focusQuery?: string | null;
+      focusIds?: readonly string[] | null;
+      revealFocus?: boolean;
+    }) => {
       const cacheKey = graphScopeCacheKey({
         workspaceId,
         viewpointAssistantId,
         showMemory,
         scopeId: request.scopeId,
         focusQuery: request.focusQuery,
+        focusIds: request.focusIds,
+        revealFocus: request.revealFocus,
       });
       const cached = scopeCacheRef.current.get(cacheKey);
       if (cached) return cached;
@@ -519,6 +545,8 @@ export function BrainGraphView({
           showMemory,
           scopeId: request.scopeId,
           focusQuery: request.focusQuery,
+          focusIds: request.focusIds,
+          revealFocus: request.revealFocus,
           failOnError: true,
           signal: controller.signal,
         });
@@ -539,24 +567,20 @@ export function BrainGraphView({
   );
 
   const activeProjection = scopedGraph ?? sourceGraph;
-  // Group nodes keep their RAW names — the canvas draws a two-line label
-  // (name + muted count line) and the hover tooltip composes the one-line
-  // "name · N entries" form on demand. Composing into `name` here made
-  // every overview label a ~150px one-liner that overlapped its
-  // neighbours.
   const graph = activeProjection;
   const groupLabel = t.brainPage.graphView.density.groupLabel;
   const groupCountLabel = t.brainPage.graphView.density.groupCount;
 
-  // Whether the current projection carries group (container) nodes — the
-  // switch into the bubble-map regime: radius-aware springs, group collide
-  // padding, no community gravity on containers, group fit ceiling, and
-  // no community halos/headings (each bubble IS a group and labels
-  // itself).
   const hasGroupNodes = useMemo(
     () => graph.nodes.some(isBrainGraphGroupNode),
     [graph],
   );
+
+  // ── Audit highlight ───────────────────────────────────────────────────
+  const highlightKey = setKey(highlightIds);
+  const highlightActive = highlightKey.length > 0;
+  const highlightActiveRef = useRef(false);
+  const queryActive = (focusQuery ?? "").trim().length > 0;
 
   const openGroup = useCallback(
     async (groupId: string) => {
@@ -566,7 +590,13 @@ export function BrainGraphView({
       );
       if (!group || scopeLoading) return;
       transitionOriginRef.current = group.id;
-      const next = await loadProjection({ scopeId: group.groupId });
+      const next = await loadProjection({
+        scopeId: group.groupId,
+        // Keep the retrieved-entry marks alive inside the opened group.
+        ...(highlightActive && highlightIds
+          ? { focusIds: [...highlightIds] }
+          : {}),
+      });
       if (!next) {
         transitionOriginRef.current = null;
         return;
@@ -574,7 +604,7 @@ export function BrainGraphView({
       setScopeHistory((current) => [...current, activeProjection]);
       setScopedGraph(next);
     },
-    [graph.nodes, scopeLoading, loadProjection, activeProjection],
+    [graph.nodes, scopeLoading, loadProjection, activeProjection, highlightActive, highlightIds],
   );
 
   const returnToPreviousScope = useCallback(() => {
@@ -582,20 +612,31 @@ export function BrainGraphView({
     if (!previous) return;
     requestRef.current?.abort();
     transitionOriginRef.current = null;
-    setScopedGraph(previous.scopeId ? previous : null);
+    // Under an audit highlight the overview must still carry the per-group
+    // match counts, which the page's cached overview does not have.
+    if (highlightActive && highlightIds && !previous.scopeId) {
+      void loadProjection({ focusIds: [...highlightIds] }).then((next) => {
+        setScopedGraph(next ?? null);
+      });
+    } else {
+      setScopedGraph(previous.scopeId ? previous : null);
+    }
     setScopeHistory((current) => current.slice(0, -1));
-  }, [scopeHistory]);
+  }, [scopeHistory, highlightActive, highlightIds, loadProjection]);
 
   // Search reveal is server-side and debounced. Clearing it restores the
   // cached overview immediately; obsolete requests are aborted.
   useEffect(() => {
     const query = (focusQuery ?? "").trim();
-    requestRef.current?.abort();
     if (query.length === 0) {
+      // The audit highlight owns the scope while it is active.
+      if (highlightActiveRef.current) return;
+      requestRef.current?.abort();
       setScopedGraph(null);
       setScopeHistory([]);
       return;
     }
+    requestRef.current?.abort();
     const timer = window.setTimeout(() => {
       void loadProjection({ focusQuery: query }).then((next) => {
         if (!next) return;
@@ -607,9 +648,34 @@ export function BrainGraphView({
     return () => window.clearTimeout(timer);
   }, [focusQuery, loadProjection, sourceGraph]);
 
-  // Precompute neighbor index — keyed by node id, value is the Set of
-  // neighbor ids. Used for hover-dim. O(E) on rebuild; recomputed only
-  // when the graph identity changes.
+  // Audit highlight projection: reveal the scope holding the most retrieved
+  // entries (or the one entry the panel asked to reveal). Clearing the
+  // highlight restores the overview. The search spotlight wins if both are
+  // active (the audit section never passes a query).
+  useEffect(() => {
+    if (!highlightActive || !highlightIds) {
+      if (highlightActiveRef.current) {
+        highlightActiveRef.current = false;
+        requestRef.current?.abort();
+        setScopedGraph(null);
+        setScopeHistory([]);
+      }
+      return;
+    }
+    if (queryActive) return;
+    highlightActiveRef.current = true;
+    const ids = highlightRevealId ? [highlightRevealId] : [...highlightIds];
+    void loadProjection({ focusIds: ids, revealFocus: true }).then((next) => {
+      if (!next) return;
+      transitionOriginRef.current = next.scopeId ?? null;
+      setScopeHistory([sourceGraph]);
+      setScopedGraph(next);
+    });
+    // `highlightKey` is the order-insensitive identity of `highlightIds`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightKey, highlightRevealId, queryActive, loadProjection, sourceGraph]);
+
+  // Precompute neighbor index — keyed by node id → Set of neighbor ids.
   const neighbors = useMemo(() => {
     const m = new Map<string, Set<string>>();
     for (const node of graph.nodes) m.set(node.id, new Set());
@@ -620,9 +686,7 @@ export function BrainGraphView({
     return m;
   }, [graph]);
 
-  // Search-focus spotlight. `focusMatchIds` = nodes whose name contains the
-  // query (case-insensitive); `null` when the query is empty OR matched nothing
-  // (a no-match search must NOT grey the whole graph — it just doesn't focus).
+  // Search-focus spotlight. `null` when the query is empty OR matched nothing.
   const focusMatchIds = useMemo(() => {
     const q = (focusQuery ?? "").trim().toLowerCase();
     if (q.length === 0) return null;
@@ -635,9 +699,6 @@ export function BrainGraphView({
     return s.size > 0 ? s : null;
   }, [graph, focusQuery, activeProjection.focusNodeIds]);
 
-  // 1st-degree neighbours of the matched nodes — the "relevant" tier. These are
-  // the connections that explain why a node is related to the search, so they
-  // stay legible (dimmed less than the rest).
   const focusNeighborIds = useMemo(() => {
     if (!focusMatchIds) return null;
     const s = new Set<string>();
@@ -649,20 +710,85 @@ export function BrainGraphView({
     return s;
   }, [focusMatchIds, neighbors]);
 
-  // id → kind, so an emphasised edge can borrow the colour of the node it
-  // anchors to (a hovered/matched hub's incident edges read as soft threads in
-  // that node's hue, not a black scaffold).
+  // Audit highlight — matched entries visible in this projection, plus the
+  // group bubbles holding matches (they count as anchors too).
+  const highlightGroupCounts = useMemo(
+    () => (highlightActive ? activeProjection.focusGroupCounts ?? {} : {}),
+    [highlightActive, activeProjection.focusGroupCounts],
+  );
+  const nameHighlightActive = (highlightNames?.size ?? 0) > 0;
+  const highlightMatchIds = useMemo(() => {
+    if (!highlightActive && !nameHighlightActive) return null;
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      if (highlightIds?.has(n.id)) s.add(n.id);
+      // Name lookups (`getEntity({ id_or_name })`) match by display name;
+      // group bubbles never match by name (their name is a member's).
+      if (
+        nameHighlightActive &&
+        !isBrainGraphGroupNode(n) &&
+        highlightNames!.has(n.name.trim().toLowerCase())
+      ) {
+        s.add(n.id);
+      }
+    }
+    if (highlightIds) {
+      for (const id of activeProjection.focusNodeIds ?? []) {
+        if (highlightIds.has(id)) s.add(id);
+      }
+    }
+    for (const groupId of Object.keys(highlightGroupCounts)) s.add(groupId);
+    return s.size > 0 ? s : null;
+  }, [
+    graph,
+    highlightActive,
+    nameHighlightActive,
+    highlightIds,
+    highlightNames,
+    activeProjection.focusNodeIds,
+    highlightGroupCounts,
+  ]);
+  const highlightNeighborIds = useMemo(() => {
+    if (!highlightMatchIds) return null;
+    const s = new Set<string>();
+    for (const id of highlightMatchIds) {
+      for (const nb of neighbors.get(id) ?? []) {
+        if (!highlightMatchIds.has(nb)) s.add(nb);
+      }
+    }
+    return s;
+  }, [highlightMatchIds, neighbors]);
+
+  // Tell the parent which retrieved ids this projection could place.
+  const onHighlightResolvedRef = useRef(onHighlightResolved);
+  onHighlightResolvedRef.current = onHighlightResolved;
+  useEffect(() => {
+    if (!highlightActive && !nameHighlightActive) return;
+    const visible: string[] = [];
+    for (const n of graph.nodes) {
+      if (highlightIds?.has(n.id)) visible.push(n.id);
+      else if (
+        nameHighlightActive &&
+        !isBrainGraphGroupNode(n) &&
+        highlightNames!.has(n.name.trim().toLowerCase())
+      ) {
+        visible.push(n.id);
+      }
+    }
+    onHighlightResolvedRef.current?.({
+      visibleIds: visible,
+      groupCounts: highlightGroupCounts,
+    });
+  }, [graph, highlightActive, nameHighlightActive, highlightIds, highlightNames, highlightGroupCounts]);
+
+  // id → kind, so an emphasised edge can borrow the colour of its anchor.
   const kindById = useMemo(() => {
     const m = new Map<string, BrainGraphNodeKind>();
     for (const n of graph.nodes) m.set(n.id, displayKind(n));
     return m;
   }, [graph]);
 
-  // Filter-dim selection — the sidebar's primitive chips re-applied visually
-  // (graph-view.md → "Filter dim"). Nulled when the selection matches nothing
-  // on the canvas, so a tasks/files-only filter (primitives with no graph
-  // nodes) never greys the whole graph — the same no-anchor guard as the
-  // search spotlight above.
+  // Filter-dim selection — nulled when nothing on the canvas matches.
   const activeFilterKinds = useMemo(() => {
     if (!filterKinds || filterKinds.size === 0) return null;
     return graph.nodes.some((n) => filterKinds.has(displayKind(n)))
@@ -670,9 +796,6 @@ export function BrainGraphView({
       : null;
   }, [graph, filterKinds]);
 
-  /** True when the edge should ghost with the filter — either endpoint's
-   *  kind sits outside the chip selection. Hover exemption is the caller's
-   *  job (the hovered node's incident threads stay the inspect cue). */
   const edgeFilteredOut = useCallback(
     (l: GraphEdgeWithRefs): boolean => {
       if (activeFilterKinds === null) return false;
@@ -684,17 +807,14 @@ export function BrainGraphView({
     [activeFilterKinds, kindById],
   );
 
-  // Hub cut for label tiering — top-decile degree (0 on small graphs, so
-  // everything is labelled from fit zoom).
+  // Hub cut for label tiering — top-decile degree.
   const hubThreshold = useMemo(
     () => hubDegreeThreshold(graph.nodes.map((n) => n.degree)),
     [graph],
   );
 
-  // Connectivity communities (deterministic label propagation). Feed the
-  // cluster-gravity force + the intra/inter link-distance split, and the
-  // optional group color mode. The ref carries the latest result into the
-  // d3 force closures installed once at bind time.
+  // Connectivity communities — feed the cluster-gravity force, the
+  // intra/inter link split, group colors, and the groups legend.
   const communities = useMemo(
     () => detectCommunities(graph.nodes, graph.edges),
     [graph],
@@ -702,10 +822,6 @@ export function BrainGraphView({
   const communitiesRef = useRef(communities);
   communitiesRef.current = communities;
 
-  // Node color source. Defaults to "group" (detected communities — the
-  // Obsidian look the Brain opens on); "kind" recolors by entity type and
-  // brings the legend back. Persisted per browser; read in an effect so
-  // SSR/first paint stay deterministic.
   const [colorMode, setColorMode] = useState<GraphColorMode>("group");
   useEffect(() => {
     if (window.localStorage.getItem(COLOR_MODE_STORAGE_KEY) === "kind") {
@@ -717,10 +833,6 @@ export function BrainGraphView({
     window.localStorage.setItem(COLOR_MODE_STORAGE_KEY, mode);
   };
 
-  // Group palette — the theme's categorical hues, re-sequenced for
-  // adjacent-cluster contrast and deduped (two kinds may share a hue in a
-  // custom palette). Community index cycles through it; communities too
-  // small for gravity render muted grey, the Obsidian "ungrouped" tier.
   const groupPalette = useMemo(() => {
     const seq: BrainGraphNodeKind[] = [
       "company",
@@ -742,9 +854,7 @@ export function BrainGraphView({
     return out.length > 0 ? out : [colors.foreground];
   }, [colors]);
 
-  /** One color resolver for discs, glow, edge tints, and particles, so
-   *  every emphasis cue agrees with the active color mode. Stable
-   *  (useCallback) so the derived edge/halo memos can depend on it. */
+  /** One color resolver for discs, glow, edge tints, and particles. */
   const nodeColor = useCallback(
     (id: string, kind: BrainGraphNodeKind): string => {
       if (colorMode === "group") {
@@ -759,16 +869,10 @@ export function BrainGraphView({
     [colorMode, communities, groupPalette, colors],
   );
 
-  // Dark-background detection for the backdrop layers (vignette depth,
-  // halo strength, dot-grid alpha). Luma of the resolved token — no
-  // theme prop needed, custom palettes classify themselves.
   const isDark = useMemo(() => hexLuma(colors.background) < 0.5, [colors]);
 
   // Halo tint per community — group mode mirrors the disc palette; kind
-  // mode uses the community's plurality kind, so the wash still says
-  // "what lives here" while discs encode kinds. Communities too small
-  // for cluster gravity get no halo (their members scatter — a wash
-  // over the scatter would read as a phantom group).
+  // mode uses the community's plurality kind.
   const haloColors = useMemo(() => {
     const m = new Map<number, string>();
     if (colorMode === "group") {
@@ -802,12 +906,7 @@ export function BrainGraphView({
     return m;
   }, [colorMode, communities, groupPalette, graph, colors]);
 
-  // Group headings — each community's most-connected member name, the
-  // topic anchor of the cluster ("Memory system", "Context engine", …).
-  // Membership-derived (stable across the sim's per-frame position churn),
-  // so it's a memo, not per-frame work; the live centroid/radius it's
-  // drawn at comes from `communityHalos` via `lastHalosRef`. Only built in
-  // group mode — the heading annotates the colored groups.
+  // Group headings — each community's most-connected member name.
   const communityLabelText = useMemo(
     () =>
       colorMode === "group" && !hasGroupNodes
@@ -816,10 +915,43 @@ export function BrainGraphView({
     [colorMode, graph, communities, hasGroupNodes],
   );
 
-  // Rest-state edge tint — an edge whose endpoints resolve to the SAME
-  // color (intra-community in group mode, same-kind pairs in kind mode)
-  // carries that color as a soft thread; mixed endpoints stay on the
-  // neutral border so bridges don't render as muddy blends.
+  // Groups legend — the top communities by size with their heading, count
+  // and color. Hovering a row spotlights that community on the canvas.
+  const [legendSpotlight, setLegendSpotlight] = useState<number | null>(null);
+  const [legendPinned, setLegendPinned] = useState<number | null>(null);
+  useEffect(() => {
+    setLegendSpotlight(null);
+    setLegendPinned(null);
+  }, [graph, colorMode]);
+  const groupsLegend = useMemo(() => {
+    if (colorMode !== "group" || hasGroupNodes) return { rows: [], more: 0 };
+    const rows = communities.sizes
+      .map((size, community) => ({ community, size }))
+      .filter((r) => r.size >= CLUSTER_MIN_SIZE)
+      .sort((a, b) => b.size - a.size || a.community - b.community)
+      .map((r) => ({
+        ...r,
+        label: communityLabelText.get(r.community) ?? "",
+        color: groupPalette[r.community % groupPalette.length],
+      }))
+      .filter((r) => r.label.length > 0);
+    return {
+      rows: rows.slice(0, GROUP_LEGEND_ROWS),
+      more: Math.max(0, rows.length - GROUP_LEGEND_ROWS),
+    };
+  }, [colorMode, hasGroupNodes, communities, communityLabelText, groupPalette]);
+  const legendCommunity = legendSpotlight ?? legendPinned;
+  const legendMatchIds = useMemo(() => {
+    if (legendCommunity === null) return null;
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      if (communities.byId.get(n.id) === legendCommunity) s.add(n.id);
+    }
+    return s.size > 0 ? s : null;
+  }, [legendCommunity, graph, communities]);
+
+  // Rest-state edge tint — same-colored endpoints carry the color as a
+  // thread; mixed endpoints stay on the neutral border.
   const edgeRestColors = useMemo(() => {
     const m = new Map<string, string>();
     for (const e of graph.edges) {
@@ -830,26 +962,10 @@ export function BrainGraphView({
     return m;
   }, [graph, kindById, nodeColor, colors]);
 
-  // Vignette ink — the background token darkened toward black, so the
-  // corner falloff stays in the active palette's hue family. Null when
-  // the token didn't resolve to hex (withAlpha couldn't tag it) — then
-  // the vignette is skipped rather than painted solid.
-  const vignette = useMemo(() => {
-    const ink = shadeHex(colors.background, -0.85);
-    const edge = withAlpha(ink, isDark ? 0.28 : 0.05);
-    return edge === ink
-      ? null
-      : { edge, transparent: withAlpha(ink, 0) };
-  }, [colors, isDark]);
-
-  // Live node objects from the PREVIOUS snapshot (the sim mutates x/y in
-  // place, so these always hold the settled positions). Feeds the warm
-  // start: a refresh keeps every surviving node where the user left it.
+  // Live node objects from the PREVIOUS snapshot (warm start).
   const lastNodesRef = useRef<Map<string, GraphNodeWithPos>>(new Map());
 
-  // Per-node/edge current paint values. Declared before graphData so a scoped
-  // projection can seed newly revealed objects at alpha 0 and let the
-  // continuous canvas ease them in from their former parent's position.
+  // Per-node/edge current paint values (eased toward their targets).
   const nodeAlphaRef = useRef<Map<string, number>>(new Map());
   const edgeAlphaRef = useRef<Map<string, number>>(new Map());
   const edgeWidthRef = useRef<Map<string, number>>(new Map());
@@ -861,30 +977,17 @@ export function BrainGraphView({
     edgeWidthRef.current.clear();
   }, [workspaceId, viewpointAssistantId, showMemory]);
 
-  // Live community halos from the most recent frame's `paintHalos` pass
-  // (centroid + bounding radius over the sim-mutated positions). Stashed
-  // so the cluster-heading pass in `onRenderFramePost` reuses them instead
-  // of recomputing `communityHalos` a second time per frame. Pre runs
-  // before Post each frame, so this always holds the current frame's data.
   const lastHalosRef = useRef<CommunityHalo[]>([]);
 
-  // ForceGraph2D mutates the links array in place (rewrites source/target
-  // string ids to node refs after the first layout pass). Copying once
-  // here prevents the mutation from leaking into the props we received.
+  // ForceGraph2D mutates the links array in place; copy once here.
   const graphData = useMemo(() => {
-    const nodes = graph.nodes.map(
-      (n) => ({ ...n, __phase: nodePhase(n.id) }) as GraphNodeWithPos,
-    );
-    // Warm-start from the previous layout; new nodes spawn at their
-    // positioned-neighbour centroid instead of the origin.
+    const nodes = graph.nodes.map((n) => ({ ...n }) as GraphNodeWithPos);
     const prev = new Map<string, NodePosition>();
     for (const [id, node] of lastNodesRef.current) {
       if (node.x != null && node.y != null) {
         prev.set(id, { x: node.x, y: node.y, vx: node.vx, vy: node.vy });
       }
     }
-    // A server scope does not expose member ids in advance. When a group opens,
-    // bloom every newly returned child from the former group position.
     const originId = transitionOriginRef.current;
     const origin = originId ? lastNodesRef.current.get(originId) : null;
     if (origin?.x != null && origin.y != null) {
@@ -916,42 +1019,174 @@ export function BrainGraphView({
     };
   }, [graph]);
 
-  // Kinds actually present in the current snapshot, in display order.
-  // Drives the legend so a CRM-only brain doesn't advertise a "Knowledge"
-  // swatch (and a KB-only brain doesn't advertise "Deals").
   const presentKinds = useMemo(() => {
     const seen = new Set<BrainGraphNodeKind>();
     for (const n of graph.nodes) seen.add(displayKind(n));
     return KIND_ORDER.filter((k) => seen.has(k));
   }, [graph]);
 
-  // ── Eased dim transitions ─────────────────────────────────────────────
-  // Per-node and per-edge CURRENT alphas, stepped toward their targets each
-  // painted frame (stepToward in the canvas callbacks below). The canvas
-  // renders continuously (`autoPauseRedraw={false}` on the graph), so the
-  // easing — and anything else that changes how a frame LOOKS without
-  // changing props, like the captured fit scale — takes effect on the next
-  // frame. (A React-state "repaint pump" was tried first and does NOT
-  // work: prop updates don't mark the lib's halted canvas dirty, so the
-  // stale frame stays frozen on screen.)
-  // ── Visual-treatment caches ──────────────────────────────────────────
-  // Orb gradients per (fill, radius-bucket) and the backdrop dot tile.
-  // Both are theme-derived, so a palette change invalidates them below.
+  // ── Motion lease ──────────────────────────────────────────────────────
+  // See lib/graph-motion.ts. The refs are the live inputs; `settleMotion`
+  // resolves + applies a mode, debouncing the transition INTO `paused` so a
+  // quick re-entry or the tail of a hover-out ease never thrashes the loop.
+  const easePendingRef = useRef(false);
+  const pointerInsideRef = useRef(false);
+  const engineSettledRef = useRef(false);
+  const tweenUntilRef = useRef(0);
+  const documentVisibleRef = useRef(true);
+  const intersectingRef = useRef(true);
+  const motionModeRef = useRef<CanvasMotionMode>("on-demand");
+  const idleTimerRef = useRef<number | null>(null);
+  // `autoPauseRedraw` is a PROP (the ref exposes methods only), so continuous
+  // painting is React state: `autoPauseRedraw={!continuousPaint}`. The ref
+  // mirror guards the setter so a repeated decision never re-renders.
+  const [continuousPaint, setContinuousPaint] = useState(false);
+  const continuousRef = useRef(false);
+  const motionDriver = useCallback((instance: ForceGraphInstance) => ({
+    setContinuous: (on: boolean) => {
+      if (continuousRef.current === on) return;
+      continuousRef.current = on;
+      setContinuousPaint(on);
+    },
+    pauseAnimation: () => instance.pauseAnimation(),
+    resumeAnimation: () => instance.resumeAnimation(),
+  }), []);
+
+  const clearIdleTimer = () => {
+    if (idleTimerRef.current !== null) {
+      window.clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+  };
+
+  const settleMotion = useCallback(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const instance = motionDriver(fg);
+    const mode = resolveCanvasMotion({
+      documentVisible: documentVisibleRef.current,
+      intersecting: intersectingRef.current,
+      easePending: easePendingRef.current,
+      tweenActive: performance.now() < tweenUntilRef.current,
+      pointerInside: pointerInsideRef.current,
+      engineSettled: engineSettledRef.current,
+    });
+    if (mode === "paused" && motionModeRef.current !== "paused") {
+      // Hidden / off-screen pauses immediately; idle pauses after a grace.
+      const immediate = !documentVisibleRef.current || !intersectingRef.current;
+      if (immediate) {
+        clearIdleTimer();
+        motionModeRef.current = "paused";
+        applyCanvasMotion(instance, "paused");
+        return;
+      }
+      if (idleTimerRef.current === null) {
+        idleTimerRef.current = window.setTimeout(() => {
+          idleTimerRef.current = null;
+          settleMotion();
+        }, MOTION_IDLE_GRACE_MS);
+      }
+      // Until the grace expires, stay on-demand (the library skips idle frames).
+      if (motionModeRef.current !== "on-demand") {
+        motionModeRef.current = "on-demand";
+        applyCanvasMotion(instance, "on-demand");
+      }
+      return;
+    }
+    if (mode !== "paused") clearIdleTimer();
+    if (mode !== motionModeRef.current) {
+      motionModeRef.current = mode;
+      applyCanvasMotion(instance, mode);
+    }
+  }, [motionDriver]);
+
+  /** Anything that changes how a frame looks calls this: the loop resumes
+   *  (if paused) so the prop change the caller made can paint, and the
+   *  post-frame pass then decides whether more frames are owed. */
+  const wake = useCallback(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    clearIdleTimer();
+    if (motionModeRef.current === "paused") {
+      motionModeRef.current = "on-demand";
+      applyCanvasMotion(motionDriver(fg), "on-demand");
+    }
+  }, [motionDriver]);
+
+  // Visual-state changes → one frame at least.
+  useEffect(() => {
+    wake();
+  }, [
+    wake,
+    graphData,
+    hoverId,
+    focusMatchIds,
+    highlightMatchIds,
+    legendMatchIds,
+    activeFilterKinds,
+    colors,
+    colorMode,
+    selectedId,
+    dims,
+  ]);
+
+  // Hidden tab / off-screen canvas → pause outright; back → resume.
+  useEffect(() => {
+    const el = containerRef.current;
+    const onVisibility = () => {
+      documentVisibleRef.current = document.visibilityState !== "hidden";
+      if (documentVisibleRef.current) wake();
+      settleMotion();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    let io: IntersectionObserver | null = null;
+    if (el && typeof IntersectionObserver !== "undefined") {
+      io = new IntersectionObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        intersectingRef.current = entry.isIntersecting;
+        if (entry.isIntersecting) wake();
+        settleMotion();
+      });
+      io.observe(el);
+    }
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      io?.disconnect();
+      clearIdleTimer();
+    };
+  }, [wake, settleMotion]);
+
+  // A new projection re-runs the simulation: the engine is live again.
+  useEffect(() => {
+    engineSettledRef.current = false;
+  }, [graphData]);
+
+  // ── Hover card (imperative positioning; no React render per pointer move) ──
+  const positionHoverCard = (clientX: number, clientY: number) => {
+    const card = hoverCardRef.current;
+    const el = containerRef.current;
+    if (!card || !el) return;
+    const box = el.getBoundingClientRect();
+    const x = clientX - box.left;
+    const y = clientY - box.top;
+    const cw = card.offsetWidth || 220;
+    const ch = card.offsetHeight || 80;
+    const left = Math.min(Math.max(8, x + 14), Math.max(8, box.width - cw - 8));
+    const top =
+      y + 16 + ch > box.height - 8 ? Math.max(8, y - ch - 12) : y + 16;
+    card.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+  };
+
+  // ── Visual caches ────────────────────────────────────────────────────
   const gradientCacheRef = useRef<Map<string, CanvasGradient>>(new Map());
-  const dotPatternRef = useRef<{ color: string; pattern: CanvasPattern } | null>(
-    null,
-  );
   useEffect(() => {
     gradientCacheRef.current.clear();
-    dotPatternRef.current = null;
   }, [colors]);
 
-  /** Cached radial "orb" gradient — hot highlight up-left, token color
-   *  in the body, darker limb at the edge (tuned for the deep canvas:
-   *  the highlight runs brighter so each node reads as a light source).
-   *  Built relative to the origin so one gradient serves every node
-   *  drawn under a translate; bucketed to quarter graph units, so the
-   *  cache stays bounded (palette × ~18 buckets). */
+  /** Cached radial "orb" gradient — highlight up-left, token color in the
+   *  body, darker limb. Built origin-relative under a translate; bucketed
+   *  to quarter graph units so the cache stays bounded. */
   const discGradient = (
     ctx: CanvasRenderingContext2D,
     fill: string,
@@ -962,14 +1197,7 @@ export function BrainGraphView({
     const cache = gradientCacheRef.current;
     const hit = cache.get(key);
     if (hit) return hit;
-    const g = ctx.createRadialGradient(
-      -rb * 0.35,
-      -rb * 0.4,
-      rb * 0.1,
-      0,
-      0,
-      rb * 1.05,
-    );
+    const g = ctx.createRadialGradient(-rb * 0.35, -rb * 0.4, rb * 0.1, 0, 0, rb * 1.05);
     g.addColorStop(0, shadeHex(fill, 0.45));
     g.addColorStop(0.55, fill);
     g.addColorStop(1, shadeHex(fill, -0.18));
@@ -977,13 +1205,9 @@ export function BrainGraphView({
     return g;
   };
 
-  /** Cached bloom sprite behind every disc — a radial falloff in the
-   *  node's own hue, drawn as an arc fill instead of `shadowBlur`
-   *  (shadow blurs are device-space Gaussian passes; a cached gradient
-   *  is ~free and zoom-stable). Hubs bloom stronger — the "important
-   *  at rest" cue. Dark mode blooms a touch harder (light on a dark
-   *  ground); light mode keeps it a faint tint. The cache is cleared
-   *  on theme change, so closing over isDark is safe. */
+  /** Cached bloom sprite behind every disc — an arc fill of a radial
+   *  falloff, NOT `shadowBlur` (a per-node device-space Gaussian pass).
+   *  Hubs bloom stronger — the "important at rest" cue. */
   const glowGradient = (
     ctx: CanvasRenderingContext2D,
     fill: string,
@@ -1003,120 +1227,9 @@ export function BrainGraphView({
     return g;
   };
 
-  /** Screen-space backdrop — world-locked dot grid + corner vignette,
-   *  painted under everything each frame (the lib wipes the canvas,
-   *  fires onRenderFramePre, then draws links/nodes; the background
-   *  color itself is CSS on the canvas element). */
-  const paintBackdrop = (
-    ctx: CanvasRenderingContext2D,
-    globalScale: number,
-  ) => {
-    const m = ctx.getTransform();
-    const w = ctx.canvas.width;
-    const h = ctx.canvas.height;
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Aurora — large brand-hue glows drifting on long offset periods,
-    // the "alive AI surface" cue. Screen space, BEHIND the grid, so it
-    // reads as atmosphere rather than data. Each blob's drift period is
-    // co-prime-ish with the others so the composition never visibly
-    // loops. The ground in BOTH themes is the page background, so the
-    // aurora must stay a whisper — atmosphere, never a stain on the
-    // app surface.
-    {
-      const t = performance.now();
-      const auroraScale = isDark ? 1 : 0.45;
-      const blobs: Array<[string, number, number, number, number]> = [
-        // [color, cx fraction, cy fraction, radius fraction, alpha]
-        [
-          colors.kinds.knowledge,
-          0.26 + 0.07 * Math.sin(t / 9300),
-          0.32 + 0.05 * Math.cos(t / 7600),
-          0.52,
-          0.05 * auroraScale,
-        ],
-        [
-          colors.kinds.person,
-          0.74 + 0.06 * Math.cos(t / 11200),
-          0.62 + 0.07 * Math.sin(t / 8400),
-          0.46,
-          0.04 * auroraScale,
-        ],
-        [
-          colors.kinds.company,
-          0.5 + 0.08 * Math.sin(t / 13600),
-          0.88 + 0.04 * Math.cos(t / 10100),
-          0.4,
-          0.035 * auroraScale,
-        ],
-      ];
-      for (const [color, fx, fy, fr, fa] of blobs) {
-        const inner = withAlpha(color, fa);
-        if (inner === color) continue; // non-hex token — skip
-        const r = Math.max(w, h) * fr;
-        const g = ctx.createRadialGradient(w * fx, h * fy, 0, w * fx, h * fy, r);
-        g.addColorStop(0, inner);
-        g.addColorStop(1, withAlpha(color, 0));
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, w, h);
-      }
-    }
-    try {
-      let entry = dotPatternRef.current;
-      if (!entry || entry.color !== colors.muted) {
-        const tile = document.createElement("canvas");
-        tile.width = 16;
-        tile.height = 16;
-        const tctx = tile.getContext("2d");
-        if (tctx) {
-          tctx.fillStyle = colors.muted;
-          tctx.beginPath();
-          tctx.arc(8, 8, 0.75, 0, 2 * Math.PI);
-          tctx.fill();
-          const pattern = ctx.createPattern(tile, "repeat");
-          if (pattern) {
-            entry = { color: colors.muted, pattern };
-            dotPatternRef.current = entry;
-          }
-        }
-      }
-      if (entry) {
-        // One tile = one grid step. Scaling the PATTERN (not redrawing
-        // dots) keeps this a single fillRect; translating it by the
-        // world transform locks the grid to graph space, so it pans and
-        // zooms with the layout instead of floating over it.
-        const pitch = gridStep(globalScale) * m.a;
-        entry.pattern.setTransform(
-          new DOMMatrix([pitch / 16, 0, 0, pitch / 16, m.e, m.f]),
-        );
-        ctx.globalAlpha = isDark ? 0.18 : 0.3;
-        ctx.fillStyle = entry.pattern;
-        ctx.fillRect(0, 0, w, h);
-        ctx.globalAlpha = 1;
-      }
-    } catch {
-      // Pattern transforms are progressive enhancement — a runtime
-      // without DOMMatrix/setTransform paints no grid, never breaks
-      // the frame.
-    }
-    if (vignette) {
-      const cx = w / 2;
-      const cy = h * 0.42;
-      const vr = Math.max(w, h) * 0.75;
-      const vg = ctx.createRadialGradient(cx, cy, vr * 0.45, cx, cy, vr);
-      vg.addColorStop(0, vignette.transparent);
-      vg.addColorStop(1, vignette.edge);
-      ctx.fillStyle = vg;
-      ctx.fillRect(0, 0, w, h);
-    }
-    ctx.restore();
-  };
-
-  /** Soft community washes behind the clusters — graph space,
-   *  recomputed from the live (sim-mutated) node positions each frame
-   *  so the wash tracks the layout as it settles. Skipped while the
-   *  projection carries group nodes: each bubble is already a group,
-   *  so one mega-wash over the bubble map reads as fog, not structure. */
+  /** Soft community washes behind the clusters — graph space, over the live
+   *  (sim-mutated) positions. Static alpha: the wash no longer breathes, so
+   *  an idle canvas owes no frames on its account. */
   const paintHalos = (ctx: CanvasRenderingContext2D) => {
     if (hasGroupNodes) {
       lastHalosRef.current = [];
@@ -1124,20 +1237,15 @@ export function BrainGraphView({
     }
     const byId = communitiesRef.current.byId;
     const halos = communityHalos(graphData.nodes, (id) => byId.get(id));
-    // Reused by the cluster-heading pass (onRenderFramePost) this frame.
     lastHalosRef.current = halos;
-    const t = performance.now();
     for (const h of halos) {
       const color = haloColors.get(h.community);
       if (!color) continue;
-      // Slow breathing, phase-offset per community, so the field feels
-      // alive without the clusters pulsing in lockstep.
-      const breath = 0.88 + 0.12 * Math.sin(t / 2600 + h.community * 1.7);
-      const inner = withAlpha(color, (isDark ? 0.09 : 0.06) * breath);
+      const inner = withAlpha(color, isDark ? 0.09 : 0.06);
       if (inner === color) continue; // non-hex token — skip, never paint solid
       const g = ctx.createRadialGradient(h.x, h.y, h.r * 0.1, h.x, h.y, h.r);
       g.addColorStop(0, inner);
-      g.addColorStop(0.7, withAlpha(color, (isDark ? 0.05 : 0.035) * breath));
+      g.addColorStop(0.7, withAlpha(color, isDark ? 0.05 : 0.035));
       g.addColorStop(1, withAlpha(color, 0));
       ctx.fillStyle = g;
       ctx.beginPath();
@@ -1146,17 +1254,8 @@ export function BrainGraphView({
     }
   };
 
-  /** Group headings — the topic-anchor name floating above each cluster,
-   *  an OVERVIEW affordance: full at fit, fading to 0 as the user zooms
-   *  in to read individual nodes (`clusterLabelAlpha`), so it never
-   *  competes with the per-node labels underneath. Drawn in
-   *  `onRenderFramePost` (above the discs) at the live halo centroid/
-   *  radius stashed by `paintHalos`. Group mode only (the caller gates
-   *  the prop), in a legible shade of the group hue with a bg halo. */
-  const paintClusterLabels = (
-    ctx: CanvasRenderingContext2D,
-    globalScale: number,
-  ) => {
+  /** Group headings above each cluster — full at fit, gone by ~1.8× fit. */
+  const paintClusterLabels = (ctx: CanvasRenderingContext2D, globalScale: number) => {
     const alpha = clusterLabelAlpha(globalScale / (fitScaleRef.current || 1));
     if (alpha <= 0.02) return;
     const halos = lastHalosRef.current;
@@ -1171,15 +1270,10 @@ export function BrainGraphView({
     for (const h of halos) {
       const text = communityLabelText.get(h.community);
       if (!text) continue;
-      // Heading in a legible shade of the group's hue — brightened on the
-      // dark ground, darkened on light; foreground token when the halo
-      // color didn't resolve to hex (shadeHex would no-op it).
       const hue = haloColors.get(h.community);
-      const fill = hue
-        ? shadeHex(hue, isDark ? 0.5 : -0.45)
-        : colors.foreground;
+      const fill = hue ? shadeHex(hue, isDark ? 0.5 : -0.45) : colors.foreground;
       const label = truncateLabel(text, CLUSTER_LABEL_MAX_CHARS);
-      const ly = h.y - h.r - 4 / globalScale; // just above the wash
+      const ly = h.y - h.r - 4 / globalScale;
       ctx.strokeStyle = colors.background;
       ctx.strokeText(label, h.x, ly);
       ctx.fillStyle = fill;
@@ -1188,12 +1282,48 @@ export function BrainGraphView({
     ctx.restore();
   };
 
+  /** Edge-type labels on the hovered node's incident threads — the one
+   *  moment the relationship vocabulary is worth reading. Bounded by
+   *  HOVER_EDGE_LABEL_CAP; aggregate group edges say how many links they
+   *  stand for instead. */
+  const paintHoverEdgeLabels = (ctx: CanvasRenderingContext2D, globalScale: number) => {
+    if (hoverId === null) return;
+    let drawn = 0;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 3 / globalScale;
+    ctx.font = `500 ${9.5 / globalScale}px ui-sans-serif, system-ui, sans-serif`;
+    for (const l of graphData.links) {
+      if (l.__sourceId !== hoverId && l.__targetId !== hoverId) continue;
+      if (typeof l.source !== "object" || typeof l.target !== "object") continue;
+      const sx = l.source.x ?? 0;
+      const sy = l.source.y ?? 0;
+      const tx = l.target.x ?? 0;
+      const ty = l.target.y ?? 0;
+      const text =
+        l.type === "aggregate"
+          ? l.count && l.count > 1
+            ? format(t.brainPage.graphView.stats.linksMany, { count: l.count })
+            : t.brainPage.graphView.stats.linksOne
+          : humanizeEdgeType(l.type);
+      if (!text) continue;
+      const mx = (sx + tx) / 2;
+      const my = (sy + ty) / 2;
+      ctx.strokeStyle = colors.background;
+      ctx.strokeText(text, mx, my);
+      ctx.fillStyle = colors.muted;
+      ctx.fillText(text, mx, my);
+      if (++drawn >= HOVER_EDGE_LABEL_CAP) break;
+    }
+    ctx.restore();
+  };
+
   // Frame the first non-empty projection once, immediately after the hidden
-  // warmup. Scope changes and refreshes preserve the camera: wheel/pinch is a
-  // continuous camera gesture, never an implicit request to replace a layer.
+  // warmup. Scope changes and refreshes preserve the camera.
   const didFitRef = useRef(false);
   const hasUserCameraIntentRef = useRef(false);
-  // The bounded initial fit scale anchors the fit-relative label tiers.
   const fitScaleRef = useRef(1);
 
   useEffect(() => {
@@ -1202,104 +1332,103 @@ export function BrainGraphView({
     fitScaleRef.current = 1;
   }, [workspaceId, viewpointAssistantId, showMemory]);
 
+  const runBoundedFit = useCallback(
+    (animate: boolean) => {
+      const instance = fgRef.current;
+      if (!instance || !dims || graphData.nodes.length === 0) return false;
+      const bounds = instance.getGraphBbox();
+      if (!bounds) return false;
+      const fit = boundedViewportFit({
+        width: dims.w,
+        height: dims.h,
+        bounds,
+        maxNodeRadius: graphData.nodes.reduce(
+          (max, node) => Math.max(max, displayRadius(node)),
+          0,
+        ),
+        maxNodeRadiusPx: graphData.nodes.some(isBrainGraphGroupNode)
+          ? INITIAL_FIT_MAX_GROUP_RADIUS_PX
+          : undefined,
+      });
+      fitScaleRef.current = fit.scale;
+      const ms = animate && !reducedMotion ? CAMERA_TWEEN_MS : 0;
+      tweenUntilRef.current = performance.now() + (ms > 0 ? CAMERA_TWEEN_GRACE_MS : 0);
+      wake();
+      instance.centerAt(fit.center.x, fit.center.y, ms);
+      instance.zoom(fit.scale, ms);
+      return true;
+    },
+    [dims, graphData.nodes, reducedMotion, wake],
+  );
+
   const fitInitialCamera = useCallback(() => {
     const instance = fgRef.current;
     if (didFitRef.current || !instance || !dims || graphData.nodes.length === 0) {
       return;
     }
-    // A person who already started panning/zooming owns the camera. Never let
-    // a late engine callback yank it back to an automated frame.
     if (hasUserCameraIntentRef.current) {
       didFitRef.current = true;
       const currentScale = instance.zoom();
       if (currentScale > 0) fitScaleRef.current = currentScale;
       return;
     }
+    if (runBoundedFit(true)) didFitRef.current = true;
+  }, [dims, graphData.nodes, runBoundedFit]);
 
-    const bounds = instance.getGraphBbox();
-    if (!bounds) return;
-    didFitRef.current = true;
-    const fit = boundedViewportFit({
-      width: dims.w,
-      height: dims.h,
-      bounds,
-      maxNodeRadius: graphData.nodes.reduce(
-        (max, node) => Math.max(max, displayRadius(node)),
-        0,
-      ),
-      // Group bubbles are containers — the entry-hub 18px screen-radius
-      // ceiling strangled the overview to ~1.6× and left the bubble map
-      // tiny in an empty canvas. Let the geometric fit frame it.
-      maxNodeRadiusPx: graphData.nodes.some(isBrainGraphGroupNode)
-        ? INITIAL_FIT_MAX_GROUP_RADIUS_PX
-        : undefined,
-    });
-    fitScaleRef.current = fit.scale;
-    instance.centerAt(fit.center.x, fit.center.y, 360);
-    instance.zoom(fit.scale, 360);
-  }, [dims, graphData.nodes]);
+  const zoomBy = (factor: number) => {
+    const instance = fgRef.current;
+    if (!instance) return;
+    hasUserCameraIntentRef.current = true;
+    const ms = reducedMotion ? 0 : 200;
+    tweenUntilRef.current = performance.now() + (ms > 0 ? ms + 80 : 0);
+    wake();
+    instance.zoom(Math.max(0.05, Math.min(12, instance.zoom() * factor)), ms);
+  };
 
-  /** Ref callback — fires when the instance exists, i.e. when the d3
-   *  forces are live. Tunes charge/link and installs the collision
-   *  force (radii + padding from graph-canvas). */
+  const fitToView = () => {
+    hasUserCameraIntentRef.current = false;
+    if (runBoundedFit(true)) didFitRef.current = true;
+  };
+
+  /** Ref callback — tunes charge/link and installs the custom forces. */
   const bindFg = (instance: ForceGraphInstance | null) => {
     fgRef.current = instance;
     if (!instance) return;
     instance.d3Force("charge")?.strength?.(CHARGE_STRENGTH);
-    // Short links inside a community, long bridges between communities —
-    // the closures read communitiesRef so a snapshot refresh (new
-    // communities) re-resolves without re-binding the forces.
     const sameCommunity = (link: unknown): boolean => {
       const l = link as GraphEdgeWithRefs;
       const byId = communitiesRef.current.byId;
       const a = byId.get(l.__sourceId);
       return a != null && a === byId.get(l.__targetId);
     };
-    // Spring lengths are radius-aware: entry↔entry edges keep the tuned
-    // 28/160 split; an edge touching a group container stretches to clear
-    // both discs plus label room (bubble-map spacing). Endpoints resolve
-    // through lastNodesRef — always populated by the graphData memo
-    // before the sim ticks.
     const endpointNode = (id: string): GraphNodeWithPos | undefined =>
       lastNodesRef.current.get(id);
     instance.d3Force("link")?.distance?.((link: unknown) => {
       const l = link as GraphEdgeWithRefs;
-      const base = sameCommunity(l)
-        ? LINK_DISTANCE_INTRA
-        : LINK_DISTANCE_INTER;
+      const base = sameCommunity(l) ? LINK_DISTANCE_INTRA : LINK_DISTANCE_INTER;
       const s = endpointNode(l.__sourceId);
-      const t = endpointNode(l.__targetId);
+      const tn = endpointNode(l.__targetId);
       return radiusAwareLinkDistance(
         base,
         s ? displayRadius(s) : NODE_RADIUS_MAX,
-        t ? displayRadius(t) : NODE_RADIUS_MAX,
+        tn ? displayRadius(tn) : NODE_RADIUS_MAX,
         Boolean(
-          (s && isBrainGraphGroupNode(s)) || (t && isBrainGraphGroupNode(t)),
+          (s && isBrainGraphGroupNode(s)) || (tn && isBrainGraphGroupNode(tn)),
         ),
       );
     });
     instance.d3Force("link")?.strength?.(((link: unknown) =>
-      sameCommunity(link)
-        ? LINK_STRENGTH_INTRA
-        : LINK_STRENGTH_INTER) as never);
+      sameCommunity(link) ? LINK_STRENGTH_INTRA : LINK_STRENGTH_INTER) as never);
     instance.d3Force(
       "collide",
       makeCollideForce((n) => displayRadius(n as GraphNodeWithPos), {
-        // Group containers carry the two-line overview label — they rest
-        // farther apart than entry discs.
         padding: (n) =>
           isBrainGraphGroupNode(n as GraphNodeWithPos)
             ? GROUP_COLLIDE_PADDING
             : COLLIDE_PADDING,
       }),
     );
-    // Weak pull-to-origin so isolated nodes / disconnected fragments stop
-    // drifting off and ballooning the initial-fit bounding box.
     instance.d3Force("anchor", makeAnchorForce());
-    // Community gravity — members pull toward their cluster's centroid.
-    // Group containers are exempt: at the overview they usually detect as
-    // ONE community, and gravity squeezed all bubbles into a huddle. The
-    // radius-aware springs + collide own container spacing instead.
     instance.d3Force(
       "cluster",
       makeClusterForce((n) => {
@@ -1308,6 +1437,9 @@ export function BrainGraphView({
         return communitiesRef.current.byId.get(node.id);
       }),
     );
+    // Start on-demand: the library skips idle frames from the first tick.
+    motionModeRef.current = "on-demand";
+    applyCanvasMotion(motionDriver(instance), "on-demand");
   };
 
   if (graph.nodes.length === 0 && !loading && !scopeLoading) {
@@ -1329,60 +1461,123 @@ export function BrainGraphView({
   });
   const visibleGroupCount = graph.nodes.filter(isBrainGraphGroupNode).length;
   const totalNodeCount = activeProjection.totalNodes ?? graph.nodes.length;
+  const linkCount = graph.edges.length;
+  const highlightVisibleCount = highlightMatchIds
+    ? [...highlightMatchIds].filter((id) => !(id in highlightGroupCounts)).length +
+      Object.values(highlightGroupCounts).reduce((a, b) => a + b, 0)
+    : 0;
+  const statsCopy = t.brainPage.graphView.stats;
+  const chipCls =
+    "rounded-md border border-[var(--graph-overlay-border)] bg-[var(--graph-overlay)] text-[11px] text-[var(--graph-overlay-fg)] shadow-sm backdrop-blur-md";
 
   return (
     <div
       ref={containerRef}
       className="relative flex-1 min-h-0 overflow-hidden bg-[var(--graph-bg)]"
       aria-busy={Boolean(loading) || scopeLoading}
+      onPointerEnter={() => {
+        pointerInsideRef.current = true;
+        wake();
+      }}
+      onPointerLeave={() => {
+        pointerInsideRef.current = false;
+        settleMotion();
+      }}
+      onPointerMove={(e) => positionHoverCard(e.clientX, e.clientY)}
       onPointerDownCapture={() => {
         hasUserCameraIntentRef.current = true;
+        wake();
       }}
       onWheelCapture={() => {
         hasUserCameraIntentRef.current = true;
+        wake();
       }}
     >
+      {/* Atmosphere — CSS, not canvas (see the header note). */}
+      <div className="graph-backdrop" aria-hidden>
+        <div className="graph-backdrop__aurora graph-backdrop__aurora--a" />
+        <div className="graph-backdrop__aurora graph-backdrop__aurora--b" />
+        <div className="graph-backdrop__aurora graph-backdrop__aurora--c" />
+        <div ref={gridRef} className="graph-backdrop__grid" />
+        <div className="graph-backdrop__vignette" />
+      </div>
+
       {showGraphLoader && (
         <div className="absolute inset-0 z-20">
           <BrainGraphLoadingSkeleton />
         </div>
       )}
-      {!showGraphLoader &&
-        (activeProjection.truncated ||
-          visibleGroupCount > 0 ||
-          scopeHistory.length > 0) && (
-          <div className="absolute left-2 top-2 z-10 flex flex-col items-start gap-1.5">
-            {activeProjection.truncated && (
-              <div className="rounded-md border border-[var(--graph-overlay-border)] bg-[var(--graph-overlay)] px-2.5 py-1 text-[11px] text-[var(--graph-overlay-fg)] shadow-sm backdrop-blur-md">
-                {format(t.brainPage.graphView.truncated, {
-                  count: totalNodeCount,
-                })}
-              </div>
+
+      {/* Stats strip — the shape of the projection at a glance. */}
+      {!showGraphLoader && graph.nodes.length > 0 && (
+        <div className="absolute left-2 top-2 z-10 flex max-w-[70%] flex-col items-start gap-1.5">
+          <div
+            className={cn(chipCls, "flex flex-wrap items-center gap-x-2 px-2.5 py-1 tabular-nums")}
+            title={
+              activeProjection.truncated
+                ? format(t.brainPage.graphView.truncated, { count: totalNodeCount })
+                : undefined
+            }
+          >
+            <span>
+              {totalNodeCount === 1
+                ? statsCopy.entriesOne
+                : format(statsCopy.entriesMany, { count: totalNodeCount })}
+              {activeProjection.truncated ? "+" : ""}
+            </span>
+            {visibleGroupCount > 0 ? (
+              <>
+                <span aria-hidden className="opacity-40">·</span>
+                <span>
+                  {visibleGroupCount === 1
+                    ? statsCopy.groupsOne
+                    : format(statsCopy.groupsMany, { count: visibleGroupCount })}
+                </span>
+              </>
+            ) : (
+              <>
+                <span aria-hidden className="opacity-40">·</span>
+                <span>
+                  {linkCount === 1
+                    ? statsCopy.linksOne
+                    : format(statsCopy.linksMany, { count: linkCount })}
+                </span>
+              </>
             )}
-            {visibleGroupCount > 0 && (
-              <div className="rounded-md border border-[var(--graph-overlay-border)] bg-[var(--graph-overlay)] px-2.5 py-1 text-[11px] text-[var(--graph-overlay-fg)] shadow-sm backdrop-blur-md">
-                {format(t.brainPage.graphView.semantic.overview, {
-                  total: totalNodeCount,
-                  groups: visibleGroupCount,
-                })}
-              </div>
-            )}
-            {scopeHistory.length > 0 && (
-              <button
-                type="button"
-                onClick={returnToPreviousScope}
-                className="rounded-md border border-[var(--graph-overlay-border)] bg-[var(--graph-overlay)] px-2.5 py-1 text-[11px] text-[var(--graph-overlay-fg)] shadow-sm backdrop-blur-md transition-colors hover:text-[var(--graph-fg)]"
-              >
-                {t.brainPage.graphView.semantic.back}
-              </button>
+            {(highlightActive || nameHighlightActive) && highlightVisibleCount > 0 && (
+              <>
+                <span aria-hidden className="opacity-40">·</span>
+                <span style={{ color: colors.highlight }}>
+                  {format(statsCopy.highlighted, { count: highlightVisibleCount })}
+                </span>
+              </>
             )}
           </div>
-        )}
-      {/* Kind legend — only meaningful while colors encode kinds. Glass
-          chip over the canvas, themed by the --graph-overlay* tokens so it
-          sits on the graph ground, not the page surface. */}
-      {colorMode === "kind" && presentKinds.length > 1 && (
-        <div className="absolute bottom-2 left-2 z-10 flex max-w-[70%] flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--graph-overlay-border)] bg-[var(--graph-overlay)] px-2.5 py-1.5 text-[11px] text-[var(--graph-overlay-fg)] shadow-sm backdrop-blur-md">
+          {(activeProjection.scopeLabel || scopeHistory.length > 0) && (
+            <div className="flex items-center gap-1.5">
+              {activeProjection.scopeLabel && (
+                <span className={cn(chipCls, "max-w-[220px] truncate px-2.5 py-1")}>
+                  {format(statsCopy.inScope, { name: activeProjection.scopeLabel })}
+                </span>
+              )}
+              {scopeHistory.length > 0 && (
+                <button
+                  type="button"
+                  onClick={returnToPreviousScope}
+                  // The only way out of a drilled-in group: `py-2 sm:py-1` (C 71).
+                  className={cn(chipCls, "px-2.5 py-2 transition-colors hover:text-[var(--graph-fg)] sm:py-1")}
+                >
+                  {t.brainPage.graphView.semantic.back}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Kind legend (Type mode) or groups legend (Groups mode, entry-level). */}
+      {!showGraphLoader && colorMode === "kind" && presentKinds.length > 1 && (
+        <div className={cn(chipCls, "absolute bottom-2 left-2 z-10 flex max-w-[70%] flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1.5")}>
           {presentKinds.map((k) => (
             <span key={k} className="inline-flex items-center gap-1.5">
               <span
@@ -1395,12 +1590,54 @@ export function BrainGraphView({
           ))}
         </div>
       )}
-      {/* Color-mode toggle — Type (kind hues, legend on) | Groups (detected
-          communities, the Obsidian look). Overlays the canvas like the
-          legend; persisted per browser. */}
+      {!showGraphLoader && colorMode === "group" && groupsLegend.rows.length > 1 && (
+        <div
+          className={cn(chipCls, "absolute bottom-2 left-2 z-10 w-[200px] px-1.5 py-1.5")}
+          onPointerLeave={() => setLegendSpotlight(null)}
+        >
+          <div className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide opacity-70">
+            {t.brainPage.graphView.groupsLegend.heading}
+          </div>
+          <ul className="flex flex-col">
+            {groupsLegend.rows.map((row) => (
+              <li key={row.community}>
+                <button
+                  type="button"
+                  aria-label={format(t.brainPage.graphView.groupsLegend.rowAria, { name: row.label })}
+                  aria-pressed={legendPinned === row.community}
+                  onPointerEnter={() => setLegendSpotlight(row.community)}
+                  onFocus={() => setLegendSpotlight(row.community)}
+                  onBlur={() => setLegendSpotlight(null)}
+                  onClick={() =>
+                    setLegendPinned((prev) => (prev === row.community ? null : row.community))
+                  }
+                  className={cn(
+                    "flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left transition-colors hover:bg-[var(--graph-overlay-active)]",
+                    legendPinned === row.community && "bg-[var(--graph-overlay-active)] text-[var(--graph-fg)]",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: row.color }}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{row.label}</span>
+                  <span className="shrink-0 tabular-nums opacity-60">{row.size}</span>
+                </button>
+              </li>
+            ))}
+            {groupsLegend.more > 0 && (
+              <li className="px-1 pt-0.5 text-[10px] opacity-60">
+                {format(t.brainPage.graphView.groupsLegend.more, { count: groupsLegend.more })}
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
+      {/* Color-mode toggle — Groups | Type. */}
       {graph.nodes.length > 0 && (
-        <div className="absolute top-2 right-2 z-10 inline-flex rounded-md border border-[var(--graph-overlay-border)] bg-[var(--graph-overlay)] p-0.5 text-[11px] shadow-sm backdrop-blur-md">
-          {/* Groups leads — it is the color-mode default. */}
+        <div className={cn(chipCls, "absolute top-2 right-2 z-10 inline-flex p-0.5")}>
           <button
             type="button"
             aria-label={t.brainPage.graphView.colorMode.groupAria}
@@ -1431,53 +1668,117 @@ export function BrainGraphView({
           </button>
         </div>
       )}
+
+      {/* Zoom controls — top-right, stacked under the color-mode toggle. NOT
+          bottom-right: the workspace chrome's floating chat dock owns that
+          corner on every surface. */}
+      {!showGraphLoader && graph.nodes.length > 0 && (
+        <div className={cn(chipCls, "absolute right-2 top-11 z-10 flex flex-col p-0.5")}>
+          <button
+            type="button"
+            aria-label={t.brainPage.graphView.zoom.inAria}
+            title={t.brainPage.graphView.zoom.inAria}
+            onClick={() => zoomBy(ZOOM_STEP)}
+            className="inline-flex size-6 items-center justify-center rounded transition-colors hover:bg-[var(--graph-overlay-active)] hover:text-[var(--graph-fg)]"
+          >
+            <Plus className="size-3.5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label={t.brainPage.graphView.zoom.outAria}
+            title={t.brainPage.graphView.zoom.outAria}
+            onClick={() => zoomBy(1 / ZOOM_STEP)}
+            className="inline-flex size-6 items-center justify-center rounded transition-colors hover:bg-[var(--graph-overlay-active)] hover:text-[var(--graph-fg)]"
+          >
+            <Minus className="size-3.5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label={t.brainPage.graphView.zoom.fitAria}
+            title={t.brainPage.graphView.zoom.fitAria}
+            onClick={fitToView}
+            className="inline-flex size-6 items-center justify-center rounded transition-colors hover:bg-[var(--graph-overlay-active)] hover:text-[var(--graph-fg)]"
+          >
+            <Maximize2 className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      )}
+
+      {/* Hover card — positioned imperatively from pointer moves. */}
+      <div
+        ref={hoverCardRef}
+        aria-hidden
+        className={cn(
+          chipCls,
+          "pointer-events-none absolute left-0 top-0 z-30 w-max max-w-[240px] px-2.5 py-1.5 transition-opacity duration-100",
+          hoverNode ? "opacity-100" : "opacity-0",
+        )}
+      >
+        {hoverNode && (
+          <HoverCardBody
+            node={hoverNode}
+            colors={colors}
+            nodeColor={nodeColor}
+            highlighted={Boolean(
+              highlightIds?.has(hoverNode.id) ||
+                (nameHighlightActive &&
+                  !isBrainGraphGroupNode(hoverNode) &&
+                  highlightNames!.has(hoverNode.name.trim().toLowerCase())),
+            )}
+            highlightCount={highlightGroupCounts[hoverNode.id]}
+          />
+        )}
+      </div>
+
       {dims && ForceGraph2D && graph.nodes.length > 0 && (
         <ForceGraph2D
           ref={bindFg as never}
           graphData={graphData}
           width={dims.w}
           height={dims.h}
-          backgroundColor={colors.background}
-          // Continuous redraw — the eased dim transitions and the
-          // fit-relative label tiers change frame appearance without prop
-          // changes, which the lib's auto-pause would freeze (see the
-          // eased-transitions note above).
-          autoPauseRedraw={false}
-          // Hide the high-energy part of the simulation. Only the final forty
-          // ticks remain visible, so the graph feels alive without reshaping
-          // itself while the person is trying to read it.
+          // Transparent: the ground and its atmosphere are CSS behind the canvas.
+          backgroundColor="rgba(0,0,0,0)"
+          // The motion lease owns this flag (lib/graph-motion.ts): `false`
+          // only while an ease or camera tween is in flight, `true` otherwise
+          // so the library skips idle frames. It is a prop because the ref
+          // exposes methods only.
+          autoPauseRedraw={!continuousPaint}
           warmupTicks={100}
           cooldownTicks={140}
           d3VelocityDecay={0.32}
           onEngineTick={fitInitialCamera}
-          // Backdrop layers under the graph: screen-space dot grid +
-          // vignette, then the graph-space community washes.
-          onRenderFramePre={(
-            ctx: CanvasRenderingContext2D,
-            globalScale: number,
-          ) => {
-            paintBackdrop(ctx, globalScale);
+          onEngineStop={() => {
+            engineSettledRef.current = true;
+            settleMotion();
+          }}
+          onZoom={(transform: { k: number; x: number; y: number }) => {
+            // World-locked dot grid: pitch re-tiles at discrete zoom levels,
+            // offset follows the pan. Two CSS vars, no repaint of our own.
+            const grid = gridRef.current;
+            if (!grid) return;
+            const pitch = gridStep(transform.k) * transform.k;
+            grid.style.setProperty("--graph-grid-pitch", `${pitch}px`);
+            grid.style.setProperty(
+              "--graph-grid-x",
+              `${((transform.x % pitch) + pitch) % pitch}px`,
+            );
+            grid.style.setProperty(
+              "--graph-grid-y",
+              `${((transform.y % pitch) + pitch) % pitch}px`,
+            );
+          }}
+          onRenderFramePre={(ctx: CanvasRenderingContext2D) => {
+            easePendingRef.current = false;
             paintHalos(ctx);
           }}
-          // Group headings ABOVE the discs (post pass), group mode only —
-          // fade out as the user zooms into individual nodes. Skipped in
-          // the bubble-map regime: every group bubble labels itself, and
-          // the derived heading duplicated one bubble's name across the
-          // overview.
-          onRenderFramePost={
-            colorMode === "group" && !hasGroupNodes
-              ? (ctx: CanvasRenderingContext2D, globalScale: number) =>
-                  paintClusterLabels(ctx, globalScale)
-              : undefined
-          }
-          nodeLabel={(n: GraphNodeWithPos) =>
-            isBrainGraphGroupNode(n)
-              ? format(groupLabel, { name: n.name, count: n.memberCount })
-              : n.name
-          }
-          // Custom node renderer — orb-shaded disc + zoom-tiered haloed
-          // label + eased dim + glow on emphasis + hover pulse ring.
-          // Per-frame math lives in lib/graph-canvas.ts.
+          onRenderFramePost={(ctx: CanvasRenderingContext2D, globalScale: number) => {
+            if (colorMode === "group" && !hasGroupNodes) paintClusterLabels(ctx, globalScale);
+            paintHoverEdgeLabels(ctx, globalScale);
+            // The one decision the library cannot make: are eases still moving?
+            settleMotion();
+          }}
+          // The lib's own tooltip is replaced by the hover card above.
+          nodeLabel={() => ""}
           nodeCanvasObject={(
             node: GraphNodeWithPos,
             ctx: CanvasRenderingContext2D,
@@ -1485,67 +1786,55 @@ export function BrainGraphView({
           ) => {
             const n = node;
             const r = displayRadius(n);
+            const isGroup = isBrainGraphGroupNode(n);
             const isHovered = hoverId === n.id;
             const isHoverNeighbor =
               hoverId !== null && (neighbors.get(hoverId)?.has(n.id) ?? false);
             const isMatch = focusMatchIds?.has(n.id) ?? false;
             const isFocusNeighbor = focusNeighborIds?.has(n.id) ?? false;
+            const isHighlight = highlightMatchIds?.has(n.id) ?? false;
+            const isHighlightNeighbor = highlightNeighborIds?.has(n.id) ?? false;
+            const isLegendMatch = legendMatchIds?.has(n.id) ?? false;
+            const isSelected = selectedId != null && selectedId === n.id;
 
-            // Alpha tiers. A hover (transient pointer gesture) wins; otherwise
-            // the search-focus spotlight (match 1 · relevant neighbour 0.5 ·
-            // rest 0.12); otherwise fully opaque. `focusMatchIds` is null when
-            // the query is empty or matched nothing, so a no-match search never
-            // greys the graph. The DRAWN alpha eases toward this target.
+            // Alpha tiers: hover > audit highlight > search > legend > rest.
             let target = 1;
             if (hoverId !== null) {
-              target = isHovered || isHoverNeighbor ? 1 : 0.18;
+              target = isHovered || isHoverNeighbor ? 1 : TIER_REST_HOVER;
+            } else if (highlightMatchIds) {
+              target = isHighlight
+                ? 1
+                : isHighlightNeighbor
+                  ? TIER_NEIGHBOR_HIGHLIGHT
+                  : TIER_REST_HIGHLIGHT;
             } else if (focusMatchIds) {
-              target = isMatch ? 1 : isFocusNeighbor ? 0.5 : 0.12;
+              target = isMatch ? 1 : isFocusNeighbor ? TIER_NEIGHBOR_FOCUS : TIER_REST_FOCUS;
+            } else if (legendMatchIds) {
+              target = isLegendMatch ? 1 : TIER_REST_FOCUS;
             }
-            // Filter dim caps the tier from BELOW: a ghosted kind stays
-            // ghosted through hover-neighbour and search-match emphasis
-            // alike. The hovered node itself is exempt — pointer intent
-            // beats the chip.
             const isFilteredOut =
-              activeFilterKinds !== null &&
-              !activeFilterKinds.has(displayKind(n));
+              activeFilterKinds !== null && !activeFilterKinds.has(displayKind(n));
             if (isFilteredOut && !isHovered) {
               target = Math.min(target, FILTER_DIM_NODE_ALPHA);
             }
-            const alpha = stepToward(
-              nodeAlphaRef.current.get(n.id) ?? target,
-              target,
-            );
+            const alpha = stepToward(nodeAlphaRef.current.get(n.id) ?? target, target, easeRate);
+            if (alpha !== target) easePendingRef.current = true;
             nodeAlphaRef.current.set(n.id, alpha);
 
-            // Ring + glow the anchor of attention — the hovered node and every
-            // matched node — so it reads as the focus, not merely "less dim".
-            const emphasize = isHovered || isMatch;
+            const emphasize = isHovered || isMatch || isHighlight || isSelected;
             const fillColor = nodeColor(n.id, displayKind(n));
             const isHub = hubThreshold > 0 && n.degree >= hubThreshold;
 
-            // Ambient twinkle — slow per-node luminance shimmer, phase
-            // offset by the precomputed id hash so the field never blinks
-            // in lockstep. Discs + bloom only; labels stay steady.
-            const twinkle =
-              0.93 +
-              0.07 * Math.sin(performance.now() / 1500 + (n.__phase ?? 0));
-
-            ctx.globalAlpha = alpha * twinkle;
+            ctx.globalAlpha = alpha;
             ctx.save();
             ctx.translate(n.x ?? 0, n.y ?? 0);
-            // Bloom — every node is a small light source on the deep
-            // ground; hubs bloom stronger. Cached sprite gradient, not
-            // shadowBlur (a per-node Gaussian pass would dominate the
-            // frame budget at 500+ nodes).
             ctx.beginPath();
             ctx.arc(0, 0, r * 2.3, 0, 2 * Math.PI);
-            ctx.fillStyle = glowGradient(ctx, fillColor, r, isHub);
+            ctx.fillStyle = glowGradient(ctx, isHighlight ? colors.highlight : fillColor, r, isHub || isHighlight);
             ctx.fill();
             if (emphasize) {
-              // shadowBlur is device-space (unscaled by the zoom transform),
-              // so the focus glow reads identically at any zoom level.
-              ctx.shadowColor = fillColor;
+              // shadowBlur is device-space, so the focus glow reads the same at any zoom.
+              ctx.shadowColor = isHighlight ? colors.highlight : fillColor;
               ctx.shadowBlur = 14;
             }
             ctx.beginPath();
@@ -1553,9 +1842,7 @@ export function BrainGraphView({
             ctx.fillStyle = discGradient(ctx, fillColor, r);
             ctx.fill();
             ctx.shadowBlur = 0;
-            // Rim — a thin ring in the node's own hue keeping the orb
-            // crisp over the washes: lit ("neon edge") on the dark
-            // ground, tonal-darker on the light one.
+            // Rim — lit on the dark ground, tonal-darker on light.
             ctx.lineWidth = Math.min(0.8, Math.max(0.3, r * 0.14));
             ctx.strokeStyle = isDark
               ? withAlpha(shadeHex(fillColor, 0.45), 0.4)
@@ -1563,40 +1850,51 @@ export function BrainGraphView({
             ctx.stroke();
             ctx.restore();
             ctx.globalAlpha = alpha;
-            if (emphasize) {
+
+            if (isHighlight) {
+              // Retrieved-entry ring in the highlight accent.
+              ctx.lineWidth = 2 / globalScale;
+              ctx.strokeStyle = colors.highlight;
+              ctx.beginPath();
+              ctx.arc(n.x ?? 0, n.y ?? 0, r + 1.5 / globalScale, 0, 2 * Math.PI);
+              ctx.stroke();
+            } else if (isHovered || isMatch) {
               ctx.lineWidth = 1.5 / globalScale;
               ctx.strokeStyle = colors.foreground;
               ctx.beginPath();
               ctx.arc(n.x ?? 0, n.y ?? 0, r, 0, 2 * Math.PI);
               ctx.stroke();
             }
-            if (isHovered) {
-              // Expanding pulse ring — radius offset is screen-constant
-              // (divided by the zoom) and the continuous-redraw canvas
-              // animates it for free.
-              const p = pulsePhase(performance.now());
-              ctx.globalAlpha = (1 - p) * 0.45 * alpha;
-              ctx.lineWidth = 1.4 / globalScale;
-              ctx.strokeStyle = fillColor;
+            if (isSelected) {
+              // Selection ring — a thin offset halo so it reads under the
+              // hover/highlight rings without hiding them.
+              ctx.lineWidth = 1.2 / globalScale;
+              ctx.setLineDash([3 / globalScale, 2.5 / globalScale]);
+              ctx.strokeStyle = colors.foreground;
               ctx.beginPath();
-              ctx.arc(
-                n.x ?? 0,
-                n.y ?? 0,
-                r + (3 + p * 11) / globalScale,
-                0,
-                2 * Math.PI,
-              );
+              ctx.arc(n.x ?? 0, n.y ?? 0, r + 4 / globalScale, 0, 2 * Math.PI);
               ctx.stroke();
-              ctx.globalAlpha = alpha;
+              ctx.setLineDash([]);
             }
 
-            // Zoom-tiered label: hubs near fit zoom, everyone by reading
-            // zoom, emphasized always. Halo in the background color keeps
-            // the text legible over edges and neighbouring discs. Group
-            // containers are always labelled (the labels ARE the overview's
-            // content) and draw TWO lines — the name, then a muted count —
-            // instead of the wide one-line composition.
-            const isGroup = isBrainGraphGroupNode(n);
+            // Group bubbles that hold retrieved entries carry a count badge.
+            const badgeCount = isGroup ? highlightGroupCounts[n.id] : undefined;
+            if (badgeCount) {
+              const bx = (n.x ?? 0) + r * 0.72;
+              const by = (n.y ?? 0) - r * 0.72;
+              const br = Math.max(3.2, 7.5 / globalScale);
+              ctx.fillStyle = colors.highlight;
+              ctx.beginPath();
+              ctx.arc(bx, by, br, 0, 2 * Math.PI);
+              ctx.fill();
+              ctx.fillStyle = colors.background;
+              ctx.font = `700 ${Math.max(4, 9 / globalScale)}px ui-sans-serif, system-ui, sans-serif`;
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+              ctx.fillText(String(badgeCount), bx, by + 0.2 / globalScale);
+            }
+
+            // Zoom-tiered label with a background halo; emphasized always.
             const la =
               labelAlpha({
                 zoomRel: globalScale / (fitScaleRef.current || 1),
@@ -1607,6 +1905,8 @@ export function BrainGraphView({
                   isHoverNeighbor ||
                   isMatch ||
                   isFocusNeighbor ||
+                  isHighlight ||
+                  isSelected ||
                   isGroup,
               }) * alpha;
             if (la > 0.03) {
@@ -1616,21 +1916,16 @@ export function BrainGraphView({
               ctx.textAlign = "center";
               ctx.textBaseline = "top";
               ctx.globalAlpha = la;
-              const label = truncateLabel(
-                n.name,
-                isGroup ? GROUP_NAME_MAX_CHARS : undefined,
-              );
+              const label = truncateLabel(n.name, isGroup ? GROUP_NAME_MAX_CHARS : undefined);
               const ly = (n.y ?? 0) + r + 3 / globalScale;
               ctx.lineJoin = "round";
               ctx.lineWidth = 3.5 / globalScale;
               ctx.strokeStyle = colors.background;
               ctx.strokeText(label, n.x ?? 0, ly);
-              ctx.fillStyle = colors.foreground;
+              ctx.fillStyle = isHighlight ? shadeHex(colors.highlight, isDark ? 0.25 : -0.3) : colors.foreground;
               ctx.fillText(label, n.x ?? 0, ly);
               if (isGroup) {
-                const countLabel = format(groupCountLabel, {
-                  count: n.memberCount,
-                });
+                const countLabel = format(groupCountLabel, { count: n.memberCount });
                 const cy = ly + (px + 2.5) / globalScale;
                 ctx.font = `500 ${GROUP_COUNT_FONT_PX / globalScale}px ui-sans-serif, system-ui, sans-serif`;
                 ctx.strokeText(countLabel, n.x ?? 0, cy);
@@ -1640,30 +1935,26 @@ export function BrainGraphView({
             }
             ctx.globalAlpha = 1;
           }}
-          // Pointer area mirrors the visible disc (plus a small grace ring)
-          // so clicks land on the node, not the whitespace around the label.
           nodePointerAreaPaint={(
             node: GraphNodeWithPos,
             color: string,
             ctx: CanvasRenderingContext2D,
+            globalScale: number,
           ) => {
             const n = node;
+            const r = displayRadius(n) + 2;
+            // Floor the hit disc to 22 screen px on touch (see the constant).
+            const hit = coarsePointer
+              ? Math.max(r, COARSE_POINTER_MIN_HIT_PX / (globalScale || 1))
+              : r;
             ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.arc(n.x ?? 0, n.y ?? 0, displayRadius(n) + 2, 0, 2 * Math.PI);
+            ctx.arc(n.x ?? 0, n.y ?? 0, hit, 0, 2 * Math.PI);
             ctx.fill();
           }}
-          // Edges at rest carry their community/kind tint when both
-          // endpoints agree (edgeRestColors), neutral border otherwise.
-          // Emphasised edges are translucent threads tinted with their anchor
-          // node's colour (blue threads off a blue hub), not solid black
-          // spokes — soft, legible, and visually tied to the node in focus.
-          // Alphas ease through the same stepToward driver as the discs.
           linkColor={(link: GraphEdgeWithRefs) => {
             const l = link;
             let color = edgeRestColors.get(l.id) ?? colors.border;
-            // Tinted threads sit softer than neutral bridges — saturated
-            // hues need less alpha to read.
             let target = color === colors.border ? 0.65 : 0.5;
             if (hoverId !== null) {
               if (l.__sourceId === hoverId || l.__targetId === hoverId) {
@@ -1672,9 +1963,19 @@ export function BrainGraphView({
               } else {
                 target = 0.12;
               }
+            } else if (highlightMatchIds) {
+              const anchor = highlightMatchIds.has(l.__sourceId)
+                ? l.__sourceId
+                : highlightMatchIds.has(l.__targetId)
+                  ? l.__targetId
+                  : null;
+              if (anchor) {
+                color = colors.highlight;
+                target = 0.45;
+              } else {
+                target = 0.08;
+              }
             } else if (focusMatchIds) {
-              // Tint by the matched endpoint's color; the match is the anchor
-              // the edge radiates from.
               const matchId = focusMatchIds.has(l.__sourceId)
                 ? l.__sourceId
                 : focusMatchIds.has(l.__targetId)
@@ -1686,30 +1987,25 @@ export function BrainGraphView({
               } else {
                 target = 0.08;
               }
+            } else if (legendMatchIds) {
+              target =
+                legendMatchIds.has(l.__sourceId) && legendMatchIds.has(l.__targetId)
+                  ? 0.6
+                  : 0.08;
             }
-            // A ghosted endpoint ghosts the edge — unless it's the hovered
-            // node's incident thread (the transient inspect cue wins).
             if (
               edgeFilteredOut(l) &&
-              !(
-                hoverId !== null &&
-                (l.__sourceId === hoverId || l.__targetId === hoverId)
-              )
+              !(hoverId !== null && (l.__sourceId === hoverId || l.__targetId === hoverId))
             ) {
               target = Math.min(target, FILTER_DIM_EDGE_ALPHA);
             }
-            const alpha = stepToward(
-              edgeAlphaRef.current.get(l.id) ?? target,
-              target,
-            );
+            const alpha = stepToward(edgeAlphaRef.current.get(l.id) ?? target, target, easeRate);
+            if (alpha !== target) easePendingRef.current = true;
             edgeAlphaRef.current.set(l.id, alpha);
             return withAlpha(color, alpha);
           }}
           linkWidth={(link: GraphEdgeWithRefs) => {
             const l = link;
-            // Rest width scales with the aggregate weight (`edge.count` —
-            // the number of source relationships a projected group edge
-            // represents), so overview threads encode connection strength.
             const rest = aggregateEdgeWidth(l.count);
             let target = rest;
             if (hoverId !== null) {
@@ -1717,83 +2013,51 @@ export function BrainGraphView({
                 l.__sourceId === hoverId || l.__targetId === hoverId
                   ? Math.max(1.2, rest)
                   : 0.4;
+            } else if (highlightMatchIds) {
+              target =
+                highlightMatchIds.has(l.__sourceId) || highlightMatchIds.has(l.__targetId)
+                  ? Math.max(1.1, rest)
+                  : 0.35;
             } else if (focusMatchIds) {
               target =
-                focusMatchIds.has(l.__sourceId) ||
-                focusMatchIds.has(l.__targetId)
+                focusMatchIds.has(l.__sourceId) || focusMatchIds.has(l.__targetId)
                   ? Math.max(1.1, rest)
                   : 0.35;
             }
             if (
               edgeFilteredOut(l) &&
-              !(
-                hoverId !== null &&
-                (l.__sourceId === hoverId || l.__targetId === hoverId)
-              )
+              !(hoverId !== null && (l.__sourceId === hoverId || l.__targetId === hoverId))
             ) {
               target = Math.min(target, FILTER_DIM_EDGE_WIDTH);
             }
-            const width = stepToward(
-              edgeWidthRef.current.get(l.id) ?? target,
-              target,
-            );
+            const width = stepToward(edgeWidthRef.current.get(l.id) ?? target, target, easeRate);
+            if (width !== target) easePendingRef.current = true;
             edgeWidthRef.current.set(l.id, width);
             return width;
           }}
-          // Directional particles: a slow AMBIENT photon drifts along every
-          // edge at rest (capped at AMBIENT_PARTICLE_EDGE_CAP edges, and
-          // muted while the search spotlight is active); hovering a node
-          // swaps its incident edges to a faster two-photon stream. The
-          // hover stream is brighter and quicker, so it still reads as the
-          // focus cue over the ambient flow.
-          linkDirectionalParticles={(link: GraphEdgeWithRefs) => {
-            if (hoverId !== null) {
-              return link.__sourceId === hoverId ||
-                link.__targetId === hoverId
-                ? 2
-                : 0;
-            }
-            if (focusMatchIds) return 0;
-            // Ghosted edges carry no ambient photon — a bright particle
-            // over a 0.08-alpha thread would contradict the dim.
-            if (edgeFilteredOut(link)) return 0;
-            return graph.edges.length <= AMBIENT_PARTICLE_EDGE_CAP ? 1 : 0;
-          }}
-          linkDirectionalParticleWidth={(link: GraphEdgeWithRefs) => {
-            const hovered =
-              hoverId !== null &&
-              (link.__sourceId === hoverId || link.__targetId === hoverId);
-            return hovered ? 2.2 : 1.1;
-          }}
-          linkDirectionalParticleSpeed={(link: GraphEdgeWithRefs) => {
-            const hovered =
-              hoverId !== null &&
-              (link.__sourceId === hoverId || link.__targetId === hoverId);
-            return hovered ? 0.006 : 0.002;
-          }}
+          // Directional particles are HOVER-ONLY now: the hovered node's
+          // incident edges run a two-photon stream in its color. (The ambient
+          // one-photon-per-edge drift at rest is gone — it forced a frame
+          // every 16ms for a cue nobody reads at rest.)
+          linkDirectionalParticles={(link: GraphEdgeWithRefs) =>
+            hoverId !== null &&
+            !reducedMotion &&
+            (link.__sourceId === hoverId || link.__targetId === hoverId)
+              ? 2
+              : 0
+          }
+          linkDirectionalParticleWidth={2.2}
+          linkDirectionalParticleSpeed={0.006}
           linkDirectionalParticleColor={(link: GraphEdgeWithRefs) => {
             const anchor =
               hoverId !== null &&
               (link.__sourceId === hoverId || link.__targetId === hoverId)
                 ? hoverId
                 : null;
-            if (anchor) {
-              return withAlpha(
-                nodeColor(anchor, kindById.get(anchor) ?? "other"),
-                0.9,
-              );
-            }
-            // Ambient photons glow in their edge's rest tint.
-            return withAlpha(
-              edgeRestColors.get(link.id) ?? colors.border,
-              0.65,
-            );
+            return anchor
+              ? withAlpha(nodeColor(anchor, kindById.get(anchor) ?? "other"), 0.9)
+              : withAlpha(colors.border, 0);
           }}
-          // Click → open the existing detail drawer through the parent.
-          // Skill nodes route to the skill detail panel (different data
-          // shape); connector nodes have no detail surface in v1. Memory nodes
-          // map back to the `memories` primitive row the drawer already renders
-          // (graph kind is singular `memory`, the BrainRow kind is `memories`).
           onNodeClick={(node: GraphNodeWithPos) => {
             const n = node;
             if (isBrainGraphGroupNode(n)) {
@@ -1804,8 +2068,6 @@ export function BrainGraphView({
               onSelectSkillNode?.(n.id);
               return;
             }
-            // Resource nodes are context for a skill-scoped graph. The skill
-            // editor remains their canonical detail/read surface.
             if (n.kind === "skill_file") return;
             if (n.kind === "connector") return;
             if (n.kind === "memory") {
@@ -1829,10 +2091,85 @@ export function BrainGraphView({
             );
           }}
           onNodeHover={(node: GraphNodeWithPos | null) => {
-            setHoverId(node?.id ?? null);
+            setHoverNode(node ?? null);
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** The hover card's content — kind, connections, sensitivity, and for a
+ *  group its size + composition; the audit badge when the node was
+ *  retrieved for the turn under review. */
+function HoverCardBody({
+  node,
+  colors,
+  nodeColor,
+  highlighted,
+  highlightCount,
+}: {
+  node: GraphNodeWithPos;
+  colors: ThemeColors;
+  nodeColor: (id: string, kind: BrainGraphNodeKind) => string;
+  highlighted: boolean;
+  highlightCount: number | undefined;
+}) {
+  const t = useT();
+  const copy = t.brainPage.graphView;
+  const isGroup = isBrainGraphGroupNode(node);
+  const composition = isGroup
+    ? Object.entries(node.kindCounts)
+        .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+        .slice(0, 3)
+    : [];
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5">
+        <span
+          aria-hidden
+          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+          style={{ backgroundColor: nodeColor(node.id, node.kind) }}
+        />
+        <span className="min-w-0 truncate text-[12px] font-semibold text-[var(--graph-fg)]">
+          {node.name}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px]">
+        {!isGroup && <span>{copy.legend[node.kind]}</span>}
+        {isGroup ? (
+          <span>{format(copy.density.groupCount, { count: node.memberCount })}</span>
+        ) : (
+          <span>
+            {node.degree === 1
+              ? copy.hoverCard.connectionsOne
+              : format(copy.hoverCard.connectionsMany, { count: node.degree })}
+          </span>
+        )}
+        {!isGroup && <span className="opacity-70">{copy.hoverCard.sensitivity[node.sensitivity]}</span>}
+      </div>
+      {isGroup && composition.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2 text-[10.5px] opacity-80">
+          {composition.map(([kind, count]) => (
+            <span key={kind} className="inline-flex items-center gap-1">
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: colors.kinds[kind as BrainGraphNodeKind] ?? colors.muted }}
+              />
+              {copy.legend[kind as BrainGraphNodeKind] ?? kind} {count}
+            </span>
+          ))}
+        </div>
+      )}
+      {(highlighted || highlightCount) && (
+        <div className="text-[10.5px] font-medium" style={{ color: colors.highlight }}>
+          {highlightCount
+            ? format(copy.hoverCard.containsRetrieved, { count: highlightCount })
+            : copy.hoverCard.retrieved}
+        </div>
+      )}
+      {isGroup && <div className="text-[10px] opacity-60">{copy.hoverCard.openGroup}</div>}
     </div>
   );
 }

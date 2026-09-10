@@ -66,9 +66,13 @@ import { useT, format } from "@/lib/i18n/client";
 import { Breadcrumb, type BreadcrumbTeamspace } from "./breadcrumb";
 import { CollabStatusIndicator } from "./error-states";
 import { PresenceAvatars } from "./presence-avatars";
-import { ScheduleBadge } from "./schedule-badge";
-import { PageWorkflowRuns } from "./page-workflow-runs";
-import { PageActionButtons } from "./page-action-buttons";
+import { ScheduleBadge, ScheduleMenuSection } from "./schedule-badge";
+import { PageWorkflowRuns, PageWorkflowRunsMenuSection } from "./page-workflow-runs";
+import {
+  PageActionButtons,
+  PageActionMenuItems,
+  type PageActionFeedback,
+} from "./page-action-buttons";
 import { CommentHistory } from "./comment-history";
 import { ShareDialog } from "./share-dialog";
 import { ContextScopeChips } from "@/components/context/context-scope-chips";
@@ -256,6 +260,19 @@ export function PageHeader({
     }
   }
 
+  // A page action run from the phone `...` menu reports here (the menu has
+  // closed by the time the run resolves), into the header's own notice /
+  // error line - the same lines Copy link and Export already use.
+  function showActionFeedback(feedback: PageActionFeedback) {
+    if (feedback.tone === "ok") {
+      setError(null);
+      setNotice(feedback.text);
+      window.setTimeout(() => setNotice(null), 6000);
+    } else {
+      setError(feedback.text);
+    }
+  }
+
   async function handleDelete() {
     const ok = await confirmDialog({
       title: t.deleteConfirmTitle,
@@ -407,18 +424,29 @@ export function PageHeader({
 
           {/* Schedule badge (migration 229) — the recurring "research & update
               this page" jobs the assistant set up. Only renders when the page
-              has at least one enabled schedule targeting it. */}
+              has at least one enabled schedule targeting it. Below `md` it,
+              the page actions and the runs chip live in the `...` menu instead
+              (responsive contract M8; report B row 32): together they overran
+              the 332px action column and pushed the menu off-screen. */}
           {view.scheduledJobs && view.scheduledJobs.length > 0 && (
-            <ScheduleBadge jobs={view.scheduledJobs} />
+            <ScheduleBadge jobs={view.scheduledJobs} className="hidden md:inline-flex" />
           )}
 
           {/* Page-action buttons (mig 321) — the human approval gesture.
               Self-fetches; renders nothing when no binding resolves. */}
-          <PageActionButtons pageId={view.id} workspaceId={view.workspaceId} />
+          <PageActionButtons
+            pageId={view.id}
+            workspaceId={view.workspaceId}
+            className="hidden md:flex"
+          />
 
           {/* Workflow runs this page triggered (migration 282) — self-fetches
               and renders nothing unless the page has fired a run. */}
-          <PageWorkflowRuns pageId={view.id} workspaceId={view.workspaceId} />
+          <PageWorkflowRuns
+            pageId={view.id}
+            workspaceId={view.workspaceId}
+            className="hidden md:inline-flex"
+          />
 
           <PresenceAvatars users={presence} />
 
@@ -445,7 +473,7 @@ export function PageHeader({
             aria-pressed={isSaved}
             aria-label={isSaved ? t.headerFavoriteRemove : t.headerFavoriteAdd}
             title={isSaved ? t.headerFavoriteRemove : t.headerFavoriteAdd}
-            className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+            className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50 md:size-8"
           >
             <Star
               className={
@@ -461,13 +489,27 @@ export function PageHeader({
                 <button
                   type="button"
                   aria-label={t.headerMoreAria}
-                  className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
+                  className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted md:size-8"
                 >
                   <MoreHorizontal className="size-4" aria-hidden />
                 </button>
               }
             />
-            <DropdownMenuContent>
+            <DropdownMenuContent className="max-w-[calc(100vw-1rem)]">
+              {/* Phone home of the page actions, schedule and triggered runs
+                  (hidden from `md`, where they render as header chips). The
+                  sections mount with the menu, so their fetches run on open. */}
+              <div className="md:hidden" data-page-header-folded>
+                <PageActionMenuItems
+                  pageId={view.id}
+                  workspaceId={view.workspaceId}
+                  onFeedback={showActionFeedback}
+                />
+                {view.scheduledJobs && view.scheduledJobs.length > 0 ? (
+                  <ScheduleMenuSection jobs={view.scheduledJobs} />
+                ) : null}
+                <PageWorkflowRunsMenuSection pageId={view.id} workspaceId={view.workspaceId} />
+              </div>
               <DropdownMenuItem onClick={() => onDuplicate(view.id)}>
                 {t.sidebarRowDuplicate}
               </DropdownMenuItem>

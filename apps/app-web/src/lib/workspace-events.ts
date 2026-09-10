@@ -1,3 +1,4 @@
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Workspace realtime events client — ONE EventSource per workspace tab.
  *
@@ -28,6 +29,12 @@
  *   inbox           → INBOX_REFRESH_EVENT (InboxPanel + the sidebar unread
  *                     badge, same never-unmounting-layout reasoning as
  *                     `assistant` above — docs/plans/room-human-mentions.md T-H8)
+ *   session         → LIVE_REFRESH_EVENT (the Live roster)
+ *   goal            → GOAL_REFRESH_EVENT (`goal-events.ts`; no direct
+ *                     listener — the surface-cache map marks `goals:`,
+ *                     `triage:` and `goal:` stale, so the goals board, the
+ *                     Triage panel and the goal detail revalidate behind
+ *                     their paint instead of off a local refetch tick)
  *
  * Catch-up without replay: on every EventSource `open` (first connect AND
  * each auto-reconnect) and on `visibilitychange → visible`, all domain
@@ -36,11 +43,11 @@
  * event name) keeps bursts and catch-up collisions to one refetch per
  * domain; the server already coalesces per (workspace, primitive) at 2s.
  *
- * Absolute URLs from NEXT_PUBLIC_API_URL when it is set (prod, desktop —
+ * Absolute URLs from runtime public config when set (prod, desktop —
  * so the desktop bundle's file:// origin can't produce an unfetchable URL,
  * same footgun feed-sse.ts documents). `window.location.origin` serves ONLY
- * as the `new URL` base for next-dev, where next.config deliberately blanks
- * NEXT_PUBLIC_API_URL to "" so requests ride the /api rewrite — without the
+ * as the `new URL` base for next-dev, where the public URL is deliberately
+ * empty so requests ride the /api rewrite — without the
  * base, `new URL("/api/…")` throws in dev. Auth rides `?access_token=`
  * because EventSource cannot set headers.
  *
@@ -82,8 +89,12 @@ import {
   INBOX_REFRESH_EVENT,
   type InboxRefreshDetail,
 } from "@/lib/inbox-refresh-events";
+import {
+  GOAL_REFRESH_EVENT,
+  type GoalRefreshDetail,
+} from "@/lib/goal-events";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /** Mirrors the server's WorkspacePrimitive union (brain-stream/sse-fanout.ts). */
 type WorkspacePrimitive =
@@ -104,7 +115,8 @@ type WorkspacePrimitive =
   | "assistant"
   | "workspace_config"
   | "inbox"
-  | "session";
+  | "session"
+  | "goal";
 
 export type WorkspaceChangePayload = {
   workspaceId: string;
@@ -123,7 +135,7 @@ export const SCHEDULED_JOB_REFRESH_EVENT = "sidan:scheduled-job-refresh";
  */
 export const LIVE_REFRESH_EVENT = "sidan:live-refresh";
 
-export type SkillRefreshDetail = {
+type SkillRefreshDetail = {
   workspaceId: string | null;
   rowId?: string;
 };
@@ -249,6 +261,16 @@ export function routeWorkspaceChange(
           } satisfies LiveRefreshDetail,
         },
       ];
+    case "goal":
+      return [
+        {
+          event: GOAL_REFRESH_EVENT,
+          detail: {
+            workspaceId: payload.workspaceId,
+            rowId: payload.rowId,
+          } satisfies GoalRefreshDetail,
+        },
+      ];
     default:
       return [];
   }
@@ -267,6 +289,7 @@ export function allDomainDispatches(workspaceId: string): DomainDispatch[] {
     { event: WORKSPACE_IDENTITY_REFRESH_EVENT, detail: { workspaceId } },
     { event: INBOX_REFRESH_EVENT, detail: { workspaceId } },
     { event: LIVE_REFRESH_EVENT, detail: { workspaceId } },
+    { event: GOAL_REFRESH_EVENT, detail: { workspaceId } },
   ];
 }
 

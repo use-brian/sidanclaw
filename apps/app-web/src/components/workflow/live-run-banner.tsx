@@ -251,7 +251,7 @@ function RunApprovalActions({
             type="button"
             disabled={busy}
             onClick={() => void respond("approved")}
-            className="text-xs px-3 py-1.5 rounded-md bg-action text-action-foreground font-medium hover:opacity-90 disabled:opacity-50"
+            className="inline-flex h-11 sm:h-7 items-center text-xs px-3 rounded-md bg-action text-action-foreground font-medium hover:opacity-90 disabled:opacity-50"
           >
             {t.approvalsPage.approveAction}
           </button>
@@ -259,7 +259,7 @@ function RunApprovalActions({
             type="button"
             disabled={busy}
             onClick={() => void respond("rejected")}
-            className="text-xs px-3 py-1.5 rounded-md border border-border bg-background font-medium hover:bg-muted disabled:opacity-50"
+            className="inline-flex h-11 sm:h-7 items-center text-xs px-3 rounded-md border border-border bg-background font-medium hover:bg-muted disabled:opacity-50"
           >
             {t.approvalsPage.rejectAction}
           </button>

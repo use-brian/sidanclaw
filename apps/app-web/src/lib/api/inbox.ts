@@ -1,3 +1,4 @@
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * SDK for the doc Inbox + mention recording.
  *
@@ -15,7 +16,7 @@
 
 import { authFetch } from "@/lib/auth-fetch";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type InboxPendingReply = {
   threadId: string;
@@ -85,17 +86,6 @@ export async function fetchInbox(
     opts.signal ? { signal: opts.signal } : {},
   );
   return asJson<InboxPayload>(res);
-}
-
-/** The unread-badge total: pending replies + unread mentions. Returns 0 on
- *  error so the sidebar badge degrades silently. */
-export async function fetchInboxBadgeCount(workspaceId: string): Promise<number> {
-  try {
-    const p = await fetchInbox(workspaceId);
-    return p.pendingCount + p.unreadMentionCount;
-  } catch {
-    return 0;
-  }
 }
 
 /**

@@ -94,6 +94,7 @@ export function CaptionEditor({
   readOnly,
   placeholder,
   deferSave = false,
+  saveHint,
   onChange,
   onSave,
 }: {
@@ -103,6 +104,7 @@ export function CaptionEditor({
   placeholder?: string;
   /** Keep edits local until the parent commits the complete format payload. */
   deferSave?: boolean;
+  saveHint?: string;
   /** Every keystroke; the parent owns the text. */
   onChange: (next: string) => void;
   /** Debounced commit. Returns false to surface a save error. */
@@ -248,7 +250,7 @@ export function CaptionEditor({
         placeholder={placeholder ?? t.captionPlaceholder}
         rows={4}
         className={cn(
-          "w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-relaxed",
+          "w-full resize-none border-0 bg-transparent p-0 text-[16px] md:text-[15px] leading-relaxed",
           !readOnly && "pt-3",
           "placeholder:text-muted-foreground/50 focus:outline-none focus-visible:shadow-none",
           readOnly && "cursor-default opacity-80",
@@ -278,7 +280,7 @@ export function CaptionEditor({
               : state === "error"
                 ? t.saveFailed
                 : deferSave
-                  ? t.saveWithVersion
+                  ? (saveHint ?? t.saveWithVersion)
                   : t.autosaveHint}
         </span>
       </div>

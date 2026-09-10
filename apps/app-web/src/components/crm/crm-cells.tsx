@@ -41,8 +41,11 @@ export const PIPELINE_CATEGORY_DOT: Record<CrmPipelineStage["category"], string>
   lost: "bg-red-500/70",
 };
 
+// 36px / 16px below `md` (responsive contract M3 / M4): the CRM table pans
+// inside its box on a phone, so these cells stay reachable there. 28px / 13px
+// from `md`.
 const CELL_TRIGGER =
-  "inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-[13px] " +
+  "inline-flex h-9 max-w-full items-center gap-1.5 rounded-md px-1.5 text-[16px] md:h-7 md:text-[13px] " +
   "text-foreground/90 transition-colors hover:bg-muted/70 disabled:opacity-50";
 
 /** Stable pipeline-stage picker used by board, table, bulk, and detail. */
@@ -76,7 +79,9 @@ export function PipelineStageCell({
         aria-label={t.pipelineStage}
         className={cn(
           CELL_TRIGGER,
-          compact ? "h-6 max-w-40 px-1 text-[11px]" : "w-auto",
+          // The board card's stage select is the touch path for a stage move
+          // (D1): 36px / 16px below `md`, the compact 24px / 11px from `md`.
+          compact ? "h-9 max-w-40 px-1 text-[16px] md:h-6 md:text-[11px]" : "w-auto",
           "border-0 bg-transparent shadow-none dark:bg-transparent",
           busy && "opacity-60",
         )}
@@ -147,7 +152,7 @@ export function AmountCell({
             setEditing(false);
           }
         }}
-        className="h-7 w-24 rounded-md bg-muted/50 px-1.5 text-[13px] outline-none ring-1 ring-ring/40"
+        className="h-9 w-24 rounded-md bg-muted/50 px-1.5 text-[16px] outline-none ring-1 ring-ring/40 md:h-7 md:text-[13px]"
       />
     );
   }
@@ -214,7 +219,7 @@ export function CloseDateCell({
             setEditing(false);
           }
         }}
-        className="h-7 rounded-md bg-muted/50 px-1.5 text-[13px] outline-none ring-1 ring-ring/40"
+        className="h-9 rounded-md bg-muted/50 px-1.5 text-[16px] outline-none ring-1 ring-ring/40 md:h-7 md:text-[13px]"
       />
     );
   }
@@ -290,7 +295,7 @@ export function TextFieldCell({
             setEditing(false);
           }
         }}
-        className="h-7 w-full min-w-0 rounded-md bg-muted/50 px-1.5 text-[13px] outline-none ring-1 ring-ring/40"
+        className="h-9 w-full min-w-0 rounded-md bg-muted/50 px-1.5 text-[16px] outline-none ring-1 ring-ring/40 md:h-7 md:text-[13px]"
       />
     );
   }
@@ -369,7 +374,7 @@ export function CompanyCell({
           value={needle}
           placeholder={t.companySearchPlaceholder}
           onChange={(e) => setNeedle(e.target.value)}
-          className="mb-1 h-7 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="mb-1 h-9 w-full rounded-md border border-border bg-background px-2 text-[16px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40 md:h-7 md:text-[13px]"
         />
         <button
           type="button"
@@ -488,7 +493,7 @@ export function TagsCell({
               addDraft();
             }
           }}
-          className="mt-2 h-7 w-full rounded-md border border-border bg-background px-2 text-[13px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="mt-2 h-9 w-full rounded-md border border-border bg-background px-2 text-[16px] outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40 md:h-7 md:text-[13px]"
         />
       </PopoverContent>
     </Popover>

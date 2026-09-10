@@ -18,6 +18,15 @@ const composerSources = [
 ].map((relative) => readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8"));
 
 describe("[COMP:web/recording-upload] floating composer upload progress", () => {
+  it("isolates recorder saves from the attachment uploader that gates chat", () => {
+    expect(source).toContain("const captureUpload = useRecordingUpload(workspaceId, activeAssistantId)");
+    const handOff = source.slice(source.indexOf("onMeetingCapture: async"), source.indexOf("// Feed replaces this dock"));
+    expect(handOff).toContain("await captureUpload.run(file,");
+    expect(handOff).toContain("captureUpload.dismiss()");
+    expect(handOff).not.toContain("await rec.run(");
+    expect(source).not.toContain("captureUpload.busy");
+  });
+
   it("keeps the expanded frame neutral and gives the status row breathing room", () => {
     expect(source).not.toContain("border-primary/60 ring-2 ring-primary/25");
     expect(source).toContain('className="space-y-2 px-1 py-2"');

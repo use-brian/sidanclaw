@@ -21,6 +21,7 @@ import { ArrowLeft, MessageSquare, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
+import { isPhoneViewport } from "@/lib/viewport";
 import { PlatformIcon } from "@/components/feed/platform-icon";
 import { StatusLabel } from "@/components/feed/feed-status";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
@@ -90,10 +91,12 @@ export function PlanSlotPeek({
   const titleRef = useRef<HTMLInputElement>(null);
 
   // A brand-new slot opens focused on its title: the operator clicked a day
-  // meaning to name something, so the cursor should already be there.
+  // meaning to name something, so the cursor should already be there. Not
+  // on a phone (responsive contract M4): the sheet is still sliding in and
+  // an auto-raised keyboard would cover half of it.
   const isNew = draft.id === null;
   useEffect(() => {
-    if (isNew) titleRef.current?.focus();
+    if (isNew && !isPhoneViewport()) titleRef.current?.focus();
   }, [isNew]);
 
   /**
@@ -142,7 +145,7 @@ export function PlanSlotPeek({
           onClick={onBack}
           aria-label={tp.backToBrief}
           title={tp.backToBrief}
-          className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="inline-flex size-9 md:size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           <ArrowLeft className="size-4" aria-hidden />
         </button>
@@ -166,8 +169,37 @@ export function PlanSlotPeek({
           disabled={!canEdit}
           onChange={(e) => onChange({ ...draft, title: e.target.value })}
           placeholder={tp.slotTitlePlaceholder}
-          className="w-full border-0 bg-transparent p-0 text-[15px] font-semibold placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-70"
+          className="w-full border-0 bg-transparent p-0 text-[16px] md:text-[15px] font-semibold placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-70"
         />
+
+        <div className="space-y-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            {tp.dateLabel}
+          </div>
+          {/*
+            The touch path for a reschedule (responsive contract M9): drag is
+            the desktop gesture and has no finger equivalent, so the day is an
+            editable field here and rides the Save write as `scheduledFor`.
+            No app date primitive exists under `components/ui/` (the CRM,
+            Shopify and Brain editors use the same native control), so this is
+            the browser's date picker with the 16px floor (M4), documented as
+            the one sanctioned native input in this editor.
+          */}
+          <input
+            type="date"
+            value={draft.scheduledFor}
+            disabled={!canEdit}
+            aria-label={tp.dateLabel}
+            onChange={(e) => {
+              // A cleared picker yields "", which is not a day; keep the last
+              // valid one rather than writing an empty date.
+              if (/^\d{4}-\d{2}-\d{2}$/.test(e.target.value)) {
+                onChange({ ...draft, scheduledFor: e.target.value });
+              }
+            }}
+            className="h-9 md:h-7 w-full max-w-[12rem] rounded-md border border-border bg-background px-2 text-[16px] md:text-[12.5px] tabular-nums outline-none disabled:opacity-60"
+          />
+        </div>
 
         <div className="space-y-2">
           <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
@@ -236,7 +268,7 @@ export function PlanSlotPeek({
                 // string that means nothing; show what is actually stored.
                 setTimeText(formatSlotMinute(draft.scheduledMinute) ?? "");
               }}
-              className="h-7 w-20 rounded-md border border-border bg-background px-2 text-[12.5px] tabular-nums outline-none disabled:opacity-60"
+              className="h-9 md:h-7 w-24 md:w-20 rounded-md border border-border bg-background px-2 text-[16px] md:text-[12.5px] tabular-nums outline-none disabled:opacity-60"
             />
             {draft.scheduledMinute !== null && canEdit ? (
               <button
@@ -245,7 +277,7 @@ export function PlanSlotPeek({
                   setTimeText("");
                   onChange({ ...draft, scheduledMinute: null });
                 }}
-                className="h-7 rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="h-9 md:h-7 rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 {tp.clearTime}
               </button>
@@ -263,7 +295,7 @@ export function PlanSlotPeek({
             onChange={(e) => onChange({ ...draft, brief: e.target.value })}
             placeholder={tp.slotBriefPlaceholder}
             rows={5}
-            className="w-full resize-y rounded-lg border border-border/60 bg-background px-2.5 py-2 text-[12.5px] leading-relaxed placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-70"
+            className="w-full resize-y rounded-lg border border-border/60 bg-background px-2.5 py-2 text-[16px] md:text-[12.5px] leading-relaxed placeholder:text-muted-foreground/60 focus:outline-none disabled:opacity-70"
           />
           <p className="text-[11px] text-muted-foreground">{tp.briefHint}</p>
         </div>
@@ -284,7 +316,7 @@ export function PlanSlotPeek({
               type="button"
               onClick={onSave}
               disabled={!canSave || busy}
-              className="inline-flex h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
+              className="inline-flex h-11 md:h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
             >
               {isNew ? tp.createSlot : tp.saveSlot}
             </button>
@@ -292,7 +324,7 @@ export function PlanSlotPeek({
             <button
               type="button"
               onClick={onOpenDraft}
-              className="inline-flex h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90"
+              className="inline-flex h-11 md:h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90"
             >
               {tp.openDraft}
             </button>
@@ -301,7 +333,7 @@ export function PlanSlotPeek({
               type="button"
               onClick={onDraftThis}
               disabled={busy}
-              className="inline-flex h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
+              className="inline-flex h-11 md:h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
             >
               {tp.draftThis}
             </button>
@@ -312,7 +344,7 @@ export function PlanSlotPeek({
               <button
                 type="button"
                 onClick={onDiscuss}
-                className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border px-2 text-[12.5px] font-medium transition-colors hover:bg-accent"
+                className="inline-flex h-11 md:h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-border px-2 text-[12.5px] font-medium transition-colors hover:bg-accent"
               >
                 <MessageSquare className="size-3.5" aria-hidden />
                 {tp.discussSlot}
@@ -321,7 +353,7 @@ export function PlanSlotPeek({
                 type="button"
                 onClick={onToggleSkip}
                 disabled={busy}
-                className="inline-flex h-8 flex-1 items-center justify-center rounded-lg border border-border px-2 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
+                className="inline-flex h-11 md:h-8 flex-1 items-center justify-center rounded-lg border border-border px-2 text-[12.5px] font-medium transition-colors hover:bg-accent disabled:opacity-50"
               >
                 {slot.status === "skipped" ? tp.unskipSlot : tp.skipSlot}
               </button>
@@ -341,7 +373,7 @@ export function PlanSlotPeek({
                 }}
                 aria-label={tp.deleteSlot}
                 title={tp.deleteSlot}
-                className="inline-flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-50"
+                className="inline-flex size-11 md:size-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive disabled:opacity-50"
               >
                 <Trash2 className="size-3.5" aria-hidden />
               </button>

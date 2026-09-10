@@ -217,14 +217,14 @@ export function CrmRecordDetail({
           aria-label={t.r2.archive}
           title={t.r2.archive}
           onClick={() => onArchive(record)}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground lg:size-7"
         >
           <Archive className="size-4" aria-hidden />
         </button>
         <Link
           href={brainRowUrl("", workspaceId, record.row.id, record.kind)}
           title={t.openInBrain}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+          className="inline-flex size-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent/60 hover:text-foreground lg:size-7"
         >
           <ExternalLink className="size-4" aria-hidden />
         </Link>
@@ -590,7 +590,7 @@ function ReferenceProperty<T extends CrmContactRow | CrmCompanyRow>({
             aria-label={t.openRecord}
             title={t.openRecord}
             onClick={() => onOpen(selected)}
-            className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground lg:size-7"
           >
             <ExternalLink className="size-3.5" aria-hidden />
           </button>

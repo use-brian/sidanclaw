@@ -124,10 +124,10 @@ export function GoalPursuitCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">
               {tApp.goalPursuitHeading}
             </span>
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
+            <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
               {!terminal ? (
                 <LoaderCircle className="size-3 animate-spin" aria-hidden />
               ) : null}
@@ -135,7 +135,7 @@ export function GoalPursuitCard({
             </span>
             <Link
               href={`/w/${encodeURIComponent(workspaceId)}/goals/${encodeURIComponent(goal.id)}`}
-              className="ml-auto inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+              className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
             >
               {tApp.goalAcceptedOpen}
               <ArrowUpRight className="size-3" aria-hidden />
@@ -201,13 +201,13 @@ export function GoalPursuitSticky({
               className="size-3 shrink-0 animate-spin text-primary"
               aria-hidden
             />
-            <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
+            <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-primary">
               {tApp.goalPursuitSticky}
             </span>
             <span className="min-w-0 flex-1 truncate text-xs text-foreground">
               {goal.outcome}
             </span>
-            <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+            <span className="shrink-0 text-xs font-medium text-muted-foreground">
               {statusLabel}
             </span>
           </button>

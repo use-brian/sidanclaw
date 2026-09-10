@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * BrowseDirectory (app-web) — the add-connector / browse-skills modal.
  *
@@ -11,11 +13,8 @@
  *     instead of `@use-brian/shared` (app-web does not depend on shared).
  *
  * INFRA NOTE (connector OAuth env): the OAuth "Connect" path builds the Google
- * authorize URL client-side from `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, which must
- * reach the browser bundle as a real `NEXT_PUBLIC_*` build var — Turborepo
- * strict env mode strips bare `GOOGLE_CLIENT_ID` unless it's declared in
- * `use-brian/turbo.json` build.env, which `next.config.ts` maps to it; missing
- * either ships an empty `client_id`. Non-OAuth connectors ("Add" → backend
+ * authorize URL from the allowlisted runtime public config. Missing metadata
+ * produces an empty `client_id`. Non-OAuth connectors ("Add" → backend
  * connect) and the skills tab work regardless. See the connectors page header
  * and docs/architecture/platform/deployment.md → "Turbo strict env mode".
  *
@@ -37,8 +36,8 @@ import {
 } from "@/components/ui/select";
 import { useT } from "@/lib/i18n/client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
+const GOOGLE_CLIENT_ID = publicRuntimeConfig().googleClientId;
 
 type DirectoryEntry = {
   id: string;
@@ -299,13 +298,19 @@ export function BrowseDirectory({ open, onClose, onConnectorAdded, onConnectorCo
 
       {/* Modal — fixed to viewport, centered */}
       <div className="fixed top-0 left-0 w-screen h-[100dvh] z-[61] flex items-center justify-center pointer-events-none">
-      <div className="relative w-full max-w-4xl max-h-[85vh] bg-background border border-border rounded-2xl shadow-2xl flex flex-col mx-4 pointer-events-auto">
+      <div
+        role="dialog"
+        aria-label={t.browseDirectory.title}
+        className="relative w-full max-w-4xl h-[100dvh] sm:h-[85vh] bg-background border border-border rounded-none sm:rounded-xl shadow-2xl flex flex-col mx-0 sm:mx-4 pointer-events-auto"
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
           <h2 className="text-lg font-semibold">{t.browseDirectory.title}</h2>
           <button
+            type="button"
             onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            aria-label={t.browseDirectory.close}
+            className="h-11 w-11 sm:h-7 sm:w-7 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M4 4l8 8M12 4l-8 8" />
@@ -314,13 +319,13 @@ export function BrowseDirectory({ open, onClose, onConnectorAdded, onConnectorCo
         </div>
 
         {/* Sub-tabs + Search */}
-        <div className="px-6 py-3 border-b border-border shrink-0 space-y-3">
+        <div className="px-4 sm:px-6 py-3 border-b border-border shrink-0 space-y-3">
           <div className="flex gap-1">
             {(["connectors", "skills"] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => { setActiveTab(tab); setSearch(""); }}
-                className={`text-sm px-3 py-1.5 rounded-lg transition-colors ${
+                className={`text-sm px-3 py-3 sm:py-1.5 rounded-lg transition-colors ${
                   activeTab === tab ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -333,12 +338,12 @@ export function BrowseDirectory({ open, onClose, onConnectorAdded, onConnectorCo
             placeholder={activeTab === "skills" ? t.browseDirectory.searchSkills : t.browseDirectory.searchConnectors}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-6">
           {activeTab === "skills" ? (
             <>
               {skillsLoading ? (
@@ -349,7 +354,7 @@ export function BrowseDirectory({ open, onClose, onConnectorAdded, onConnectorCo
                   <div className="flex justify-end">
                     <button
                       onClick={() => { setSkillForm({ name: "", description: "", whenToUse: "", content: "", category: "custom", requiresConnectors: "" }); setSkillError(""); setShowSkillEditor(true); }}
-                      className="text-sm font-medium px-4 py-2 rounded-lg bg-action text-action-foreground hover:bg-action/90 transition-colors"
+                      className="min-h-11 sm:min-h-0 text-sm font-medium px-4 py-2 rounded-lg bg-action text-action-foreground hover:bg-action/90 transition-colors"
                     >
                       {t.browseDirectory.createSkill}
                     </button>
@@ -381,9 +386,9 @@ export function BrowseDirectory({ open, onClose, onConnectorAdded, onConnectorCo
                   {showSkillEditor && (
                     <div className="border border-primary/30 rounded-xl p-5 bg-muted/10 space-y-3">
                       <h3 className="text-sm font-semibold">{t.browseDirectory.createSkill}</h3>
-                      <input type="text" value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} placeholder={t.browseDirectory.skillNamePlaceholder} maxLength={100} className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                      <input type="text" value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} placeholder={t.browseDirectory.shortDescriptionPlaceholder} maxLength={250} className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                      <input type="text" value={skillForm.whenToUse} onChange={(e) => setSkillForm({ ...skillForm, whenToUse: e.target.value })} placeholder={t.browseDirectory.whenToUsePlaceholder} className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                      <input type="text" value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} placeholder={t.browseDirectory.skillNamePlaceholder} maxLength={100} className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                      <input type="text" value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} placeholder={t.browseDirectory.shortDescriptionPlaceholder} maxLength={250} className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                      <input type="text" value={skillForm.whenToUse} onChange={(e) => setSkillForm({ ...skillForm, whenToUse: e.target.value })} placeholder={t.browseDirectory.whenToUsePlaceholder} className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
                       <div className="flex gap-3">
                         <Select value={skillForm.category} onValueChange={(v: string | null) => setSkillForm({ ...skillForm, category: v ?? "custom" })}>
                           <SelectTrigger className="h-10 bg-muted/50">
@@ -396,13 +401,13 @@ export function BrowseDirectory({ open, onClose, onConnectorAdded, onConnectorCo
                             <SelectItem value="research">{t.browseDirectory.catResearch}</SelectItem>
                           </SelectContent>
                         </Select>
-                        <input type="text" value={skillForm.requiresConnectors} onChange={(e) => setSkillForm({ ...skillForm, requiresConnectors: e.target.value })} placeholder={t.browseDirectory.requiredConnectorsPlaceholder} className="flex-1 text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                        <input type="text" value={skillForm.requiresConnectors} onChange={(e) => setSkillForm({ ...skillForm, requiresConnectors: e.target.value })} placeholder={t.browseDirectory.requiredConnectorsPlaceholder} className="flex-1 text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30" />
                       </div>
-                      <textarea value={skillForm.content} onChange={(e) => setSkillForm({ ...skillForm, content: e.target.value })} placeholder={t.browseDirectory.contentPlaceholder} rows={6} maxLength={5000} className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y font-mono" />
+                      <textarea value={skillForm.content} onChange={(e) => setSkillForm({ ...skillForm, content: e.target.value })} placeholder={t.browseDirectory.contentPlaceholder} rows={6} maxLength={5000} className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y font-mono" />
                       {skillError && <p className="text-xs text-destructive">{skillError}</p>}
                       <div className="flex gap-2 justify-end">
-                        <button onClick={() => setShowSkillEditor(false)} className="text-sm px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-muted transition-colors">{t.browseDirectory.cancel}</button>
-                        <button onClick={handleSaveSkill} disabled={savingSkill} className="text-sm px-3 py-1.5 rounded-lg bg-action text-action-foreground hover:bg-action/90 disabled:opacity-50 transition-colors">{savingSkill ? t.browseDirectory.saving : t.browseDirectory.create}</button>
+                        <button onClick={() => setShowSkillEditor(false)} className="min-h-11 sm:min-h-0 text-sm px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:bg-muted transition-colors">{t.browseDirectory.cancel}</button>
+                        <button onClick={handleSaveSkill} disabled={savingSkill} className="min-h-11 sm:min-h-0 text-sm px-3 py-1.5 rounded-lg bg-action text-action-foreground hover:bg-action/90 disabled:opacity-50 transition-colors">{savingSkill ? t.browseDirectory.saving : t.browseDirectory.create}</button>
                       </div>
                     </div>
                   )}
@@ -534,7 +539,7 @@ function DirectoryCard({
       <button
         onClick={(e) => { e.stopPropagation(); onConfigure(); }}
         disabled={adding}
-        className="text-[11px] font-medium border border-border px-2.5 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-50 transition-colors"
+        className="h-11 sm:h-7 text-[11px] font-medium border border-border px-2.5 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-50 transition-colors"
       >
         {t.browseDirectory.configure}
       </button>
@@ -562,7 +567,7 @@ function DirectoryCard({
           <button
             onClick={(e) => { e.stopPropagation(); onConnect(); }}
             disabled={adding}
-            className="text-[11px] font-medium bg-action text-action-foreground px-2.5 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
+            className="h-11 sm:h-7 text-[11px] font-medium bg-action text-action-foreground px-2.5 py-1 rounded-lg hover:bg-action/90 disabled:opacity-50 transition-colors"
           >
             {adding ? "..." : t.browseDirectory.connect}
           </button>
@@ -573,7 +578,7 @@ function DirectoryCard({
       <button
         onClick={(e) => { e.stopPropagation(); onAdd(); }}
         disabled={adding}
-        className="text-[11px] font-medium border border-border px-2.5 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-50 transition-colors"
+        className="h-11 sm:h-7 text-[11px] font-medium border border-border px-2.5 py-1 rounded-lg text-muted-foreground hover:text-foreground hover:border-primary/30 disabled:opacity-50 transition-colors"
       >
         {adding ? "..." : t.browseDirectory.add}
       </button>
@@ -619,7 +624,7 @@ function DirectoryCard({
           <button
             onClick={(e) => { e.stopPropagation(); onAddAnother(); }}
             disabled={adding}
-            className="mt-2 text-[11px] font-medium text-primary hover:underline disabled:opacity-50 transition-colors"
+            className="mt-2 min-h-11 sm:min-h-0 text-[11px] font-medium text-primary hover:underline disabled:opacity-50 transition-colors"
           >
             {adding ? t.browseDirectory.adding : t.browseDirectory.addAnother}
           </button>

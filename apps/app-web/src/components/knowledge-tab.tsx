@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Assistant -> Brain -> Knowledge sub-tab (app-web).
  *
@@ -15,13 +17,16 @@
  * [COMP:app-web/knowledge-tab]
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { authFetch } from "@/lib/auth-fetch";
 import { SensitivityBadge, type Sensitivity } from "@/components/sensitivity-badge";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { kbTabCacheKey } from "@/lib/surface-prefetch";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 type KnowledgeEntry = {
   id: string;
@@ -46,6 +51,53 @@ type KnowledgeSource = {
   enabled: boolean;
 };
 
+/** The tab's landing data: the sources plus the ROOT entry listing. */
+export type KbTabSnapshot = {
+  sources: KnowledgeSource[];
+  entries: KnowledgeEntry[];
+};
+
+/**
+ * Both landing reads in parallel (instant-navigation N7); either one failing
+ * degrades to an empty list, the way the tab always behaved.
+ */
+async function fetchKbTabSnapshot(assistantId: string): Promise<KbTabSnapshot> {
+  const [sources, entries] = await Promise.all([
+    authFetch(`${API_URL}/api/assistants/${assistantId}/knowledge/sources`)
+      .then(async (res) => (res.ok ? ((await res.json()).sources ?? []) : []))
+      .catch(() => []),
+    authFetch(`${API_URL}/api/assistants/${assistantId}/knowledge/entries?path=`)
+      .then(async (res) => (res.ok ? ((await res.json()).entries ?? []) : []))
+      .catch(() => []),
+  ]);
+  return { sources, entries };
+}
+
+/** Geometry-matched cold state: two source rows, four entry rows (N4). */
+function KnowledgeTabSkeleton() {
+  return (
+    <div className="space-y-6" data-testid="knowledge-tab-skeleton">
+      <div className="rounded-xl border border-border px-5 py-4 space-y-3">
+        {[0, 1].map((i) => (
+          <div key={i} className="flex items-center gap-3">
+            <Skeleton className="size-4 rounded" />
+            <Skeleton className="h-3.5 w-40" />
+            <Skeleton className="ml-auto h-5 w-9 rounded-full" />
+          </div>
+        ))}
+      </div>
+      <div className="rounded-xl border border-border px-5 py-4 space-y-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex items-center gap-3 px-3 py-2">
+            <Skeleton className="size-5 rounded" />
+            <Skeleton className="h-3.5" style={{ width: `${30 + ((i * 17) % 40)}%` }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function KnowledgeTab({
   assistantId,
   workspaceId,
@@ -54,12 +106,28 @@ export function KnowledgeTab({
   workspaceId: string | null;
 }) {
   const t = useT();
-  const [sources, setSources] = useState<KnowledgeSource[]>([]);
-  const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
+  // Sources + the root entry listing read the assistant's cached key
+  // (instant-navigation N1): re-opening the tab paints on the first frame.
+  // Browsing into a folder or searching replaces the listing LOCALLY
+  // (`browsed`); null means "show the cached root".
+  const tabKey = kbTabCacheKey(assistantId);
+  const root = useCachedResource<KbTabSnapshot>(tabKey, () => fetchKbTabSnapshot(assistantId));
+  const sources = root.data?.sources ?? [];
+  const [browsed, setEntries] = useState<KnowledgeEntry[] | null>(null);
+  const entries = browsed ?? root.data?.entries ?? [];
+  const cold = root.data === undefined && root.error === undefined;
+  const setSources = useCallback(
+    (updater: (prev: KnowledgeSource[]) => KnowledgeSource[]) => {
+      mutateSurfaceCache<KbTabSnapshot>(tabKey, (prev) => ({
+        ...prev,
+        sources: updater(prev.sources),
+      }));
+    },
+    [tabKey],
+  );
   const [currentPath, setCurrentPath] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
   const [expandedContent, setExpandedContent] = useState<string | null>(null);
 
@@ -105,19 +173,9 @@ export function KnowledgeTab({
     }
   }
 
-  const fetchSources = useCallback(async () => {
-    try {
-      const res = await authFetch(
-        `${API_URL}/api/assistants/${assistantId}/knowledge/sources`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setSources(data.sources ?? []);
-      }
-    } catch {
-      // ignore
-    }
-  }, [assistantId]);
+  // Revalidate the cached sources (after a sync) - the same key the tab
+  // painted from, so the next visit sees the refreshed rows too.
+  const fetchSources = root.refresh;
 
   const fetchEntries = useCallback(
     async (path = "") => {
@@ -135,12 +193,6 @@ export function KnowledgeTab({
     },
     [assistantId]
   );
-
-  useEffect(() => {
-    Promise.all([fetchSources(), fetchEntries()]).finally(() =>
-      setLoading(false)
-    );
-  }, [fetchSources, fetchEntries]);
 
   async function handleSearch() {
     if (!searchQuery.trim()) {
@@ -200,8 +252,8 @@ export function KnowledgeTab({
       );
       // Refresh after a brief delay to allow sync to process
       setTimeout(() => {
-        fetchSources();
-        fetchEntries(currentPath);
+        void fetchSources();
+        void fetchEntries(currentPath);
         setSyncingId(null);
       }, 2000);
     } catch {
@@ -209,12 +261,11 @@ export function KnowledgeTab({
     }
   }
 
-  if (loading) {
-    return (
-      <div className="text-[13px] text-muted-foreground py-6">
-        Loading knowledge base...
-      </div>
-    );
+  if (cold) {
+    // Nothing cached for this assistant yet: skeleton rows hold the
+    // geometry (N4), never a "Loading..." sentence. A failed first load
+    // falls through to the empty states below.
+    return <KnowledgeTabSkeleton />;
   }
 
   // Breadcrumb path segments
@@ -310,17 +361,17 @@ export function KnowledgeTab({
                         aria-label={t.workspace.brain.enabledLabel}
                         disabled={togglingId === s.id}
                         onClick={() => toggleEnabled(s.id, !s.enabled)}
-                        className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${s.enabled ? "bg-primary" : "bg-muted"}`}
+                        className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:h-5 sm:w-9 ${s.enabled ? "bg-primary" : "bg-muted"}`}
                       >
                         <span
-                          className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-background shadow-sm transition-transform duration-200 ${s.enabled ? "translate-x-4" : "translate-x-0"}`}
+                          className={`pointer-events-none inline-block size-6 rounded-full bg-background shadow-sm transition-transform duration-200 sm:size-4 ${s.enabled ? "translate-x-5 sm:translate-x-4" : "translate-x-0"}`}
                         />
                       </button>
                     </div>
                     <button
                       onClick={() => handleSync(s.id)}
                       disabled={syncingId === s.id}
-                      className="text-[12px] font-medium border border-border px-2.5 py-1 rounded-lg text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50 shrink-0"
+                      className="inline-flex h-9 items-center text-[12px] font-medium border border-border px-2.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50 shrink-0 sm:h-7"
                     >
                       {syncingId === s.id ? t.workspace.brain.syncNow + "…" : t.workspace.brain.syncNow}
                     </button>
@@ -349,7 +400,7 @@ export function KnowledgeTab({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSearch()}
                 placeholder={t.workspace.brain.searchPlaceholder}
-                className="flex-1 text-sm bg-muted/50 border border-border rounded-lg px-3 py-2"
+                className="flex-1 text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2"
               />
               <button
                 onClick={handleSearch}

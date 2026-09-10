@@ -1,3 +1,4 @@
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * SDK for skills as a procedural-brain primitive (app-web).
  *
@@ -27,7 +28,7 @@
 import { authFetch } from "@/lib/auth-fetch";
 import { BrainContentHttpError } from "@/lib/offline/brain-content-cache";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /** Where a skill came from — drives the provenance tier + the induction-source
  *  chip. `authored` = a human wrote it; `self` = induced from the team's own
@@ -845,54 +846,4 @@ export async function applySkillGroups(
     updated: typeof data.updated === "number" ? data.updated : 0,
     failed: Array.isArray(data.failed) ? data.failed : [],
   };
-}
-
-/** A skill invocable as a slash command (`/slug …`). Menu hint only: the
- *  server re-applies the full governance gates at invocation, and a command
- *  that resolves to nothing falls through as plain conversational text. */
-export type InvocableSkill = {
-  slug: string;
-  name: string;
-  description: string;
-};
-
-/**
- * The roster the composer's `/` autocomplete offers: built-in skills (enabled
- * by default for every assistant) plus this workspace's own activated skills.
- * Community/published catalog entries are deliberately excluded — they need
- * an explicit install/enablement before they'd resolve. Empty on any failure:
- * the menu simply doesn't open, and typed commands still work.
- */
-export async function listInvocableSkills(
-  workspaceId: string | null,
-): Promise<InvocableSkill[]> {
-  const [catalog, workspace] = await Promise.all([
-    authFetch(`${API_URL}/api/skills/catalog`)
-      .then((res) =>
-        res.ok ? (res.json() as Promise<{ skills?: unknown }>) : { skills: [] },
-      )
-      .catch(() => ({ skills: [] as unknown[] })),
-    workspaceId
-      ? listWorkspaceSkills(workspaceId).catch(() => [])
-      : Promise.resolve([]),
-  ]);
-  const bySlug = new Map<string, InvocableSkill>();
-  const catalogSkills = Array.isArray(catalog.skills) ? catalog.skills : [];
-  for (const raw of catalogSkills) {
-    const s = raw as { id?: unknown; name?: unknown; description?: unknown; source?: unknown };
-    if (s.source !== "builtin") continue;
-    if (typeof s.id !== "string" || typeof s.name !== "string") continue;
-    bySlug.set(s.id, {
-      slug: s.id,
-      name: s.name,
-      description: typeof s.description === "string" ? s.description : "",
-    });
-  }
-  for (const s of workspace) {
-    // Suggested drafts (never activated) and archived skills aren't offered
-    // to the model, so don't offer them as commands either.
-    if (!s.activatedAt || s.state === "archived") continue;
-    bySlug.set(s.slug, { slug: s.slug, name: s.name, description: s.description });
-  }
-  return [...bySlug.values()].sort((a, b) => a.slug.localeCompare(b.slug));
 }

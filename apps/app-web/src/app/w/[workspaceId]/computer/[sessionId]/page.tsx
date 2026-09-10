@@ -41,10 +41,10 @@
 
 import { use as usePromise, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Keyboard } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import {
-  LOCAL_ONLY_KEYS,
   canSwitchSessionBackend,
   createFrameGate,
   createWheelForwarder,
@@ -53,6 +53,17 @@ import {
   normalizeNavigateUrl,
   takeoverStartsPolled,
 } from "@/lib/computer-takeover";
+import {
+  keysForProxyComposition,
+  keysForProxyInput,
+  keysForProxyKeydown,
+} from "@/components/computer/takeover-typing";
+import {
+  invalidateSurfaceCache,
+  loadSurfaceCache,
+  readSurfaceCache,
+} from "@/lib/surface-cache";
+import { computerTaskCacheKey } from "@/lib/surface-prefetch";
 import {
   SearchableSelect,
   type SearchableSelectItem,
@@ -121,6 +132,16 @@ export default function ComputerTakeoverPage(props: {
   });
 
   const [task, setTask] = useState<ComputerTask | null | "loading">("loading");
+  // The task header this session last resolved to (`computer-task:<wid>:<sid>`,
+  // instant-navigation contract N1): a revisit paints the title, badge,
+  // subtitle and Stop control on the first frame while the transport ladder
+  // below reconnects. Read ONCE at mount - the transport effects still key
+  // on `task`, so the resolve -> resume -> mint sequence is untouched; only
+  // the chrome stops blanking. The frame's own "Connecting" is by design.
+  const taskKey = computerTaskCacheKey(workspaceId, sessionId);
+  const [cachedTask] = useState<ComputerTask | null>(
+    () => readSurfaceCache<ComputerTask>(taskKey).data ?? null,
+  );
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
   const [stalled, setStalled] = useState(false);
   const [stream, setStream] = useState<TakeoverStreamSession | null>(null);
@@ -146,6 +167,10 @@ export default function ComputerTakeoverPage(props: {
   const isLocalTask = task !== "loading" && task?.backend === "local";
   const imgRef = useRef<HTMLImageElement | null>(null);
   const frameBoxRef = useRef<HTMLDivElement | null>(null);
+  // The hidden typing proxy (report C row 25): a real `<input>` inside the
+  // frame box takes focus on tap, so a phone raises its keyboard and what is
+  // typed relays into the page (`takeover-typing.ts` decides per event).
+  const proxyRef = useRef<HTMLInputElement | null>(null);
   const naturalSize = useRef<{ w: number; h: number } | null>(null);
   const pressedPointer = useRef<{
     pointerId: number;
@@ -184,7 +209,14 @@ export default function ComputerTakeoverPage(props: {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const found = await getComputerTask(sessionId).catch(() => null);
+      // Loads THROUGH the cache so the next visit's chrome seeds from this
+      // row; a 404 (`null`) is an authoritative miss and evicts rather than
+      // painting "no task" from memory on the next entry (N2).
+      const loaded = await loadSurfaceCache<ComputerTask | null>(taskKey, () =>
+        getComputerTask(sessionId),
+      );
+      const found = loaded ?? null;
+      if (found === null) invalidateSurfaceCache(taskKey);
       if (cancelled) return;
       setTask(found);
       if (found) {
@@ -199,7 +231,7 @@ export default function ComputerTakeoverPage(props: {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, loginFlow.site]);
+  }, [sessionId, loginFlow.site, taskKey]);
 
   // Mint the live stream once the task is resolved. Any failure lands on
   // the polled fallback below - nothing breaks.
@@ -456,7 +488,10 @@ export default function ComputerTakeoverPage(props: {
       if (!point) return; // letterbox bar — nothing under it in the frame
       e.preventDefault();
       e.currentTarget.setPointerCapture(e.pointerId);
-      frameBoxRef.current?.focus();
+      // Focus the typing proxy inside the pointer gesture: that is what lets
+      // iOS / Android raise the keyboard (a programmatic focus outside a user
+      // gesture is inert there).
+      proxyRef.current?.focus({ preventScroll: true });
       if (moveTimer.current) {
         clearTimeout(moveTimer.current);
         moveTimer.current = null;
@@ -596,16 +631,55 @@ export default function ComputerTakeoverPage(props: {
     [],
   );
 
-  const forwardKey = useCallback(
-    (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (e.metaKey || e.ctrlKey) return; // browser shortcuts stay local
-      e.preventDefault();
-      const text = e.key;
-      if (!text || LOCAL_ONLY_KEYS.has(text)) return;
-      forwardInput({ kind: "key", text });
+  // Keys relay from the proxy: non-character keys on keydown, characters on
+  // the `input` event (once each, on every platform), IME text on commit.
+  const relayKeys = useCallback(
+    (keys: string[]) => {
+      for (const text of keys) forwardInput({ kind: "key", text });
     },
     [forwardInput],
   );
+  const onProxyKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      const decision = keysForProxyKeydown({
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        isComposing: e.nativeEvent.isComposing,
+      });
+      if (decision.preventDefault) e.preventDefault();
+      relayKeys(decision.relay);
+    },
+    [relayKeys],
+  );
+  const onProxyInput = useCallback(
+    (e: React.FormEvent<HTMLInputElement>) => {
+      const native = e.nativeEvent as InputEvent;
+      relayKeys(
+        keysForProxyInput({
+          inputType: native.inputType ?? "insertText",
+          data: native.data ?? null,
+          isComposing: native.isComposing,
+        }),
+      );
+      // The proxy holds nothing: every character has already gone to the
+      // page. Clearing mid-composition would break the IME, so wait for the
+      // commit in that case.
+      if (!native.isComposing) e.currentTarget.value = "";
+    },
+    [relayKeys],
+  );
+  const onProxyCompositionEnd = useCallback(
+    (e: React.CompositionEvent<HTMLInputElement>) => {
+      relayKeys(keysForProxyComposition(e.data));
+      e.currentTarget.value = "";
+    },
+    [relayKeys],
+  );
+  const focusTypingProxy = useCallback(() => {
+    proxyRef.current?.focus({ preventScroll: true });
+  }, []);
 
   // Wheel forwarding: leading-edge dispatch (the page starts moving on the
   // first tick), then one relayed scroll per flush window.
@@ -685,7 +759,10 @@ export default function ComputerTakeoverPage(props: {
       }
       setBackendChoice(backend);
       if (task && task !== "loading" && task.backend === "local" && backend === "cloud") {
-        const active = await getComputerTask(sessionId).catch(() => null);
+        const active =
+          (await loadSurfaceCache<ComputerTask | null>(taskKey, () => getComputerTask(sessionId))) ??
+          null;
+        if (active === null) invalidateSurfaceCache(taskKey);
         setTask(active);
         if (active) {
           setStream(null);
@@ -693,7 +770,7 @@ export default function ComputerTakeoverPage(props: {
         }
       }
     },
-    [backendChoice, backendSwitching, sessionId, task],
+    [backendChoice, backendSwitching, sessionId, task, taskKey],
   );
 
   // Login-flow exit: the sandbox existed only for this sign-in, so a
@@ -721,15 +798,20 @@ export default function ComputerTakeoverPage(props: {
     router.push(`/w/${workspaceId}/computer`);
   }, [isLocalTask, router, sessionId, t, workspaceId]);
 
-  if (task === "loading") {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        {t.computer.connecting}
-      </div>
-    );
-  }
+  // What the chrome renders: the resolved task, or the cached header while
+  // the resolve is in flight (class B: the frame connects, the chrome does
+  // not blank). Handlers above keep reading `task` (the live state).
+  const view: ComputerTask | null = task === "loading" ? cachedTask : task;
 
-  if (!task) {
+  if (view === null) {
+    if (task === "loading") {
+      // Cold entry with nothing cached: the frame's connecting state.
+      return (
+        <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          {t.computer.connecting}
+        </div>
+      );
+    }
     return (
       <div className="flex h-full items-center justify-center p-8">
         <p className="max-w-md text-center text-sm text-muted-foreground">{t.computer.noTask}</p>
@@ -743,7 +825,7 @@ export default function ComputerTakeoverPage(props: {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-base font-semibold">{t.computer.liveViewTitle}</h1>
-            {task.backend === "local" ? (
+            {view.backend === "local" ? (
               <span className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                 {t.computer.localViewBadge}
@@ -761,7 +843,7 @@ export default function ComputerTakeoverPage(props: {
             ) : null}
           </div>
           <p className="mt-0.5 max-w-xl text-xs text-muted-foreground">
-            {task.backend === "local"
+            {view.backend === "local"
               ? t.computer.localViewSubtitle
               : t.computer.liveViewSubtitle}
           </p>
@@ -769,13 +851,13 @@ export default function ComputerTakeoverPage(props: {
         <button
           type="button"
           onClick={() => void onStop()}
-          className="shrink-0 rounded-md border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10"
+          className="shrink-0 rounded-md border border-destructive/40 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 max-sm:min-h-11"
         >
           {t.computer.stopTask}
         </button>
       </div>
 
-      {canSwitchSessionBackend(task, loginFlow.isLogin) ? (
+      {canSwitchSessionBackend(view, loginFlow.isLogin) ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border bg-muted/20 px-3 py-2">
           <div>
             <p className="text-xs font-medium">{t.computer.backendSwitchLabel}</p>
@@ -789,7 +871,7 @@ export default function ComputerTakeoverPage(props: {
             className="flex gap-1"
           >
             {(["cloud", "local"] as const).map((backend) => {
-              const selected = (backendChoice ?? task.backend) === backend;
+              const selected = (backendChoice ?? view.backend) === backend;
               return (
                 <button
                   key={backend}
@@ -815,7 +897,7 @@ export default function ComputerTakeoverPage(props: {
             <p role="status" className="w-full text-[11px] text-destructive">
               {t.computer.backendSwitchFailed}
             </p>
-          ) : backendChoice && backendChoice !== task.backend ? (
+          ) : backendChoice && backendChoice !== view.backend ? (
             <p role="status" className="w-full text-[11px] text-primary">
               {t.computer.backendSwitchSaved.replace(
                 "{browser}",
@@ -836,7 +918,7 @@ export default function ComputerTakeoverPage(props: {
           aria-label={t.computer.navBack}
           title={t.computer.navBack}
           onClick={() => forwardNavigate("back")}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="grid size-11 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:size-7"
         >
           <svg
             width="16"
@@ -857,7 +939,7 @@ export default function ComputerTakeoverPage(props: {
           aria-label={t.computer.navForward}
           title={t.computer.navForward}
           onClick={() => forwardNavigate("forward")}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="grid size-11 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:size-7"
         >
           <svg
             width="16"
@@ -878,7 +960,7 @@ export default function ComputerTakeoverPage(props: {
           aria-label={t.computer.navReload}
           title={t.computer.navReload}
           onClick={() => forwardNavigate("reload")}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="grid size-11 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:size-7"
         >
           <svg
             width="16"
@@ -910,26 +992,51 @@ export default function ComputerTakeoverPage(props: {
             autoCapitalize="off"
             autoCorrect="off"
             spellCheck={false}
-            className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-sm"
+            className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] md:text-sm"
           />
           <button
             type="submit"
-            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+            className="shrink-0 rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent max-sm:min-h-11"
           >
             {t.computer.navGo}
           </button>
         </form>
+        {/* Phones: raise the keyboard without first tapping a field in the
+            page (the proxy focus inside a click is a user gesture there). */}
+        <button
+          type="button"
+          aria-label={t.computer.typeIntoPage}
+          title={t.computer.typeIntoPage}
+          onClick={focusTypingProxy}
+          className="grid size-11 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+        >
+          <Keyboard className="size-4" aria-hidden />
+        </button>
       </div>
 
       <div
         ref={frameBoxRef}
         role="application"
         aria-label={t.computer.liveViewTitle}
-        tabIndex={0}
-        onKeyDown={forwardKey}
         onWheel={forwardWheel}
-        className="relative flex-1 overflow-hidden rounded-lg border border-border bg-muted/30 outline-none focus:ring-2 focus:ring-ring"
+        className="relative flex-1 overflow-hidden rounded-lg border border-border bg-muted/30 focus-within:border-ring [&_:focus-visible]:shadow-none"
       >
+        {/* The typing proxy: visually hidden, never display:none (a hidden
+            input cannot take focus, and iOS raises its keyboard only for a
+            focused text control). 16px so iOS does not zoom on focus (M4). */}
+        <input
+          ref={proxyRef}
+          type="text"
+          aria-label={t.computer.typeIntoPage}
+          autoCapitalize="off"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          onKeyDown={onProxyKeyDown}
+          onInput={onProxyInput}
+          onCompositionEnd={onProxyCompositionEnd}
+          className="absolute left-2 top-2 h-px w-px opacity-0 text-[16px]"
+        />
         {frameSrc ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -986,14 +1093,14 @@ export default function ComputerTakeoverPage(props: {
         ) : null}
         {stalled ? (
           <div className="absolute inset-x-0 bottom-0 bg-background/80 px-3 py-1.5 text-center text-xs text-muted-foreground">
-            {task.connectionState === "disconnected"
+            {view.connectionState === "disconnected"
               ? t.computer.browserDisconnected
               : t.computer.frameStalled}
           </div>
         ) : null}
       </div>
 
-      {task.backend === "cloud" ? (
+      {view.backend === "cloud" ? (
       <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border p-3">
         <label className="flex min-w-56 flex-1 flex-col gap-1 text-xs font-medium">
           {t.computer.siteInputLabel}
@@ -1001,10 +1108,10 @@ export default function ComputerTakeoverPage(props: {
             value={site}
             onChange={(e) => setSite(e.target.value)}
             placeholder={t.computer.profiles.capturePlaceholder}
-            className="rounded-md border border-border bg-background px-2 py-1.5 text-sm font-normal"
+            className="rounded-md border border-border bg-background px-2 py-1.5 text-[16px] font-normal md:text-sm"
           />
         </label>
-        {task.profileId === null && profileItems.length > 0 ? (
+        {view.profileId === null && profileItems.length > 0 ? (
           <label className="flex min-w-44 flex-col gap-1 text-xs font-medium">
             {t.computer.profileLabel}
             <SearchableSelect
@@ -1020,7 +1127,7 @@ export default function ComputerTakeoverPage(props: {
           type="button"
           disabled={capturing || normalizeCaptureSite(site) === null}
           onClick={() => void onCaptured()}
-          className="rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground disabled:opacity-50"
+          className="rounded-md bg-action px-3 py-1.5 text-xs font-medium text-action-foreground disabled:opacity-50 max-sm:min-h-11"
         >
           {t.computer.signedInCta}
         </button>
@@ -1045,7 +1152,7 @@ export default function ComputerTakeoverPage(props: {
           <button
             type="button"
             onClick={() => void onLoginDone()}
-            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent"
+            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent max-sm:min-h-11"
           >
             {t.computer.loginDoneCta}
           </button>

@@ -19,6 +19,7 @@
  */
 
 import { z } from 'zod'
+import { drawingBlockSchema, type DrawingBlock } from '@use-brian/shared/drawing'
 import { aggregateBindingSchema, type AggregateBinding } from './aggregations.js'
 import { bindingConfigSchema } from './schemas.js'
 import type { BindingConfig } from './types.js'
@@ -442,6 +443,7 @@ export type Block =
   | DataBlock
   | ChartBlock
   | DiagramBlock
+  | DrawingBlock
   | CalloutBlock
   | CodeBlock
   | QuoteBlock
@@ -932,6 +934,7 @@ const blockUnionMembers = [
   dataBlockSchema,
   chartBlockBaseSchema,
   diagramBlockSchema,
+  drawingBlockSchema,
   calloutBlockSchema,
   codeBlockSchema,
   quoteBlockSchema,

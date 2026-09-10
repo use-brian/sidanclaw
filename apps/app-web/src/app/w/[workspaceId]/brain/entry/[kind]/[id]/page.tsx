@@ -45,6 +45,9 @@ import {
 } from "@/lib/offline/brain-content-cache";
 import { useIsOffline } from "@/lib/offline/use-offline-sync";
 import { getActiveAssistantId } from "@/lib/sidebar-cache";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { brainEntryCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import {
   getBrainGraph,
   canOpenLocalKnowledgeSource,
@@ -230,14 +233,31 @@ function KnowledgeReader({
   const router = useRouter();
   const onNode = useNodeNavigation(activeId);
 
-  // The loaded entry, tagged with the param it was fetched for. While a
-  // NEXT entry is in flight the previous one stays rendered (dimmed by
+  // Memory tier over the entry (instant-navigation contract N1): a revisit
+  // paints the last-known entry on the first frame; the spine map marks
+  // `brain-entry:<wid>:` stale on every brain change. `getKnowledgeEntry`
+  // answers `null` on a non-OK response (evicting the IDB copy on a denial),
+  // so a cold `error` is a network failure with no cache scope: not-found.
+  const entryKey = activeId ? brainEntryCacheKey(activeId, "knowledge", entryId) : null;
+  const cached = useCachedResource<KnowledgeEntryDetail | null>(entryKey, () =>
+    getKnowledgeEntry(entryId, activeId ?? "", viewpointAssistantId, cacheScope),
+  );
+  const loaded =
+    cached.data !== undefined
+      ? cached.data
+      : cached.error !== undefined
+        ? null
+        : undefined;
+  // The rendered entry, tagged with the param it was fetched for. While the
+  // NEXT entry's slot is cold the previous one stays rendered (dimmed by
   // the shell) — a crossfade instead of a blank loading flash. `null`
   // entry = fetched but not found / no access; `null` view = first load.
-  const [view, setView] = useState<{
+  const lastViewRef = useRef<{
     forId: string;
     entry: KnowledgeEntryDetail | null;
   } | null>(null);
+  if (loaded !== undefined) lastViewRef.current = { forId: entryId, entry: loaded };
+  const view = loaded !== undefined ? { forId: entryId, entry: loaded } : lastViewRef.current;
   const [capability, setCapability] = useState<KnowledgeEditCapability | null>(null);
   const graph = usePersistentBrainGraph(
     activeId,
@@ -256,20 +276,12 @@ function KnowledgeReader({
   useEffect(() => {
     if (!activeId) return;
     let cancelled = false;
-    // Deliberately NOT clearing `view` — the previous entry keeps showing
-    // (dimmed) until the next one lands. Edit state always resets.
+    // The entry itself rides the cache slot above (the previous entry keeps
+    // showing, dimmed, until the next one lands). Edit state always resets.
     setCapability(null);
     setEditing(false);
     setPrUrl(null);
     setSubmitError(null);
-    getKnowledgeEntry(
-      entryId,
-      activeId,
-      viewpointAssistantId,
-      cacheScope,
-    ).then((result) => {
-      if (!cancelled) setView({ forId: entryId, entry: result });
-    });
     if (!offline) {
       getKnowledgeEditCapability(activeId, entryId)
         .then((result) => {
@@ -282,7 +294,7 @@ function KnowledgeReader({
     return () => {
       cancelled = true;
     };
-  }, [activeId, entryId, viewpointAssistantId, cacheScope, offline]);
+  }, [activeId, entryId, offline]);
 
   // New entry swapped in → snap the scroller back to the top (the route
   // segment is stable across entry navigation, so it never resets itself).
@@ -344,13 +356,14 @@ function KnowledgeReader({
       return;
     }
     if (isLocalSynced) {
-      const refreshed = await getKnowledgeEntry(
-        entry.id,
-        activeId,
-        viewpointAssistantId,
-        cacheScope,
-      );
-      setView({ forId: entryId, entry: refreshed ?? { ...entry, content: draft } });
+      // Authoritative re-read into the shared slot (the saved entry keeps
+      // painting meanwhile); a miss keeps the just-saved body on screen.
+      const refreshed = await cached.refresh();
+      if (!refreshed) {
+        mutateSurfaceCache<KnowledgeEntryDetail | null>(entryKey, (prev) =>
+          prev ? { ...prev, content: draft } : prev,
+        );
+      }
     } else if ("prUrl" in result) {
       setPrUrl(result.prUrl);
     }
@@ -555,7 +568,7 @@ function KnowledgeReader({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               spellCheck={false}
-              className="min-h-[50vh] w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-[13px] leading-relaxed text-foreground focus:outline-none"
+              className="min-h-[50dvh] w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-[16px] md:text-[13px] leading-relaxed text-foreground focus:outline-none"
             />
             {!isLocalSynced && <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-muted-foreground">
@@ -566,7 +579,7 @@ function KnowledgeReader({
                 onChange={(e) => setComment(e.target.value)}
                 placeholder={copy.commentPlaceholder}
                 rows={3}
-                className="w-full resize-y rounded-md border border-border bg-background p-2.5 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
+                className="w-full resize-y rounded-md border border-border bg-background p-2.5 text-[16px] md:text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none"
               />
             </label>}
             {submitError && (
@@ -699,28 +712,29 @@ function MemoryReader({
   );
   const onNode = useNodeNavigation(activeId);
 
-  // Same crossfade contract as the knowledge reader — the previous row
-  // stays rendered (dimmed) while the next one loads.
-  const [view, setView] = useState<{
+  // Same cache slot + crossfade contract as the knowledge reader — the
+  // previous row stays rendered (dimmed) while the next one's slot is cold.
+  const cached = useCachedResource<BrainInboxRowDetail | null>(
+    activeId ? brainEntryCacheKey(activeId, "memories", rowId) : null,
+    () => fetchBrainRow(activeId ?? "", "memory", rowId, cacheScope),
+  );
+  const loaded =
+    cached.data !== undefined
+      ? cached.data
+      : cached.error !== undefined
+        ? null
+        : undefined;
+  const lastViewRef = useRef<{
     forId: string;
     row: BrainInboxRowDetail | null;
   } | null>(null);
+  if (loaded !== undefined) lastViewRef.current = { forId: rowId, row: loaded };
+  const view = loaded !== undefined ? { forId: rowId, row: loaded } : lastViewRef.current;
   const graph = usePersistentBrainGraph(
     activeId,
     viewpointAssistantId,
     cacheScope,
   );
-
-  useEffect(() => {
-    if (!activeId) return;
-    let cancelled = false;
-    fetchBrainRow(activeId, "memory", rowId, cacheScope).then((result) => {
-      if (!cancelled) setView({ forId: rowId, row: result });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId, rowId, cacheScope]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
@@ -779,22 +793,32 @@ function MemoryReader({
 
 // ── Shared loading state ───────────────────────────────────────────
 
+/**
+ * Reached only when NOTHING is cached for the entry (first ever open, no
+ * previous entry to crossfade from): a header skeleton in the topbar tail
+ * and a reading-column skeleton, never a "…" placeholder or a "Loading"
+ * sentence (instant-navigation contract N4).
+ */
 function ReaderLoading() {
-  const t = useT();
   const { activeId } = useWorkspaces();
   return (
     <>
       <BrainTopbar
         workspaceId={activeId ?? ""}
-        tail={<span className="text-muted-foreground">…</span>}
+        tail={<Skeleton className="h-3.5 w-32" />}
         tailSection="entries"
       />
       <div
-        className={cn(
-          "mx-auto w-full max-w-3xl px-6 py-10 text-sm text-muted-foreground",
-        )}
+        className={cn("mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-10")}
+        aria-busy
       >
-        {t.brainPage.entryReader.loading}
+        <Skeleton className="h-8 w-2/3" />
+        <Skeleton className="h-4 w-1/2" />
+        <div className="mt-4 flex flex-col gap-3">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-3.5" style={{ width: `${60 + ((i * 13) % 38)}%` }} />
+          ))}
+        </div>
       </div>
     </>
   );

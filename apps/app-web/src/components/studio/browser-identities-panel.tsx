@@ -134,13 +134,13 @@ export function BrowserIdentityList({
                 aria-label={`${t.assistant.toolsTab.browserIdentitiesAvailable}: ${profile.name}`}
                 disabled={saving}
                 onClick={() => onToggle(profile, !available)}
-                className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:opacity-50 ${
+                className={`relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:opacity-50 sm:h-5 sm:w-9 ${
                   available ? "bg-primary" : "bg-muted"
                 }`}
               >
                 <span
-                  className={`pointer-events-none inline-block size-4 rounded-full bg-background shadow-sm transition-transform ${
-                    available ? "translate-x-4" : "translate-x-0"
+                  className={`pointer-events-none inline-block size-6 rounded-full bg-background shadow-sm transition-transform sm:size-4 ${
+                    available ? "translate-x-5 sm:translate-x-4" : "translate-x-0"
                   }`}
                 />
               </button>
@@ -170,7 +170,7 @@ export function BrowserIdentityList({
                   rows={2}
                   onChange={(event) => onDraftChange(profile.id, event.target.value)}
                   placeholder={t.assistant.toolsTab.browserIdentitiesPlaceholder}
-                  className="mt-1.5 block w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition-shadow placeholder:text-muted-foreground/70 focus:ring-1 focus:ring-ring"
+                  className="mt-1.5 block w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-[16px] md:text-sm outline-none transition-shadow placeholder:text-muted-foreground/70 focus:ring-1 focus:ring-ring"
                 />
                 <div className="mt-2 flex min-h-7 items-center justify-end gap-2">
                   {errorId === profile.id ? (

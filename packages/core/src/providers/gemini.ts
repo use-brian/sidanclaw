@@ -10,6 +10,7 @@ import { providerAliasMap, recordedAliasIds, providerModelIds } from '@use-brian
 import type { LLMProvider, ProviderRequest, ProviderSession, SendOptions, SessionOptions, StreamChunk, Message, ContentBlock, ThinkingLevel, ToolDefinition, StopReason, TokenUsage } from './types.js'
 import type { GoogleTransport } from './google-transport.js'
 import { aiStudioTransport } from './google-transport.js'
+import { systemContextParts } from './system-context.js'
 
 /** Alias → real Google model id, derived from the model registry (each
  * gemini row's alias/idAliases vs its `apiModelId`). */
@@ -609,7 +610,7 @@ export function resolveGeminiThinkingLevel(
 
 function buildRequest(
   contents: GeminiContent[],
-  options: { systemPrompt: string; tools?: ToolDefinition[]; maxTokens?: number; temperature?: number; thinkingLevel?: ThinkingLevel; responseFormat?: 'json'; responseSchema?: Record<string, unknown> },
+  options: { systemPrompt: string; runtimeSystemContext?: string; tools?: ToolDefinition[]; maxTokens?: number; temperature?: number; thinkingLevel?: ThinkingLevel; responseFormat?: 'json'; responseSchema?: Record<string, unknown> },
   modelId: string,
 ): GeminiRequest {
   // Universal choke point: every request (stateless stream() AND stateful
@@ -617,6 +618,7 @@ function buildRequest(
   // for all of them. Drops reasoning / content-less parts that would 400.
   const usesLatestContract = usesGemini36RequestContract(modelId)
   const safeContents = normalizeGeminiRequestContents(contents, modelId)
+  const systemParts = systemContextParts(options)
 
   const toolEntries: GeminiToolEntry[] = []
   if (options.tools?.length) {
@@ -631,7 +633,7 @@ function buildRequest(
 
   return {
     contents: safeContents,
-    systemInstruction: { parts: [{ text: options.systemPrompt }] },
+    systemInstruction: { parts: (systemParts.length ? systemParts : ['']).map((text) => ({ text })) },
     ...(toolEntries.length > 0 ? { tools: toolEntries } : {}),
     // AUTO mode: model decides when to call tools and can emit multiple
     // function calls in a single response (parallel tool calling). This

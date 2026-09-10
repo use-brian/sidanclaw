@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Feed chat panel — evolved from
  * `apps/feed-web/src/components/tuning-chat-panel.tsx`
@@ -87,7 +89,7 @@ import {
   type NarrationDict,
 } from "@/lib/tool-narration";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /**
  * The default sticky channel: one tuning conversation per (assistant,
@@ -826,7 +828,7 @@ export const TuningChatPanel = forwardRef<
               onClick={onClose}
               aria-label={t.collapse}
               title={t.collapse}
-              className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              className="shrink-0 inline-flex h-11 w-11 sm:h-7 sm:w-7 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             >
               <ChevronDownIcon />
             </button>
@@ -860,7 +862,7 @@ export const TuningChatPanel = forwardRef<
                         {msg.text}
                       </div>
                     )}
-                    <div className="flex items-center gap-0.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity -mr-1">
+                    <div className="flex items-center gap-0.5 justify-end opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity -mr-1">
                       <ActionButton tooltip={copiedMessageId === msg.id ? t.copied : t.copy} onClick={() => void handleCopy(msg.id, msg.text)}>
                         {copiedMessageId === msg.id ? <CheckIcon /> : <CopyIcon />}
                       </ActionButton>
@@ -890,7 +892,7 @@ export const TuningChatPanel = forwardRef<
                       <ChatMarkdown text={msg.text} />
                     </div>
                   )}
-                  <div className="flex items-center gap-0.5 -ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-0.5 -ml-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                     <ActionButton tooltip={copiedMessageId === msg.id ? t.copied : t.copy} onClick={() => void handleCopy(msg.id, msg.text)}>
                       {copiedMessageId === msg.id ? <CheckIcon /> : <CopyIcon />}
                     </ActionButton>
@@ -1004,7 +1006,7 @@ export const TuningChatPanel = forwardRef<
               placeholder={composerPlaceholder ?? t.composerPlaceholder}
               disabled={!ready}
               rows={1}
-              className="w-full bg-transparent text-[14px] text-foreground placeholder:text-muted-foreground/60 resize-none outline-none focus-visible:shadow-none min-h-[24px] max-h-[140px] py-0.5 leading-relaxed"
+              className="w-full bg-transparent text-[16px] md:text-[14px] text-foreground placeholder:text-muted-foreground/60 resize-none outline-none focus-visible:shadow-none min-h-[24px] max-h-[140px] py-0.5 leading-relaxed"
               style={{ fieldSizing: "content" } as React.CSSProperties}
             />
           </div>
@@ -1028,7 +1030,7 @@ export const TuningChatPanel = forwardRef<
             <Select value={model} onValueChange={(v) => { if (v) setModel(v as ModelTier); }}>
               <SelectTrigger
                 size="sm"
-                className="text-xs gap-1.5 bg-muted/50 hover:bg-muted border-transparent"
+                className="text-[16px] md:text-xs gap-1.5 bg-muted/50 hover:bg-muted border-transparent"
               >
                 <SelectValue />
               </SelectTrigger>
@@ -1233,11 +1235,15 @@ function ActionButton({
     <div className="relative group/btn">
       <button
         onClick={onClick}
-        className="flex items-center justify-center w-7 h-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        aria-label={tooltip}
+        className="flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
       >
         {children}
       </button>
-      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-foreground text-background text-[11px] font-medium rounded-md whitespace-nowrap opacity-0 group-hover/btn:opacity-100 pointer-events-none transition-opacity shadow-lg">
+      {/* A hover tooltip is a desktop affordance: hidden entirely on touch
+          (the button carries its own `aria-label` via `title`), revealed on
+          hover at `md+` (responsive contract M2). */}
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-foreground text-background text-[11px] font-medium rounded-md whitespace-nowrap hidden md:block md:opacity-0 md:group-hover/btn:opacity-100 pointer-events-none transition-opacity shadow-lg">
         {tooltip}
       </div>
     </div>

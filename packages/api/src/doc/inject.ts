@@ -476,7 +476,7 @@ export async function injectDocTools(
       resolveComment,
       getCommentThread,
     ]
-    return new Map(childTools.map((tool) => [tool.name, tool]))
+    return new Map(childTools.map((tool) => [tool.name, { ...tool, homeAppToolSet: { app: 'page', set: tool.isReadOnly ? 'read' : 'write' } }]))
   }
 
   // Narrow reads stay in the conversational loop so it can answer questions,
@@ -578,7 +578,7 @@ export async function injectDocTools(
   }
 
   for (const tool of mainTools) {
-    options.tools.set(tool.name, tool)
+    options.tools.set(tool.name, { ...tool, homeAppToolSet: { app: 'page', set: tool.isReadOnly ? 'read' : 'write' } })
   }
   // Fail closed even if a future boot path pre-registers one of these names:
   // the parent model must never retain a raw Doc mutation beside the gateway.
@@ -601,7 +601,7 @@ export async function injectDocTools(
         options.docThemesStore ?? (cachedDocThemesStore ??= createDbDocThemesStore()),
       onRefined: options.onThemeRefined,
     })
-    options.tools.set(refineActiveTheme.name, refineActiveTheme)
+    options.tools.set(refineActiveTheme.name, { ...refineActiveTheme, homeAppToolSet: { app: 'page', set: 'write' } })
     themeToolInjected = true
   }
 

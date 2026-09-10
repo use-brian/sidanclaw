@@ -120,7 +120,7 @@ function FieldEditor({
           placeholder={t.pickValue}
           searchPlaceholder={t.searchRecords}
           emptyMessage={t.noMatchingRecords}
-          className="h-8 text-xs"
+          className="h-9 text-[16px] md:h-8 md:text-xs"
         />
       </label>
     );
@@ -166,7 +166,7 @@ function FieldEditor({
           } else onCommit(draft || null);
         }}
         placeholder={type === "multi_select" ? options.join(", ") : t.emptyValue}
-        className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-xs outline-none"
+        className="h-9 w-full rounded-lg border border-border bg-background px-2.5 text-[16px] outline-none md:h-8 md:text-xs"
       />
     </label>
   );

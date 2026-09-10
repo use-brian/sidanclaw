@@ -121,4 +121,27 @@ describe('[COMP:brain/decision-event-schema] typed decision event registry', () 
     expect(stableExternalIdentityFromCrmRef({ provider: 'email', id: 'person@example.test' })).toBeNull()
     expect(stableExternalIdentityFromCrmRef({ provider: 'unknown', id: '42', team_id: 'tenant' })).toBeNull()
   })
+
+  it('promotes only instance-scoped WhatsApp references to stable identity', () => {
+    expect(stableExternalIdentityFromCrmRef({
+      provider: 'WhatsApp', id: '85292052939@s.whatsapp.net', instance_id: '4478940f',
+    })).toEqual({
+      provider: 'whatsapp', providerInstanceKey: '4478940f', subjectId: '85292052939@s.whatsapp.net',
+    })
+    // A privacy id is as much a subject as a phone JID.
+    expect(stableExternalIdentityFromCrmRef({
+      provider: 'whatsapp', id: '176450292473999@lid', instance_id: '4478940f',
+    })).toEqual({
+      provider: 'whatsapp', providerInstanceKey: '4478940f', subjectId: '176450292473999@lid',
+    })
+    // Without the connector instance the JID is only metadata: the same subject
+    // under another linked account is a different person's address book.
+    expect(stableExternalIdentityFromCrmRef({
+      provider: 'whatsapp', id: '85292052939@s.whatsapp.net',
+    })).toBeNull()
+    // Slack's namespace key must not be read for a WhatsApp ref.
+    expect(stableExternalIdentityFromCrmRef({
+      provider: 'whatsapp', id: '85292052939@s.whatsapp.net', team_id: 'T000001',
+    })).toBeNull()
+  })
 })

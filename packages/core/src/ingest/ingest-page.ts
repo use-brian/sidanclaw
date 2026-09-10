@@ -103,6 +103,7 @@ export const BLOCK_KIND_REGISTRY: Record<Block['kind'], BlockLayer> = {
   // Media / embeds / pointers — no authored prose to extract.
   divider: 'media',
   diagram: 'media',
+  drawing: 'media',
   image: 'media',
   file: 'media',
   bookmark: 'media',
@@ -275,9 +276,9 @@ export function hashAuthoredContent(blocks: Block[]): string {
   const h = createHash('sha256')
   for (const block of authored) {
     h.update(block.kind)
-    h.update(' ')
+    h.update('\x00')
     h.update(block.id)
-    h.update(' ')
+    h.update('\x00')
     h.update(authoredTextOf(block))
     h.update('')
   }

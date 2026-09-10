@@ -300,7 +300,7 @@ export async function resumeFromApproval(
   const toolContext: ToolContext = {
     userId: run.triggeredBy ?? workflow.createdBy,
     assistantId: toolAssistantId,
-    sessionId: `workflow_run_${run.id}`,
+    sessionId: run.id,
     appId: 'Use Brian',
     channelType: 'workflow',
     channelId: run.id,

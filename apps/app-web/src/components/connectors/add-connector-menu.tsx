@@ -63,7 +63,7 @@ export function AddConnectorMenu({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="menu"
-        className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="inline-flex h-11 sm:h-7 items-center gap-1 rounded-md border border-border px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         <Plus className="size-3.5" aria-hidden />
         {label}
@@ -77,7 +77,7 @@ export function AddConnectorMenu({
             type="button"
             role="menuitem"
             onClick={() => pick(onBrowseDirectory)}
-            className="w-full text-left text-sm px-3 py-2 rounded-md hover:bg-muted transition-colors"
+            className="w-full text-left text-sm px-3 py-3 sm:py-2 rounded-md hover:bg-muted transition-colors"
           >
             {browseLabel}
           </button>
@@ -85,7 +85,7 @@ export function AddConnectorMenu({
             type="button"
             role="menuitem"
             onClick={() => pick(onAddCustom)}
-            className="w-full text-left text-sm px-3 py-2 rounded-md hover:bg-muted transition-colors"
+            className="w-full text-left text-sm px-3 py-3 sm:py-2 rounded-md hover:bg-muted transition-colors"
           >
             {customLabel}
           </button>

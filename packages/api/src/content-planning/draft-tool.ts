@@ -43,6 +43,8 @@ export const PROPOSE_DRAFTS_TOOL_NAME = 'proposeDrafts'
 
 export function buildProposeDraftsTool(): Tool {
   return buildTool({
+    requiresCapability: 'feed',
+    homeAppToolSet: { app: 'feed', set: 'write' },
     name: PROPOSE_DRAFTS_TOOL_NAME,
     description:
       'Surface draft alternatives in the content-planning cardboard. Put the ' +

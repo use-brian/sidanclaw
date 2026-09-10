@@ -30,6 +30,7 @@
 
 import { desktopSignOut } from "@/lib/desktop-auth-source";
 import { clearLocalDocCaches } from "@/lib/offline/idb";
+import { resetSurfaceCache } from "@/lib/surface-cache";
 import { primaryAuthUrl } from "@/lib/primary-auth";
 import { setUserInfoCache } from "@/lib/user";
 
@@ -41,6 +42,10 @@ export function signOutActiveAccount(): void {
     // browser. Internally time-bounded, so a hung IndexedDB can't strand the
     // user mid-sign-out.
     await clearLocalDocCaches();
+    // The in-memory surface cache goes with it: its keys carry the viewer id,
+    // so the next account could never READ these rows, but a shared device
+    // should not keep them in memory either (instant-navigation contract N2).
+    resetSurfaceCache();
     // Electron shell signs out + switches in its own jar (and reloads in place).
     if (desktopSignOut()) return;
     const primary = primaryAuthUrl();

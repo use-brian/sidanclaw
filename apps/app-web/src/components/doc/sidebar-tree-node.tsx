@@ -224,7 +224,7 @@ export function SidebarTreeNode(props: SidebarTreeNodeProps) {
                 "flex items-center justify-center transition-opacity",
                 isExpanded
                   ? "opacity-0"
-                  : "opacity-100 group-hover/row:opacity-0",
+                  : "opacity-100 md:group-hover/row:opacity-0",
               ].join(" ")}
             >
               <span
@@ -242,13 +242,16 @@ export function SidebarTreeNode(props: SidebarTreeNodeProps) {
                 />
               </span>
             </span>
-            {/* Disclosure chevron — fades in on hover, stays while expanded. */}
+            {/* Disclosure chevron — fades in on hover, stays while expanded.
+                A finger has no hover (responsive contract M2), so below `md`
+                the collapsed state keeps the icon and does not render the
+                chevron at all; expanded still shows it. */}
             <ChevronRight
               className={[
                 "absolute inset-0 m-auto size-3.5 transition-[transform,opacity]",
                 isExpanded
                   ? "rotate-90 opacity-100"
-                  : "opacity-0 group-hover/row:opacity-100",
+                  : "max-md:hidden md:opacity-0 md:group-hover/row:opacity-100",
               ].join(" ")}
             />
           </button>
@@ -263,7 +266,7 @@ export function SidebarTreeNode(props: SidebarTreeNodeProps) {
           type="button"
           onClick={() => onSelect(row.id)}
           title={title}
-          className="doc-nav-title flex min-w-0 flex-1 items-center py-1 pr-0 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
+          className="doc-nav-title flex min-w-0 flex-1 items-center py-1 pr-[4.5rem] text-left md:pr-0 md:group-hover/row:pr-14 md:group-focus-within/row:pr-14"
           {...drag.attributes}
           {...drag.listeners}
         >
@@ -277,12 +280,15 @@ export function SidebarTreeNode(props: SidebarTreeNodeProps) {
           </span>
         </button>
 
-        {/* Hover affordances — overflow menu (…) then add-child (+),
-            matching Notion's row order. Absolutely positioned so they cost
-            no width at rest (the title runs full-width); revealed on hover /
+        {/* Row affordances — overflow menu (…) then add-child (+), matching
+            Notion's row order. Always visible below `md` at 32px (responsive
+            contract M2: Move to root / Add child have no other host on a
+            phone, and the title tap navigates AND closes the drawer). From
+            `md` they are absolutely positioned so they cost no width at rest
+            (the title runs full-width) and are revealed on hover /
             focus-within / while the … menu is open (the last via `has-[…]`,
             so moving the mouse off the row doesn't hide an open menu). */}
-        <div className="absolute inset-y-0 right-1 z-10 flex items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
+        <div className="absolute inset-y-0 right-1 z-10 flex items-center gap-0.5 opacity-100 transition-opacity md:pointer-events-none md:opacity-0 md:group-hover/row:opacity-100 md:group-hover/row:pointer-events-auto md:group-focus-within/row:opacity-100 md:group-focus-within/row:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -290,7 +296,7 @@ export function SidebarTreeNode(props: SidebarTreeNodeProps) {
                   type="button"
                   aria-label={t.sidebarRowMenu}
                   onClick={(e) => e.stopPropagation()}
-                  className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                  className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground md:size-6"
                 >
                   <MoreHorizontal className="size-3.5" />
                 </button>
@@ -335,7 +341,7 @@ export function SidebarTreeNode(props: SidebarTreeNodeProps) {
               e.stopPropagation();
               onAddChild(row.id);
             }}
-            className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground md:size-6"
           >
             <Plus className="size-3.5" />
           </button>

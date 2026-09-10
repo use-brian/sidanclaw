@@ -134,7 +134,7 @@ export function StudioTopbar({ workspaceId }: { workspaceId: string }) {
         aria-label={t.studioPage.title}
         className="flex min-w-0 items-center gap-0.5 overflow-hidden"
       >
-        <Link href={`/w/${workspaceId}/studio`} className={crumbBtnCls}>
+        <Link href={`/w/${workspaceId}/studio/connectors`} className={crumbBtnCls}>
           {t.studioPage.title}
         </Link>
         {sectionLabel && (

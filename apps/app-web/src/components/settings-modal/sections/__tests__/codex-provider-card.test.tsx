@@ -12,6 +12,9 @@ const { getCodexProviderStatus } = vi.hoisted(() => ({
 vi.mock("@/components/ui/confirm-dialog", () => ({
   confirmDialog: vi.fn(async () => false),
 }));
+vi.mock("@/lib/workspace-context", () => ({
+  useWorkspaceContext: () => ({ workspaceId: "ws-1" }),
+}));
 vi.mock("@/lib/api/codex-provider", () => ({
   getCodexProviderStatus,
   startCodexBrowserLogin: vi.fn(),
@@ -35,7 +38,9 @@ describe("[COMP:app-web/codex-provider] ChatGPT subscription settings card", () 
     const t = en.chrome.settingsModal.codexProvider;
     expect(html).toContain(t.title);
     expect(html).toContain(t.description);
-    expect(html).toContain(t.loading);
+    // Cold open: the status-pill skeleton, never the sentence (N4 / N5).
+    expect(html).toContain('data-testid="codex-skeleton"');
+    expect(html).not.toContain(t.loading);
     expect(html).not.toContain("access_token");
     expect(html).not.toContain("refresh_token");
   });

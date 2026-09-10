@@ -18,6 +18,8 @@
  * Component tag: [COMP:api/agentmail-provider]
  */
 
+import type { CrmMailContext, CrmMailIntent } from '../crm-operations/delivery-policy.js'
+
 import {
   createAgentmailClient,
   type AgentmailClient,
@@ -42,7 +44,7 @@ export type EmailAttachmentInput = {
   contentBase64?: string
 }
 
-export type SendEmailParams = {
+export type SendEmailParams = CrmMailIntent & {
   to: string[]
   cc?: string[]
   bcc?: string[]
@@ -52,7 +54,7 @@ export type SendEmailParams = {
   attachments?: EmailAttachmentInput[]
 }
 
-export type ReplyEmailParams = {
+export type ReplyEmailParams = CrmMailIntent & {
   text: string
   html?: string
   replyAll?: boolean
@@ -104,7 +106,7 @@ export type ProviderThreadItem = {
   lastMessageId: string | null
 }
 
-export type CreateDraftParams = {
+export type CreateDraftParams = CrmMailIntent & {
   to?: string[]
   cc?: string[]
   bcc?: string[]
@@ -166,11 +168,12 @@ export type EmailInboxProvider = {
   getInbox(inboxId: string): Promise<ProviderInbox | null>
   deleteInbox(inboxId: string): Promise<void>
   // Messages
-  sendMessage(inboxId: string, params: SendEmailParams): Promise<{ messageId: string; threadId: string }>
+  sendMessage(inboxId: string, params: SendEmailParams, context?: CrmMailContext): Promise<{ messageId: string; threadId: string }>
   replyToMessage(
     inboxId: string,
     messageId: string,
     params: ReplyEmailParams,
+    context?: CrmMailContext,
   ): Promise<{ messageId: string; threadId: string }>
   getMessage(inboxId: string, messageId: string): Promise<ProviderEmailMessage | null>
   getAttachment(inboxId: string, messageId: string, attachmentId: string): Promise<ProviderAttachment | null>
@@ -180,8 +183,8 @@ export type EmailInboxProvider = {
     params?: { limit?: number; pageToken?: string; senders?: string[]; subject?: string },
   ): Promise<{ threads: ProviderThreadItem[]; nextPageToken: string | null }>
   // Drafts
-  createDraft(inboxId: string, params: CreateDraftParams): Promise<ProviderDraft>
-  sendDraft(inboxId: string, draftId: string): Promise<{ messageId: string; threadId: string }>
+  createDraft(inboxId: string, params: CreateDraftParams, context?: CrmMailContext): Promise<ProviderDraft>
+  sendDraft(inboxId: string, draftId: string, context?: CrmMailContext, intent?: CrmMailIntent): Promise<{ messageId: string; threadId: string }>
   deleteDraft(inboxId: string, draftId: string): Promise<void>
   // Domains
   createDomain(domain: string): Promise<ProviderEmailDomain>
@@ -263,7 +266,7 @@ export function createAgentmailEmailProvider(client: AgentmailClient): EmailInbo
       await client.deleteInbox(inboxId)
     },
 
-    async sendMessage(inboxId, params) {
+    async sendMessage(inboxId, params, context) {
       const result = await client.sendMessage(inboxId, {
         to: params.to,
         cc: params.cc,
@@ -272,17 +275,17 @@ export function createAgentmailEmailProvider(client: AgentmailClient): EmailInbo
         text: params.text,
         html: params.html,
         attachments: mapAttachments(params.attachments),
-      })
+      }, context, { crmPurposeKey: params.crmPurposeKey, crmTemplateKey: params.crmTemplateKey })
       return { messageId: result.message_id, threadId: result.thread_id }
     },
-    async replyToMessage(inboxId, messageId, params) {
+    async replyToMessage(inboxId, messageId, params, context) {
       const result = await client.replyToMessage(inboxId, messageId, {
         text: params.text,
         html: params.html,
         reply_all: params.replyAll,
         to: params.to,
         attachments: mapAttachments(params.attachments),
-      })
+      }, context, { crmPurposeKey: params.crmPurposeKey, crmTemplateKey: params.crmTemplateKey })
       return { messageId: result.message_id, threadId: result.thread_id }
     },
     async getMessage(inboxId, messageId) {
@@ -346,7 +349,7 @@ export function createAgentmailEmailProvider(client: AgentmailClient): EmailInbo
       }
     },
 
-    async createDraft(inboxId, params) {
+    async createDraft(inboxId, params, context) {
       const d = await client.createDraft(inboxId, {
         to: params.to,
         cc: params.cc,
@@ -359,7 +362,7 @@ export function createAgentmailEmailProvider(client: AgentmailClient): EmailInbo
         reply_all: params.replyAll,
         send_at: params.sendAt,
         client_id: params.clientId,
-      })
+      }, context, { crmPurposeKey: params.crmPurposeKey, crmTemplateKey: params.crmTemplateKey })
       return {
         inboxId: d.inbox_id,
         draftId: d.draft_id,
@@ -371,8 +374,8 @@ export function createAgentmailEmailProvider(client: AgentmailClient): EmailInbo
         sendAt: d.send_at ?? null,
       }
     },
-    async sendDraft(inboxId, draftId) {
-      const result = await client.sendDraft(inboxId, draftId)
+    async sendDraft(inboxId, draftId, context, intent) {
+      const result = await client.sendDraft(inboxId, draftId, context, intent)
       return { messageId: result.message_id, threadId: result.thread_id }
     },
     async deleteDraft(inboxId, draftId) {

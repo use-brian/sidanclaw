@@ -134,7 +134,9 @@ export function ProvenanceSheet({
             type="button"
             onClick={onClose}
             aria-label={t.chrome.settingsModal.close}
-            className="h-7 w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground"
+            // Full-screen below `sm` with no visible backdrop, so this is the
+            // only way out: the settings-modal close recipe (B 42 / M3).
+            className="h-11 w-11 sm:h-7 sm:w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
               <path d="M18 6 6 18M6 6l12 12" />

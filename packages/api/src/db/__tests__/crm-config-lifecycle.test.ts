@@ -44,6 +44,8 @@ describe('[COMP:api/crm-config-http] reversible CRM configuration', () => {
 
   it('rewrites a complete pipeline order to dense zero-based positions', async () => {
     mocks.clientQuery.mockImplementation(async (sql: string) => {
+      if (sql === 'SHOW transaction_isolation') return { rows: [{ transaction_isolation: 'read committed' }] }
+      if (sql.includes('SELECT role FROM workspace_members')) return { rows: [{ role: 'owner' }] }
       if (sql.includes('SELECT id FROM crm_pipelines')) {
         return { rows: [{ id: 'pipeline-a' }, { id: 'pipeline-b' }, { id: 'pipeline-c' }] }
       }
@@ -66,30 +68,26 @@ describe('[COMP:api/crm-config-http] reversible CRM configuration', () => {
   })
 
   it('blocks default-pipeline archive and a stage referenced by live deals', async () => {
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 })
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [{ isDefault: true, archivedAt: null }] })
+    mocks.clientQuery.mockImplementation(async (sql: string) => ({ rows: sql === 'SHOW transaction_isolation' ? [{ transaction_isolation: 'read committed' }] : sql.includes('SELECT role FROM workspace_members') ? [{ role: 'owner' }] : sql.includes('SELECT is_default') ? [{ isDefault: true, archivedAt: null }] : [] }))
     await expect(updateCrmPipeline({
       ...base, pipelineId: 'pipeline-default', archived: true,
     })).rejects.toThrow('default pipeline')
     expect(mocks.clientQuery.mock.calls.some(([sql]) => sql === 'ROLLBACK')).toBe(true)
 
     vi.clearAllMocks()
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 })
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [{ pipelineId: 'pipeline-a', archivedAt: null }] })
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [{ count: '2' }] })
+    mocks.clientQuery.mockImplementation(async (sql: string) => ({ rows: sql === 'SHOW transaction_isolation' ? [{ transaction_isolation: 'read committed' }] : sql.includes('SELECT role FROM workspace_members') ? [{ role: 'owner' }] : sql.includes('SELECT pipeline_id')
+      ? [{ pipelineId: 'pipeline-a', archivedAt: null }] : sql.includes('COUNT(*)') ? [{ count: '2' }] : [] }))
     await expect(setCrmStageArchived({
       ...base, stageId: 'stage-used', archived: true,
     })).rejects.toThrow('Move 2 live deals')
   })
 
   it('rejects removal of a select option still used by live records', async () => {
-    mocks.queryWithRLS
-      .mockResolvedValueOnce({ rows: [{
-        id: 'field-1', entityKind: 'deal', fieldKey: 'tier', label: 'Tier',
-        fieldType: 'single_select', options: ['A', 'B'], isRequired: false,
-        position: 0, archivedAt: null,
-      }] })
-      .mockResolvedValueOnce({ rows: [{ count: '3' }] })
+    mocks.clientQuery.mockImplementation(async (sql: string) => ({ rows: sql === 'SHOW transaction_isolation' ? [{ transaction_isolation: 'read committed' }] : sql.includes('SELECT role FROM workspace_members') ? [{ role: 'owner' }] : sql.includes('SELECT id, entity_kind') ? [{
+      id: 'field-1', entityKind: 'deal', fieldKey: 'tier', label: 'Tier',
+      fieldType: 'single_select', options: ['A', 'B'], isRequired: false,
+      position: 0, archivedAt: null,
+    }] : sql.includes('COUNT(*)') ? [{ count: '3' }] : [] }))
 
     await expect(updateCrmFieldDefinition({
       ...base, fieldId: 'field-1', options: ['A'],
@@ -97,9 +95,8 @@ describe('[COMP:api/crm-config-http] reversible CRM configuration', () => {
   })
 
   it('keeps archived fields recoverable but enforces the live-field cap on restore', async () => {
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 })
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [{ entityKind: 'company' }] })
-    mocks.clientQuery.mockResolvedValueOnce({ rows: [{ count: '50' }] })
+    mocks.clientQuery.mockImplementation(async (sql: string) => ({ rows: sql === 'SHOW transaction_isolation' ? [{ transaction_isolation: 'read committed' }] : sql.includes('SELECT role FROM workspace_members') ? [{ role: 'owner' }] : sql.includes('SELECT entity_kind')
+      ? [{ entityKind: 'company' }] : sql.includes('COUNT(*)') ? [{ count: '50' }] : [] }))
 
     await expect(restoreCrmFieldDefinition(
       base.userId, base.workspaceId, 'field-archived',

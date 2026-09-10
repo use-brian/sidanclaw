@@ -99,9 +99,11 @@ function RoleMenu({
           </button>
         }
       />
+      {/* 44px rows on a phone (responsive contract M3), the compact desktop
+          row from `sm`. */}
       <DropdownMenuContent>
         {opts.map((o) => (
-          <DropdownMenuItem key={o} onClick={() => onChange(o)}>
+          <DropdownMenuItem key={o} className="min-h-11 sm:min-h-0" onClick={() => onChange(o)}>
             <span className="flex-1">{roleLabel(o, t)}</span>
             {role === o ? <Check className="size-3.5" aria-hidden /> : null}
           </DropdownMenuItem>
@@ -109,7 +111,7 @@ function RoleMenu({
         {onRemove ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={onRemove}>
+            <DropdownMenuItem variant="destructive" className="min-h-11 sm:min-h-0" onClick={onRemove}>
               {t.remove}
             </DropdownMenuItem>
           </>
@@ -618,7 +620,8 @@ export function ShareDialog({
           <button
             type="button"
             aria-label={t.shareButton}
-            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted"
+            // 44px on a phone (icon-only there), the compact chip from `md` (M3).
+            className="inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground aria-expanded:bg-muted md:min-h-0 md:min-w-0"
           >
             <Link2 className="size-4" aria-hidden />
             <span className="hidden sm:inline">{t.shareButton}</span>
@@ -662,7 +665,7 @@ export function ShareDialog({
                   }
                 }}
                 placeholder={t.invitePlaceholder}
-                className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-sm outline-none"
+                className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-[16px] outline-none md:text-sm"
               />
               <button
                 type="button"

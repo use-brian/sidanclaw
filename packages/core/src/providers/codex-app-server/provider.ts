@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { renderSystemContext } from '../system-context.js'
 import { z } from 'zod'
 import type {
   ContentBlock,
@@ -123,6 +124,7 @@ export function createCodexAppServerProvider(
       const session = createSession({
         model: request.model,
         systemPrompt: request.systemPrompt,
+        runtimeSystemContext: request.runtimeSystemContext,
         tools: request.tools,
         maxTokens: request.maxTokens,
         temperature: request.temperature,
@@ -311,7 +313,8 @@ class CodexProviderSession implements ProviderSession {
     this.#transport = transport
     this.#options = {
       ...options,
-      systemPrompt: truncateUtf8(options.systemPrompt, MAX_SYSTEM_PROMPT_BYTES),
+      systemPrompt: truncateUtf8(renderSystemContext(options), MAX_SYSTEM_PROMPT_BYTES),
+      runtimeSystemContext: undefined,
     }
     this.#allowedTools = validateTools(options.tools ?? [])
     this.#toolBatchQuietMs = toolBatchQuietMs

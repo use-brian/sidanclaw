@@ -12,6 +12,7 @@ import express, { Router, type NextFunction, type Request, type Response } from 
 import { z } from 'zod'
 import {
   CrmOperationsError,
+  CrmIntakeIdentityProofSchema,
   boundedCrmObject,
   createRateLimiter,
   type CrmOperationsServicePort,
@@ -23,6 +24,7 @@ import {
 
 const BodySchema = z.object({
   fields: boundedCrmObject(1_048_576),
+  identityProof: CrmIntakeIdentityProofSchema.optional(),
   externalIdentity: z.object({
     provider: z.string().trim().min(1).max(63),
     subject: z.string().trim().min(1).max(500),
@@ -39,9 +41,9 @@ export type CrmIntakeRouteOptions = {
 }
 
 function sourceIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for']
-  const head = Array.isArray(forwarded) ? forwarded[0] : forwarded
-  return req.ip ?? head?.split(',')[0]?.trim() ?? 'unknown'
+  // Express applies the deployment's trusted proxy boundary. Never interpret
+  // forwarded headers ourselves when no trusted address was resolved.
+  return req.ip ?? req.socket.remoteAddress ?? 'unknown'
 }
 
 function tokenFrom(req: Request): string | null {
@@ -64,7 +66,17 @@ export function crmIntakeRoutes(options: CrmIntakeRouteOptions): Router {
   const preflightRateLimit = (req: Request, res: Response, next: NextFunction) => {
     const parsed = parseCrmIntakeToken(tokenFrom(req) ?? '')
     const candidate = parsed?.credentialId ?? 'invalid'
-    limiter.middleware(req, res, next, () => `crm-intake:${candidate}:${sourceIp(req)}`)
+    if (!limiter.check(`crm-intake:${candidate}:${sourceIp(req)}`)) {
+      res.setHeader('Retry-After', '60')
+      res.status(429).json({
+        error: 'rate_limited',
+        message: 'Intake request limit reached. Retry the same submission after the indicated delay.',
+        retryable: true,
+        retryAfterSeconds: 60,
+      })
+      return
+    }
+    next()
   }
 
   router.post(
@@ -113,6 +125,10 @@ export function crmIntakeRoutes(options: CrmIntakeRouteOptions): Router {
           idempotencyKey,
           ...body.data,
         })
+        if (output.record.outcome === 'submission_retired') {
+          res.status(200).json({ duplicate: true, outcome: 'submission_retired' })
+          return
+        }
         res.status(output.duplicate ? 200 : 201).json({
           submissionId: output.record.submissionId,
           contactId: output.record.contactId,

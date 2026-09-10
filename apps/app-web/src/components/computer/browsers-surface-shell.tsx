@@ -86,7 +86,6 @@ export function BrowsersSurfaceShell({
     <div className="flex h-full min-h-0 flex-col">
       <OperatorTopbar
         app="browsers"
-        appChipClassName="hidden sm:flex sm:w-[200px]"
         center={<BrowsersViewToggle workspaceId={workspaceId} />}
         right={<ConnectBrowserButton workspaceId={workspaceId} />}
       />

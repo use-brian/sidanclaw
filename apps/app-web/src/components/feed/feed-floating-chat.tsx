@@ -450,7 +450,7 @@ export function FeedFloatingChat() {
               <SelectTrigger
                 size="sm"
                 tabIndex={expanded ? 0 : -1}
-                className="text-xs gap-1.5 bg-card/95 shadow-lg backdrop-blur"
+                className="text-[16px] md:text-xs gap-1.5 bg-card/95 shadow-lg backdrop-blur"
               >
                 <SelectValue />
               </SelectTrigger>

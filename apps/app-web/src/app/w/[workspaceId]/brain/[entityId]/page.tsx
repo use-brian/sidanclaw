@@ -27,10 +27,17 @@
 import { Fragment, use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { BackButton } from "@/components/ui/back-button";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { getEntity, type EntityRollup, type BrainRow } from "@/lib/api/brain";
+import { useCachedResource } from "@/lib/surface-cache";
+import { brainEntityCacheKey } from "@/lib/surface-prefetch";
+import {
+  isRecordValue,
+  readBrainContentCache,
+} from "@/lib/offline/brain-content-cache";
 import { EntityRow } from "@/components/brain/entity-row";
 import {
   ProvenanceProvider,
@@ -60,26 +67,65 @@ function BrainEntityInner({
         : null,
     [activeId, me.id],
   );
-  const [entity, setEntity] = useState<EntityRollup | null | undefined>(undefined);
   const { open } = useProvenance();
   const backHref = `/w/${workspaceId}/brain`;
 
+  // Memory tier over the rollup (instant-navigation contract N1): a revisit
+  // paints the last-known entity on the first frame and revalidates behind
+  // it; the spine map marks `brain-entity:<wid>:` stale on every brain
+  // change. `getEntity` answers `null` on a non-OK response (and evicts the
+  // IDB copy on 401 / 403 / 404), so a cold `error` is a network failure
+  // with no cache scope: not-found, never a skeleton forever.
+  const cached = useCachedResource<EntityRollup | null>(
+    activeId ? brainEntityCacheKey(activeId, entityId) : null,
+    () => getEntity(entityId, activeId ?? "", null, cacheScope),
+  );
+  // The Brain's IndexedDB tier already holds rows the detail drawer opened
+  // (`entity:<id>` under viewer + workspace + viewpoint). While the memory
+  // slot is cold, that copy is the seed - one scheme, not a second one.
+  const [seed, setSeed] = useState<{ forId: string; value: EntityRollup } | null>(null);
   useEffect(() => {
-    if (!activeId) return;
+    if (!cacheScope || cached.data !== undefined) return;
     let cancelled = false;
-    getEntity(entityId, activeId, null, cacheScope).then((result) => {
-      if (cancelled) return;
-      setEntity(result);
+    void readBrainContentCache(cacheScope, `entity:${entityId}`, isRecordValue).then((hit) => {
+      if (!cancelled && hit) {
+        setSeed({ forId: entityId, value: hit.value as unknown as EntityRollup });
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [entityId, activeId, cacheScope]);
+  }, [cacheScope, entityId, cached.data]);
+  const entity: EntityRollup | null | undefined =
+    cached.data !== undefined
+      ? cached.data
+      : cached.error !== undefined
+        ? null
+        : seed?.forId === entityId
+          ? seed.value
+          : undefined;
 
   if (entity === undefined) {
+    // Nothing cached anywhere: a geometry-matched header + section skeleton
+    // (N4), never a "…" placeholder.
     return (
-      <div className="max-w-3xl mx-auto w-full px-6 py-10 text-sm text-muted-foreground">
-        …
+      <div className="max-w-3xl mx-auto w-full px-6 py-6 flex flex-col gap-6" aria-busy>
+        <Skeleton className="h-4 w-20" />
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-7 w-1/2" />
+        </div>
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="rounded-md border border-border bg-card">
+            <div className="border-b border-border px-4 py-2">
+              <Skeleton className="h-3 w-24" />
+            </div>
+            <div className="flex flex-col gap-3 px-4 py-3">
+              <Skeleton className="h-3.5" style={{ width: `${52 + ((i * 17) % 35)}%` }} />
+              <Skeleton className="h-3.5 w-1/3" />
+            </div>
+          </div>
+        ))}
       </div>
     );
   }

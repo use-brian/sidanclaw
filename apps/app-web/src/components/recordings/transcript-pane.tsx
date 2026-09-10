@@ -176,7 +176,7 @@ export function TranscriptPane({
                 type="button"
                 title={t.recordings.speakerRenameHint}
                 onClick={() => onRenameSpeaker?.(speaker)}
-                className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+                className="inline-flex h-9 items-center rounded-full border border-border px-2 text-xs text-muted-foreground hover:bg-muted md:h-6"
               >
                 {bound ? `${speaker} = ${bound}` : speaker}
               </button>
@@ -190,7 +190,7 @@ export function TranscriptPane({
           <button
             type="button"
             onClick={() => setFollow(true)}
-            className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted"
+            className="inline-flex h-9 shrink-0 items-center rounded border border-border px-2 text-xs text-muted-foreground hover:bg-muted md:h-6"
           >
             {t.recordings.transcriptFollow}
           </button>
@@ -222,7 +222,7 @@ export function TranscriptPane({
                   seekTo(s.start_ms);
                   setFollow(true);
                 }}
-                className={`flex w-full gap-3 rounded px-2 py-1 text-left text-sm hover:bg-muted/60 ${
+                className={`flex w-full gap-3 rounded px-2 py-2 text-left text-sm hover:bg-muted/60 md:py-1 ${
                   cited
                     ? "bg-primary/10 ring-1 ring-primary/40"
                     : active
@@ -262,7 +262,7 @@ export function TranscriptPane({
           type="button"
           onClick={() => void load(nextFrom)}
           disabled={loading}
-          className="mt-3 rounded border border-border px-3 py-1 text-sm disabled:opacity-50"
+          className="mt-3 rounded border border-border px-3 py-2 text-sm disabled:opacity-50 md:py-1"
         >
           {t.recordings.detailLoadMore}
         </button>

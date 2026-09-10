@@ -13,6 +13,7 @@ import {
   estimateRecording,
   processRecording,
   RecordingApiError,
+  recordingMimeForFile,
 } from "../recordings";
 
 const mockAuthFetch = vi.mocked(authFetch);
@@ -29,6 +30,12 @@ afterEach(() => {
 });
 
 describe("[COMP:web/recording-upload] recordings SDK", () => {
+  it("infers recording MIME from common extensions when a file drag omits the type", () => {
+    expect(recordingMimeForFile({ name: "voice-note.m4a", type: "" })).toBe("audio/mp4");
+    expect(recordingMimeForFile({ name: "screen-share.MOV", type: "" })).toBe("video/quicktime");
+    expect(recordingMimeForFile({ name: "brief.pdf", type: "" })).toBeNull();
+  });
+
   it("startRecordingUpload mints a URL then PUTs the bytes direct to storage", async () => {
     mockAuthFetch.mockResolvedValueOnce(json({ recordingId: "rec-1", uploadUrl: "https://gcs.example/put" }));
     const putFetch = vi.fn(async () => new Response(null, { status: 200 }));

@@ -10,9 +10,8 @@
  * `offlineWrite` runs the SDK call directly — identical to calling it inline.
  * Offline, it queues.
  *
- * Scope (v1): last-write-wins metadata writes on an EXISTING page (safe to
- * coalesce + replay idempotently). Creates / reparent / entity writes (temp-id
- * assignment + ordering) are a tracked follow-up — see the plan.
+ * Metadata includes locally-created pages. Their durable creation outbox
+ * registers pages before this queue replays. Failed writes remain pending.
  *
  * [COMP:app-web/offline-writes]
  */
@@ -23,10 +22,9 @@ import {
   setViewFullWidth,
   setViewClearance,
 } from "@/lib/api/views";
-import { idbGet, idbSet } from "./idb";
+import { idbGet, idbUpdate } from "./idb";
 import {
   enqueueWrite,
-  replayQueue,
   serializeQueue,
   parseQueue,
   type QueuedWrite,
@@ -80,8 +78,10 @@ async function ensureLoaded(): Promise<void> {
   emitCount();
 }
 
-async function persist(): Promise<void> {
-  await idbSet(QUEUE_KEY, serializeQueue(queue));
+async function updateQueue(update: (current: QueuedWrite[]) => QueuedWrite[]): Promise<void> {
+  const raw = await idbUpdate<string>(QUEUE_KEY, (value) => serializeQueue(update(value ? parseQueue(value) : [])));
+  queue = parseQueue(raw);
+  loaded = true;
   emitCount();
 }
 
@@ -114,21 +114,31 @@ export interface OfflineWriteSpec<R> {
  * enqueue it for replay and apply the optimistic update without throwing.
  */
 export async function offlineWrite<R>(spec: OfflineWriteSpec<R>): Promise<void> {
-  if (online) {
+  const payload = spec.payload as { id?: string; name?: string; icon?: string | null; fullWidth?: boolean; clearance?: "public" | "internal" | "confidential" };
+  const { readLocalPage, patchLocalPage } = await import("./offline-pages");
+  const local = payload?.id ? await readLocalPage(payload.id) : null;
+  await ensureLoaded();
+  const pendingForPage = payload?.id && queue.some((op) => (op.payload as { id?: string })?.id === payload.id);
+  if (online && !local && !pendingForPage) {
     const result = await spec.exec();
     spec.onResult?.(result);
     return;
   }
-  await ensureLoaded();
-  queue = enqueueWrite(queue, {
+  await updateQueue((current) => enqueueWrite(current, {
     id: randomId(),
     kind: spec.kind,
     payload: spec.payload,
     coalesceKey: spec.coalesceKey,
     enqueuedAt: Date.now(),
     attempts: 0,
-  });
-  await persist();
+  }));
+  if (payload?.id) {
+    const patch = spec.kind === "view.rename" ? { name: payload.name, nameOrigin: "user" as const }
+      : spec.kind === "view.icon" ? { icon: payload.icon }
+      : spec.kind === "view.fullWidth" ? { fullWidth: payload.fullWidth }
+      : spec.kind === "view.clearance" ? { clearance: payload.clearance } : {};
+    await patchLocalPage(payload.id, patch);
+  }
   spec.optimistic?.();
 }
 
@@ -147,14 +157,31 @@ const EXECUTORS: Record<string, (payload: unknown) => Promise<unknown>> = {
   "view.clearance": (p) => setViewClearance((p as ClearancePayload).id, (p as ClearancePayload).clearance),
 };
 
-/** Replay queued writes in order (call on the offline→online rising edge). */
-export async function flushWriteQueue(): Promise<void> {
+let flushing: Promise<void> | null = null;
+/** Replay one snapshot; concurrently appended/coalesced writes are preserved. */
+export function flushWriteQueue(): Promise<void> {
+  if (flushing) return flushing;
+  flushing = flush().finally(() => { flushing = null; });
+  return flushing;
+}
+async function flush(): Promise<void> {
   await ensureLoaded();
-  if (queue.length === 0) return;
-  const result = await replayQueue(queue, async (op) => {
-    const fn = EXECUTORS[op.kind];
-    if (fn) await fn(op.payload);
-  });
-  queue = result.remaining;
-  await persist();
+  // Re-read on every attempt, including after another tab writes to IndexedDB.
+  queue = parseQueue((await idbGet<string>(QUEUE_KEY)) ?? "[]");
+  emitCount();
+  for (const op of queue.slice()) {
+    try {
+      const { readLocalPage } = await import("./offline-pages");
+      const id = (op.payload as { id?: string })?.id;
+      if (id && await readLocalPage(id)) return;
+      const fn = EXECUTORS[op.kind];
+      if (!fn) throw new Error(`Unknown queued write: ${op.kind}`);
+      await fn(op.payload);
+      await updateQueue((current) => current.filter((q) =>
+        q.id !== op.id || JSON.stringify(q) !== JSON.stringify(op)));
+    } catch {
+      // Authored changes must never disappear after repeated network failures.
+      return;
+    }
+  }
 }

@@ -7,7 +7,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { dragReducer, carriesFiles, type DragState } from "../use-file-drop";
+import {
+  dragReducer,
+  carriesFiles,
+  isFileDropOwnedByDescendant,
+  type DragState,
+} from "../use-file-drop";
 
 const IDLE: DragState = { depth: 0, active: false };
 
@@ -46,5 +51,27 @@ describe("[COMP:app-web/file-drop] carriesFiles", () => {
     expect(carriesFiles(["text/plain"])).toBe(false);
     expect(carriesFiles([])).toBe(false);
     expect(carriesFiles(undefined)).toBe(false);
+  });
+});
+
+describe("[COMP:app-web/workspace-file-drop] descendant ownership", () => {
+  it("lets a marked descendant override the workspace fallback", () => {
+    const workspace = {} as EventTarget;
+    const localOwner = {};
+    const target = {
+      closest: (selector: string) =>
+        selector === "[data-file-drop-owner]" ? localOwner : null,
+    } as unknown as EventTarget;
+
+    expect(isFileDropOwnedByDescendant(target, workspace)).toBe(true);
+  });
+
+  it("does not treat the fallback element itself as a descendant owner", () => {
+    const workspace = {
+      closest: () => workspace,
+    } as unknown as EventTarget;
+
+    expect(isFileDropOwnedByDescendant(workspace, workspace)).toBe(false);
+    expect(isFileDropOwnedByDescendant(null, workspace)).toBe(false);
   });
 });

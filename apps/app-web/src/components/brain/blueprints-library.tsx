@@ -286,8 +286,9 @@ function BlueprintRow({
           title={copy.generateTitle}
           onClick={onGenerate}
           className={cn(
-            "rounded p-1 text-muted-foreground opacity-0 transition-opacity",
-            "hover:bg-muted hover:text-foreground group-hover:opacity-100",
+            // Visible at rest below `md` (C 72 / M2): row actions had no touch path.
+            "inline-flex size-9 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity sm:size-6",
+            "hover:bg-muted hover:text-foreground md:opacity-0 md:group-hover:opacity-100",
             "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           )}
         >
@@ -304,8 +305,8 @@ function BlueprintRow({
           title={copy.deleteTitle}
           onClick={() => void handleDelete()}
           className={cn(
-            "rounded p-1 text-muted-foreground opacity-0 transition-opacity",
-            "hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100",
+            "inline-flex size-9 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity sm:size-6",
+            "hover:bg-destructive/10 hover:text-destructive md:opacity-0 md:group-hover:opacity-100",
             "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           )}
         >
@@ -366,8 +367,10 @@ function BlueprintRow({
                   disabled={openingId === record.id}
                   onClick={() => void handleOpenPage(record)}
                   className={cn(
-                    "shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity",
-                    "hover:bg-muted hover:text-foreground group-hover/record:opacity-100",
+                    // Visible at rest on touch (C 17): the only way a record
+                    // opens a page, and a phone had no way to know it existed.
+                    "inline-flex size-9 shrink-0 items-center justify-center rounded text-muted-foreground opacity-100 transition-opacity sm:size-6",
+                    "hover:bg-muted hover:text-foreground md:opacity-0 md:group-hover/record:opacity-100",
                     "focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                     openingId === record.id && "opacity-60",
                   )}

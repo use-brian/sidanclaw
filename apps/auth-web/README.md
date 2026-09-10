@@ -14,8 +14,8 @@ AUTHED_APP_URL=http://localhost:3003 \
 pnpm --filter @use-brian/auth-web dev
 ```
 
-Production additionally requires an isolated cookie suffix shared only by the
-portal and app origins:
+Production additionally requires a shared cookie suffix containing the portal
+and app origins. Prefer a dedicated namespace:
 
 ```bash
 INTERNAL_API_URL=http://127.0.0.1:4000
@@ -24,6 +24,11 @@ AUTHED_APP_URL=https://app.brian.customer.example
 COOKIE_DOMAIN=.brian.customer.example
 TRUST_PROXY_HEADERS=true
 ```
+
+Single-level hosts such as `auth.example.com` and `app.example.com` also work
+with `COOKIE_DOMAIN=.example.com`. Use this only when all subdomains are trusted:
+the cookie is shared across the entire domain. Public suffixes (including private
+hosting suffixes such as `.github.io`) are rejected. Public origins must use HTTPS.
 
 The API runs with `USEBRIAN_EDITION=outpost`. Configure
 `OUTPOST_AUTH_BOOTSTRAP_EMAILS` for the initial administrator. Existing users

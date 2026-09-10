@@ -24,30 +24,45 @@
  * [COMP:app-web/studio-assistants]
  */
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, useParams } from "next/navigation";
 import { useT } from "@/lib/i18n/client";
 import { useWorkspaces } from "@/contexts/workspace-context";
-import {
-  listAssistants,
-  createAssistant,
-  type StudioAssistantSummary,
-} from "@/lib/api/studio";
+import { createAssistant, type StudioAssistantSummary } from "@/lib/api/studio";
 import {
   ASSISTANT_PROFILES,
   assistantProfileById,
   type AssistantProfile,
 } from "@use-brian/shared/assistant-profiles";
 import { AssistantAvatar } from "@/components/assistant-avatar";
-import { AssistantDetail } from "@/components/studio/assistant-detail";
+import { AssistantDetail, type AssistantSeed } from "@/components/studio/assistant-detail";
 import { SensitivityBadge, type Sensitivity } from "@/components/sensitivity-badge";
-import { onAssistantsChanged } from "@/lib/sidebar-cache";
+import { BackButton } from "@/components/ui/back-button";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
+import { isPhoneViewport } from "@/lib/viewport";
 import { cn } from "@/lib/utils";
+import { useAssistantsData } from "./use-assistants-data";
+
+/**
+ * The rail row as the detail's first-frame header. The list endpoint types
+ * `clearance` / `iconSeed` loosely (`string | null`); the header wants the
+ * narrowed shape, so normalise here rather than widening the header type.
+ */
+function seedFor(row: StudioAssistantSummary | undefined): AssistantSeed | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    workspaceId: row.workspaceId,
+    iconSeed: row.iconSeed ?? undefined,
+    clearance: (row.clearance ?? undefined) as Sensitivity | undefined,
+  };
+}
 
 export default function StudioAssistantsPage() {
   return (
-    <Suspense fallback={<div className="text-sm text-muted-foreground">…</div>}>
+    <Suspense fallback={<RailSurfaceSkeleton chrome={false} padded={false} />}>
       <StudioAssistants />
     </Suspense>
   );
@@ -60,59 +75,40 @@ function StudioAssistants() {
   const params = useParams<{ workspaceId: string }>();
   const routeWs = params?.workspaceId ?? "";
   const { activeId } = useWorkspaces();
-  const [assistants, setAssistants] = useState<StudioAssistantSummary[] | null>(null);
+  // The rail reads the workspace's cached assistant list (instant-navigation
+  // N1): a revisit paints on the first frame, the spine marks it stale, and
+  // the sidebar-cache merge (rename / icon / clearance edits from the detail)
+  // writes through the same key inside the hook.
+  const { assistants, error: loadError, update } = useAssistantsData(activeId);
   const [showCreate, setShowCreate] = useState(false);
+  // Phone single-pane (responsive contract M1 / M5): below `md` the rail and
+  // the detail are two screens. A deep link (`?assistant=`) lands on the
+  // detail; otherwise the rail shows first and a tapped row opens the
+  // detail, with Back returning to the rail. Inert on `md+`.
+  const [detailOpen, setDetailOpen] = useState(() => !!searchParams.get("assistant"));
+  const detailRef = useRef<HTMLDivElement>(null);
 
   const assistantHref = (id: string) =>
     `/w/${routeWs}/studio/assistants?assistant=${encodeURIComponent(id)}`;
 
-  useEffect(() => {
-    if (!activeId) return;
-    let cancelled = false;
-    void (async () => {
-      const list = await listAssistants(activeId);
-      if (!cancelled) setAssistants(list);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeId]);
-
-  // Subscribe to sidebar-cache so edits in <AssistantDetail> (rename, icon
-  // regenerate, clearance change) flip the rail row immediately. The cache
-  // is global; we only merge changes for ids already in our list.
-  useEffect(() => {
-    return onAssistantsChanged((cached) => {
-      setAssistants((prev) => {
-        if (!prev) return prev;
-        let changed = false;
-        const next = prev.map((a) => {
-          const c = cached.find((x) => x.id === a.id);
-          if (!c) return a;
-          const nextName = c.name ?? a.name;
-          const nextIconSeed = typeof c.iconSeed === "number" ? c.iconSeed : a.iconSeed;
-          const nextClearance = c.clearance ?? a.clearance;
-          if (
-            nextName === a.name &&
-            nextIconSeed === a.iconSeed &&
-            nextClearance === a.clearance
-          ) return a;
-          changed = true;
-          return { ...a, name: nextName, iconSeed: nextIconSeed, clearance: nextClearance };
-        });
-        return changed ? next : prev;
-      });
+  function revealDetail() {
+    setDetailOpen(true);
+    // On `md+` the detail renders beside a rail that can outgrow the
+    // viewport, so bring the pane into view as well.
+    requestAnimationFrame(() => {
+      detailRef.current?.scrollIntoView({ block: "start" });
     });
-  }, []);
+  }
 
   function handleCreated(created: StudioAssistantSummary) {
     setShowCreate(false);
     // Optimistic insert so the new row renders before the detail's own fetch
     // round-trips; the rail only needs id/name/icon.
-    setAssistants((prev) =>
-      prev && !prev.some((a) => a.id === created.id) ? [...prev, created] : prev,
+    update((prev) =>
+      prev.some((a) => a.id === created.id) ? prev : [...prev, created],
     );
     router.push(assistantHref(created.id));
+    revealDetail();
   }
 
   // The rail is scoped to `activeId`. When the detail's Settings tab moves an
@@ -123,13 +119,21 @@ function StudioAssistants() {
     workspaceId: string | null,
   ) {
     if (workspaceId === activeId) return;
-    setAssistants((prev) =>
-      prev ? prev.filter((a) => a.id !== assistantId) : prev,
-    );
+    update((prev) => prev.filter((a) => a.id !== assistantId));
   }
 
   if (!activeId || assistants === null) {
-    return <div className="text-sm text-muted-foreground">…</div>;
+    // Cold: nothing cached for this workspace yet. A failed first load says
+    // so; otherwise the rail skeleton holds the geometry (N4), never a
+    // "Loading..." sentence.
+    if (loadError) {
+      return (
+        <div className="text-sm text-muted-foreground border border-border rounded-md p-4">
+          {t.studioPage.assistants.loadError}
+        </div>
+      );
+    }
+    return <RailSurfaceSkeleton chrome={false} padded={false} />;
   }
 
   // Selection: requested id if it resolves, else the first assistant.
@@ -157,7 +161,12 @@ function StudioAssistants() {
         </div>
       ) : (
         <div className="flex flex-col md:flex-row gap-6">
-          <aside className="w-full md:w-56 shrink-0 self-start">
+          <aside
+            className={cn(
+              "w-full md:w-56 shrink-0 self-start",
+              detailOpen && "max-md:hidden",
+            )}
+          >
             <h2 className="px-1 mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
               {t.studioPage.sections.assistants}
             </h2>
@@ -166,9 +175,10 @@ function StudioAssistants() {
                 <li key={a.id}>
                   <Link
                     href={assistantHref(a.id)}
+                    onClick={() => setDetailOpen(true)}
                     aria-current={a.id === selectedId ? "page" : undefined}
                     className={cn(
-                      "flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors",
+                      "flex items-center gap-2 px-2 py-2.5 md:py-1.5 rounded text-sm transition-colors",
                       a.id === selectedId
                         ? "bg-muted font-medium"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -203,13 +213,27 @@ function StudioAssistants() {
             </ul>
           </aside>
 
-          <div className="flex-1 min-w-0">
+          <div
+            ref={detailRef}
+            className={cn("flex-1 min-w-0", !detailOpen && "max-md:hidden")}
+          >
             {selectedId && (
-              <AssistantDetail
-                key={selectedId}
-                id={selectedId}
-                onWorkspaceChanged={handleAssistantWorkspaceChanged}
-              />
+              <>
+                <div className="mb-3 md:hidden">
+                  <BackButton
+                    label={t.studioPage.assistants.backToList}
+                    onClick={() => setDetailOpen(false)}
+                    className="min-h-11"
+                  />
+                </div>
+                <AssistantDetail
+                  key={selectedId}
+                  id={selectedId}
+                  workspaceId={activeId}
+                  seed={seedFor(assistants.find((a) => a.id === selectedId))}
+                  onWorkspaceChanged={handleAssistantWorkspaceChanged}
+                />
+              </>
             )}
           </div>
         </div>
@@ -343,7 +367,7 @@ function CreateAssistantModal({
           <input
             type="text"
             value={name}
-            autoFocus
+            autoFocus={!isPhoneViewport()}
             maxLength={100}
             onChange={(e) => {
               setName(e.target.value);
@@ -353,7 +377,7 @@ function CreateAssistantModal({
               if (e.key === "Enter") void submit();
             }}
             placeholder={t.studioPage.assistants.createPlaceholder}
-            className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
           <div>
             <input
@@ -365,7 +389,7 @@ function CreateAssistantModal({
                 if (e.key === "Enter") void submit();
               }}
               placeholder={t.studioPage.assistants.createMissionPlaceholder}
-              className="w-full text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
+              className="w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
             <p className="text-[11px] text-muted-foreground mt-1.5">
               {t.studioPage.assistants.createMissionHint}

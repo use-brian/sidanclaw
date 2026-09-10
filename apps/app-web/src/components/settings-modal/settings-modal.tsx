@@ -9,10 +9,8 @@
  * skills, assistants, channels, sensitivity, ingest rules) lives in the
  * core web app's Studio, NOT here.
  *
- * Below the `sm` breakpoint the modal goes full-screen master-detail: the
- * section rail is the first (and only) pane; picking a section swaps to the
- * section body with a Back control. Two-rail from `sm:` up. The 224px rail
- * plus a squeezed body simply doesn't fit a phone.
+ * Below `sm`, a compact section picker sits above the requested section.
+ * Deep links open their body immediately; desktop keeps the two-rail layout.
  *
  * Unlike apps/web — which reuses the `(app)/settings/*` route page
  * components directly — app-web has no settings routes, so the
@@ -23,7 +21,13 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { format, useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import { deploymentCapabilities, isOssEdition, HOSTED_UPGRADE_URL } from "@/lib/edition";
@@ -139,10 +143,30 @@ export function SettingsModal({ open, initialSection = "profile", onClose }: Pro
   const oss = isOssEdition();
   const workspaceSections = workspaceSettingsSections(deploymentCapabilities());
   const [section, setSection] = useState<SettingsSection>(initialSection);
-  // Which pane shows below the `sm` breakpoint (no effect from `sm:` up,
-  // where both panes render side by side): the modal opens on the section
-  // rail; picking a section swaps to its body with a Back control.
-  const [mobilePane, setMobilePane] = useState<"nav" | "body">("nav");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const activeSection = section === "ws-usage" ? "ws-plan"
+    : section === "ws-llm-key" ? "ws-models" : section;
+  const labels: Record<SettingsSection, string> = {
+    "ws-general": t.chrome.settingsModal.workspace.general,
+    "ws-members": oss
+      ? t.chrome.settingsModal.upgrade.teammatesNav
+      : t.chrome.settingsModal.workspace.members,
+    "ws-teams": t.contextScope.teamsTitle,
+    "ws-projects": t.contextScope.projectsTitle,
+    "ws-llm-key": t.chrome.settingsModal.workspace.llmKey,
+    "ws-domains": t.chrome.settingsModal.workspace.domains,
+    "ws-plan": t.chrome.settingsModal.workspace.plan,
+    "ws-usage": t.chrome.settingsModal.workspace.usage,
+    "ws-models": t.chrome.settingsModal.workspace.models,
+    profile: t.chrome.settingsModal.account.profile,
+    preferences: t.chrome.settingsModal.account.preferences,
+    privacy: t.chrome.settingsModal.account.privacy,
+    notifications: t.chrome.settingsModal.account.notifications,
+  };
+  const groups = [
+    { label: t.chrome.settingsModal.workspace.section, sections: workspaceSections },
+    { label: t.chrome.settingsModal.account.section, sections: ACCOUNT_SECTIONS },
+  ];
   // Track previous open/initialSection so we can reset `section` when the
   // modal transitions from closed→open or initialSection changes while
   // open. "Adjusting state during render" per React docs — avoids the
@@ -154,19 +178,19 @@ export function SettingsModal({ open, initialSection = "profile", onClose }: Pro
     setPrevInitial(initialSection);
     if (open) {
       setSection(initialSection);
-      setMobilePane("nav");
+      setPickerOpen(false);
     }
   }
 
   const selectSection = (s: SettingsSection) => {
     setSection(s);
-    setMobilePane("body");
+    setPickerOpen(false);
   };
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !e.defaultPrevented && !pickerOpen) onClose();
     };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -175,7 +199,7 @@ export function SettingsModal({ open, initialSection = "profile", onClose }: Pro
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open, onClose, pickerOpen]);
 
   // SSR-safe portal mount guard — document.body only exists client-side.
   const [mounted, setMounted] = useState(false);
@@ -199,73 +223,64 @@ export function SettingsModal({ open, initialSection = "profile", onClose }: Pro
           aria-label={t.chrome.settingsModal.title}
           className={cn(
             "relative w-full max-w-4xl bg-popover border border-border rounded-none sm:rounded-xl shadow-2xl",
-            "flex overflow-hidden",
+            "flex flex-col sm:flex-row overflow-hidden",
             "h-[100dvh] sm:h-[85vh]",
           )}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Left rail — the only pane on phones until a section is picked */}
+          {/* Desktop rail and mobile picker share the same destinations. */}
           <nav
-            aria-label="Settings sections"
-            className={cn(
-              "w-full sm:w-56 shrink-0 sm:border-r border-border p-3 flex flex-col overflow-hidden",
-              mobilePane === "body" && "hidden sm:flex",
-            )}
+            aria-label={t.chrome.settingsModal.title}
+            className="hidden sm:flex w-56 shrink-0 border-r border-border p-3 flex-col overflow-hidden"
           >
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <SectionGroup
-                label={t.chrome.settingsModal.workspace.section}
-                sections={workspaceSections}
-                active={section}
-                onSelect={selectSection}
-                labels={{
-                  "ws-general": t.chrome.settingsModal.workspace.general,
-                  "ws-members": oss
-                    ? t.chrome.settingsModal.upgrade.teammatesNav
-                    : t.chrome.settingsModal.workspace.members,
-                  "ws-teams": t.contextScope.teamsTitle,
-                  "ws-projects": t.contextScope.projectsTitle,
-                  "ws-llm-key": t.chrome.settingsModal.workspace.llmKey,
-                  "ws-domains": t.chrome.settingsModal.workspace.domains,
-                  "ws-plan": t.chrome.settingsModal.workspace.plan,
-                  "ws-usage": t.chrome.settingsModal.workspace.usage,
-                  "ws-models": t.chrome.settingsModal.workspace.models,
-                }}
-              />
-              <div className="mt-4">
+            <div className="min-h-0 flex-1 overflow-y-auto space-y-4">
+              {groups.map((group) => (
                 <SectionGroup
-                  label={t.chrome.settingsModal.account.section}
-                  sections={ACCOUNT_SECTIONS}
-                  active={section}
+                  key={group.label}
+                  {...group}
+                  active={activeSection}
                   onSelect={selectSection}
-                  labels={{
-                    profile: t.chrome.settingsModal.account.profile,
-                    preferences: t.chrome.settingsModal.account.preferences,
-                    privacy: t.chrome.settingsModal.account.privacy,
-                    notifications: t.chrome.settingsModal.account.notifications,
-                  }}
+                  labels={labels}
                 />
-              </div>
+              ))}
             </div>
             {oss && <OssVersionFooter />}
           </nav>
 
-          {/* Right pane — swaps in for the rail on phones */}
-          <div
-            className={cn(
-              "flex-1 overflow-y-auto p-6",
-              mobilePane === "nav" && "hidden sm:block",
-            )}
-          >
-            <button
-              type="button"
-              onClick={() => setMobilePane("nav")}
-              className="sm:hidden -ml-2 mb-4 inline-flex items-center gap-1.5 rounded px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-muted"
+          <div className="sm:hidden shrink-0 border-b border-border p-3 pr-16">
+            <Select
+              value={activeSection}
+              onValueChange={(value) => { if (value) selectSection(value); }}
+              open={pickerOpen}
+              onOpenChange={setPickerOpen}
             >
-              <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-              {t.chrome.settingsModal.back}
-            </button>
+              <SelectTrigger aria-label={t.chrome.settingsModal.title} className="w-full min-h-11">
+                <SelectValue>{labels[activeSection]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                alignItemWithTrigger={false}
+                className="max-h-[min(60dvh,var(--available-height))]"
+              >
+                {groups.map((group) => (
+                  <div key={group.label} role="group" aria-label={group.label}>
+                    <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-muted-foreground">
+                      {group.label}
+                    </div>
+                    {group.sections.map((s) => (
+                      <SelectItem key={s} value={s} className="min-h-11">
+                        {labels[s]}
+                      </SelectItem>
+                    ))}
+                  </div>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div key={activeSection} className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
             <SectionBody section={section} onClose={onClose} />
+            {oss && <div className="sm:hidden"><OssVersionFooter /></div>}
           </div>
 
           {/* Close button */}
@@ -273,7 +288,7 @@ export function SettingsModal({ open, initialSection = "profile", onClose }: Pro
             type="button"
             onClick={onClose}
             aria-label={t.chrome.settingsModal.close}
-            className="absolute top-3 right-3 h-7 w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground"
+            className="absolute top-3 right-3 h-11 w-11 sm:h-7 sm:w-7 rounded hover:bg-muted inline-flex items-center justify-center text-muted-foreground"
           >
             <svg
               width="14"

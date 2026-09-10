@@ -68,10 +68,9 @@ import {
 } from "@/lib/skills-view";
 import { SKILL_BODY_MAX_CHARS } from "@/lib/skill-markdown";
 import { requestBrainRefresh } from "@/lib/brain-events";
-import {
-  SKILL_REFRESH_EVENT,
-  type SkillRefreshDetail,
-} from "@/lib/workspace-events";
+import { useCachedResource } from "@/lib/surface-cache";
+import { brainSkillCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import { useIsOffline } from "@/lib/offline/use-offline-sync";
 import { SkillDocument } from "@/components/brain/skill-document";
 import { SkillFilesSection } from "@/components/brain/skill-files-section";
@@ -95,37 +94,82 @@ function SkillEditorInner({ skillRowId }: { skillRowId: string }) {
   const copy = t.brainPage.skillEditor;
   const backHref = activeId ? `/w/${activeId}/brain?view=skills` : "/";
 
-  // undefined = loading, null = not found, value = loaded.
+  // Memory tier over the row (instant-navigation contract N1): a revisit
+  // paints the last-known skill on the first frame and revalidates behind
+  // it; the spine map marks `brain-skill:<wid>:` stale on SKILL_REFRESH_EVENT
+  // (an assistant edit or a curator write arriving over the stream), which
+  // replaces the listener this page used to carry. `getWorkspaceSkill`
+  // answers `null` when the row is gone; a cold `error` is a network failure.
+  const cached = useCachedResource<WorkspaceSkillSummary | null>(
+    activeId ? brainSkillCacheKey(activeId, skillRowId) : null,
+    () => getWorkspaceSkill(activeId ?? "", skillRowId),
+  );
+  // The editor body is an EDITABLE DRAFT (realtime-sync.md -> editable-draft
+  // rule): a revalidated row is adopted into the editor only while its
+  // drafts are clean, or right after the editor's own save / confirm /
+  // access change asked for it (`adoptNextRef`). A hand edit in flight is
+  // never overwritten by a signal.
   const [skill, setSkill] = useState<WorkspaceSkillSummary | null | undefined>(
     undefined,
   );
-
-  const reload = useCallback(async (shouldApply?: () => boolean) => {
-    if (!activeId) return;
-    const next = await getWorkspaceSkill(activeId, skillRowId);
-    if (!shouldApply || shouldApply()) setSkill(next);
-  }, [activeId, skillRowId]);
-
+  const dirtyRef = useRef(false);
+  const adoptNextRef = useRef(false);
   useEffect(() => {
-    setSkill(undefined);
-    void reload();
-  }, [reload]);
+    if (cached.data === undefined) return;
+    const force = adoptNextRef.current;
+    adoptNextRef.current = false;
+    const next = cached.data;
+    setSkill((prev) =>
+      prev === undefined || prev === null || force || !dirtyRef.current ? next : prev,
+    );
+  }, [cached.data]);
+  const refresh = cached.refresh;
+  const onSaved = useCallback(() => {
+    adoptNextRef.current = true;
+    void refresh();
+  }, [refresh]);
+  const onDirtyChange = useCallback((dirty: boolean) => {
+    dirtyRef.current = dirty;
+  }, []);
+  const resolved: WorkspaceSkillSummary | null | undefined =
+    skill !== undefined
+      ? skill
+      : cached.error !== undefined && cached.data === undefined
+        ? null
+        : undefined;
 
-  if (skill === undefined) {
+  if (resolved === undefined) {
+    // Nothing cached: a header skeleton in the topbar tail + the document
+    // column's geometry (N4), never a "…" placeholder.
     return (
       <>
         <BrainTopbar
           workspaceId={activeId ?? ""}
-          tail={<span className="text-muted-foreground">…</span>}
+          tail={<Skeleton className="h-3.5 w-32" />}
         />
-        <div className="max-w-3xl mx-auto w-full px-6 py-10 text-sm text-muted-foreground">
-          …
+        <div
+          className="mx-auto w-full max-w-6xl px-6 py-8 flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-10"
+          aria-busy
+        >
+          <div className="flex flex-col gap-4">
+            <Skeleton className="h-8 w-2/3" />
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="mt-4 h-16 w-full rounded-md" />
+            {[0, 1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-3.5" style={{ width: `${55 + ((i * 13) % 40)}%` }} />
+            ))}
+          </div>
+          <div className="flex flex-col gap-3">
+            <Skeleton className="h-24 w-full rounded-lg" />
+            <Skeleton className="h-32 w-full rounded-lg" />
+          </div>
         </div>
       </>
     );
   }
+  const skillRow = resolved;
 
-  if (skill === null) {
+  if (skillRow === null) {
     return (
       <>
         <BrainTopbar
@@ -150,9 +194,10 @@ function SkillEditorInner({ skillRowId }: { skillRowId: string }) {
   return (
     <SkillEditor
       workspaceId={activeId!}
-      skill={skill}
+      skill={skillRow}
       backHref={backHref}
-      onSaved={(shouldApply) => void reload(shouldApply)}
+      onSaved={onSaved}
+      onDirtyChange={onDirtyChange}
     />
   );
 }
@@ -164,11 +209,16 @@ function SkillEditor({
   skill,
   backHref,
   onSaved,
+  onDirtyChange,
 }: {
   workspaceId: string;
   skill: WorkspaceSkillSummary;
   backHref: string;
-  onSaved: (shouldApply?: () => boolean) => void;
+  /** After the editor's own write: re-read the row and adopt it. */
+  onSaved: () => void;
+  /** Reports the unsaved-diff state so the cache adoption gate above can
+   *  hold a revalidated row back while a hand edit is in flight. */
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const t = useT();
   const router = useRouter();
@@ -200,9 +250,9 @@ function SkillEditor({
   const [libraryGroups, setLibraryGroups] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const editRevisionRef = useRef(0);
 
-  // Resync drafts when the loaded row changes (a reload after save/confirm).
+  // Resync drafts when the ADOPTED row changes (a reload after save/confirm,
+  // or a clean-state revalidation the gate above let through).
   useEffect(() => {
     setName(skill.name);
     setDescription(skill.description);
@@ -226,31 +276,18 @@ function SkillEditor({
 
   const patch = buildSkillPatch(skill, { name, description, whenToUse, content, category });
   const dirty = Object.keys(patch).length > 0;
-  const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  // Assistant edits and curator writes arrive over the workspace stream and
+  // mark this row's cache slot stale (`surface-cache-invalidation.ts`); the
+  // page adopts the revalidated row only while this reads clean, so a hand
+  // edit in flight is never overwritten. The editor used to carry its own
+  // SKILL_REFRESH_EVENT listener for exactly this.
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
 
   function applyLocalEdit<T>(setter: (value: T) => void, value: T) {
-    editRevisionRef.current += 1;
     setter(value);
   }
-
-  // Assistant edits and curator writes arrive over the workspace stream. Pull
-  // the saved row into the open editor, but never overwrite local hand edits.
-  useEffect(() => {
-    const handleSkillRefresh = (event: Event) => {
-      const detail = (event as CustomEvent<SkillRefreshDetail>).detail;
-      if (
-        !dirty &&
-        detail.workspaceId === workspaceId &&
-        (!detail.rowId || detail.rowId === skill.rowId)
-      ) {
-        const editRevision = editRevisionRef.current;
-        onSaved(() => editRevisionRef.current === editRevision && !dirtyRef.current);
-      }
-    };
-    window.addEventListener(SKILL_REFRESH_EVENT, handleSkillRefresh);
-    return () => window.removeEventListener(SKILL_REFRESH_EVENT, handleSkillRefresh);
-  }, [dirty, onSaved, skill.rowId, workspaceId]);
 
   async function save() {
     if (offline) return;

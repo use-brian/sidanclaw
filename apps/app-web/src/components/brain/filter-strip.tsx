@@ -187,14 +187,16 @@ export function FilterStrip({
           onChange={(e) => onSearch(e.target.value)}
           placeholder={t.brainPage.search.placeholder}
           className={cn(
-            "flex-1 min-w-0 px-3 py-1.5 text-sm bg-card border border-border rounded-md",
+            // 16px floor below `md` (M4): the only search box on a phone zoomed.
+            "flex-1 min-w-0 px-3 py-1.5 text-[16px] md:text-sm bg-card border border-border rounded-md",
             "outline-none focus:ring-2 focus:ring-ring",
           )}
         />
         <Popover>
           <PopoverTrigger
             className={cn(
-              "inline-flex items-center gap-1.5 shrink-0 px-3 py-1.5 text-xs rounded-md border transition-colors",
+              // `h-9 sm:h-7` (C 69): the Filter trigger is a primary phone control.
+              "inline-flex h-9 sm:h-auto items-center gap-1.5 shrink-0 px-3 py-1.5 text-xs rounded-md border transition-colors",
               activeCount > 0
                 ? "bg-primary/10 text-primary border-primary/30"
                 : "bg-card text-muted-foreground border-border hover:bg-muted hover:text-foreground",
@@ -247,7 +249,7 @@ export function FilterStrip({
         onChange={(e) => onSearch(e.target.value)}
         placeholder={t.brainPage.search.placeholder}
         className={cn(
-          "w-full px-3 py-2 text-sm bg-card border border-border rounded-md",
+          "w-full px-3 py-2 text-[16px] md:text-sm bg-card border border-border rounded-md",
           "outline-none focus:ring-2 focus:ring-ring",
         )}
       />
@@ -338,7 +340,7 @@ export function FilterRail({
         onChange={(e) => onSearch(e.target.value)}
         placeholder={t.brainPage.search.placeholder}
         className={cn(
-          "w-full px-2.5 py-1.5 text-[12px] bg-background border border-border rounded-md",
+          "w-full px-2.5 py-1.5 text-[16px] md:text-[12px] bg-background border border-border rounded-md",
           "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
         )}
       />

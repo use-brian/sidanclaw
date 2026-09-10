@@ -740,6 +740,7 @@ export function wrapProvider(
           return wrapped({
             model: sessionOpts.model,
             systemPrompt: sessionOpts.systemPrompt,
+            runtimeSystemContext: sessionOpts.runtimeSystemContext,
             messages,
             tools: sessionOpts.tools,
             maxTokens: sessionOpts.maxTokens,

@@ -26,23 +26,31 @@ export type DesktopWorkspaceBootstrapResult =
 
 /**
  * Resolve the packaged app's startup workspace list without treating cached
- * identity as authentication. The live probe must settle first: only a
- * transient failure may fall back to cache, while a server 401 returns to the
- * shell-owned sign-in flow before interactive workspace chrome is mounted.
+ * identity as authentication. Prefer the live probe, but keep cached workspace
+ * access while the durable desktop session survives. Only a definitive refresh
+ * rejection clears that session and returns to the shell-owned sign-in flow.
  */
 export async function resolveDesktopWorkspaceBootstrap(input: {
   cached: unknown;
-  hasStoredSession: boolean;
+  /** Read live: a definitive refresh rejection clears the preload cache. */
+  hasStoredSession: () => boolean;
   authenticate: () => Promise<string | null>;
   loadLive: () => Promise<{ status: number; data?: unknown }>;
 }): Promise<DesktopWorkspaceBootstrapResult> {
   const cached = parseDesktopWorkspaceRows(input.cached);
   const token = await input.authenticate();
-  if (!token) return { kind: "unauthenticated" };
+  if (!token) {
+    if (!input.hasStoredSession()) return { kind: "unauthenticated" };
+    if (cached.length > 0) {
+      return { kind: "ready", source: "cache", workspaces: cached };
+    }
+  }
 
   try {
     const live = await input.loadLive();
-    if (live.status === 401) return { kind: "unauthenticated" };
+    if (live.status === 401 && !input.hasStoredSession()) {
+      return { kind: "unauthenticated" };
+    }
     if (live.status < 200 || live.status >= 300) {
       throw new Error(`HTTP ${live.status}`);
     }
@@ -52,7 +60,7 @@ export async function resolveDesktopWorkspaceBootstrap(input: {
       workspaces: parseDesktopWorkspaceRows(live.data),
     };
   } catch (error) {
-    if (input.hasStoredSession && cached.length > 0) {
+    if (input.hasStoredSession() && cached.length > 0) {
       return { kind: "ready", source: "cache", workspaces: cached };
     }
     return {

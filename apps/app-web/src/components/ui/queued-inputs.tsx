@@ -42,7 +42,9 @@ export function QueuedInputs(props: {
                   type="button"
                   onClick={() => props.onSteer(input.inputId)}
                   title={props.dict.steerHint}
-                  className="rounded px-1.5 py-0.5 font-medium text-foreground/80 transition-colors hover:bg-accent hover:text-foreground"
+                  // 44px on a phone (responsive contract M3): Steer is the one
+                  // control on a queued message.
+                  className="rounded px-1.5 py-0.5 font-medium text-foreground/80 transition-colors hover:bg-accent hover:text-foreground max-md:min-h-11 max-md:px-3"
                 >
                   {props.dict.steer}
                 </button>

@@ -1,4 +1,6 @@
+import { filterToolsByCapabilities } from '../tools/capability-gate.js'
 import { getHeapStatistics } from 'node:v8'
+import { renderSystemContext } from '../providers/system-context.js'
 import type { LLMProvider, Message, ContentBlock, TokenUsage, AssistantResponse, SendOptions, ThinkingLevel, ToolDefinition, ToolParameter } from '../providers/types.js'
 import type { Tool, ToolContext, ToolResultMeta } from '../tools/types.js'
 import type { AwaitingApprovalEvent, ConfirmationResolver, ToolConfirmationRequest } from '../mcp/types.js'
@@ -212,6 +214,8 @@ export type QueryLoopOptions = {
   /** Provider context window. Custom endpoint profiles supply this explicitly. */
   inputTokenLimit?: number
   systemPrompt: string
+  /** Per-turn context that remains in the provider system channel. */
+  runtimeSystemContext?: string
   messages: Message[]
   tools: Map<string, Tool>
   context: ToolContext
@@ -575,7 +579,7 @@ export async function* queryLoop(options: QueryLoopOptions): AsyncGenerator<Quer
   }
 
   try {
-    yield* queryLoopCore({ ...options, context: toolContext, stallWatchdog: watchdog ?? undefined })
+    yield* queryLoopCore({ ...options, tools: filterToolsByCapabilities(options.tools, toolContext.activeCapabilities ?? new Set()), context: toolContext, stallWatchdog: watchdog ?? undefined })
   } finally {
     watchdog?.dispose()
     const results = await Promise.allSettled(
@@ -596,6 +600,7 @@ async function* queryLoopCore(
     provider,
     model,
     systemPrompt,
+    runtimeSystemContext,
     tools,
     context,
     maxTurns = DEFAULT_MAX_TURNS,
@@ -647,6 +652,7 @@ async function* queryLoopCore(
   const session = options.stateless ? null : provider.createSession({
     model,
     systemPrompt,
+    runtimeSystemContext,
     tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
     maxTokens: options.maxTokens,
     inputTokenLimit: options.inputTokenLimit,
@@ -661,7 +667,7 @@ async function* queryLoopCore(
     ledgerTrace = options.ledger.startTrace({
       actor: 'assistant_turn',
       model,
-      systemPrompt,
+      systemPrompt: renderSystemContext({ systemPrompt, runtimeSystemContext }),
       messages: options.messages,
     })
   } catch (err) {
@@ -847,6 +853,7 @@ async function* queryLoopCore(
         : provider.stream({
             model,
             systemPrompt,
+            runtimeSystemContext,
             messages: statelessHistory,
             tools: toolDefinitions.length > 0 ? toolDefinitions : undefined,
             maxTokens: options.maxTokens,
@@ -1004,7 +1011,7 @@ async function* queryLoopCore(
             provider,
             model: options.compactModel,
             messages: nextMessages,
-            systemPrompt,
+            systemPrompt: renderSystemContext({ systemPrompt, runtimeSystemContext }),
           })
           nextMessages = [compactResult.boundaryMessage]
           if (options.stateless) statelessHistory = [compactResult.boundaryMessage]

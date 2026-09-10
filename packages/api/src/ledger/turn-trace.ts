@@ -9,10 +9,12 @@
  *  - **`fidelity: 'legacy'`** — no trace exists (pre-epoch turns, and any
  *    turn recorded before its lane was wired): a best-effort composition
  *    from what already exists — the persisted `session_messages` content
- *    (tool traces ride inside it) plus a cost summary from
- *    `usage_tracking` near the message. No provenance, no as-of, no
- *    payloads. That is the accepted, PERMANENT state of pre-epoch
- *    history — nothing here is ever backfilled (D6).
+ *    (tool traces ride inside it), the `memory_recall_events` rows the
+ *    message id threads (folded into one leading `retrieval` step - the
+ *    only per-turn provenance older history has), plus a cost summary
+ *    from `usage_tracking` near the message. No as-of, no payloads. That
+ *    is the accepted, PERMANENT state of pre-epoch history — nothing here
+ *    is ever backfilled (D6).
  *
  * Deleting the legacy branch is the whole cleanup if the product ever
  * stops caring about pre-epoch turns.
@@ -49,11 +51,27 @@ export type LegacyMessageRow = {
   createdAt: Date
 }
 
+/** A pre-epoch memory recall (migration 167) - the one provenance record
+ *  that predates the ledger, keyed by the same assistant message id. */
+export type LegacyRecallRow = {
+  memoryId: string
+  recallKind: string
+  createdAt: Date
+}
+
 export type TurnTraceDeps = {
   listTraceEvents: typeof listTraceEvents
   getLedgerEpoch: typeof getLedgerEpoch
   loadMessage: (assistantMessageId: string) => Promise<LegacyMessageRow | null>
   loadUsageNear: (sessionId: string, at: Date) => Promise<{ calls: number; inputTokens: number; outputTokens: number; costUsd: number } | null>
+  /**
+   * Memory provenance for a pre-epoch turn: `memory_recall_events` rows
+   * attached to the assistant message. The legacy composition folds them
+   * into ONE leading `retrieval` step (source `memory_recall_events`) so a
+   * pre-epoch turn still lights up the memories it was answered from -
+   * that table is the only per-turn provenance older history has.
+   */
+  loadLegacyRecalls: (assistantMessageId: string) => Promise<LegacyRecallRow[]>
 }
 
 async function defaultLoadMessage(assistantMessageId: string): Promise<LegacyMessageRow | null> {
@@ -93,6 +111,50 @@ async function defaultLoadUsageNear(
     inputTokens: Number(r.in_tok ?? 0),
     outputTokens: Number(r.out_tok ?? 0),
     costUsd: Number(r.cost ?? 0),
+  }
+}
+
+async function defaultLoadLegacyRecalls(assistantMessageId: string): Promise<LegacyRecallRow[]> {
+  const res = await query(
+    `SELECT memory_id, recall_kind, created_at
+       FROM memory_recall_events
+      WHERE assistant_message_id = $1
+      ORDER BY created_at ASC, memory_id ASC
+      LIMIT 200`,
+    [assistantMessageId],
+  ).catch(() => ({ rows: [] as Array<Record<string, unknown>> }))
+  return res.rows.map((r) => ({
+    memoryId: String(r.memory_id),
+    recallKind: String(r.recall_kind ?? 'index_inject'),
+    createdAt: r.created_at as Date,
+  }))
+}
+
+/**
+ * Fold pre-epoch memory recalls into one `retrieval` step in the Phase 0
+ * provenance shape (`returnedRows` + `source`), de-duplicated by memory id
+ * with the recall kinds preserved per row. Returns null when there is
+ * nothing to fold, so the caller adds no empty step.
+ */
+export function legacyRetrievalStep(recalls: LegacyRecallRow[]): TurnTraceStep | null {
+  if (recalls.length === 0) return null
+  const kinds = new Map<string, Set<string>>()
+  let earliest: Date | null = null
+  for (const r of recalls) {
+    const set = kinds.get(r.memoryId) ?? new Set<string>()
+    set.add(r.recallKind)
+    kinds.set(r.memoryId, set)
+    if (r.createdAt instanceof Date && (!earliest || r.createdAt < earliest)) earliest = r.createdAt
+  }
+  return {
+    ordinal: 0,
+    kind: 'retrieval',
+    metadata: {
+      returnedRows: [...kinds.keys()].map((rowId) => ({ primitive: 'memory', rowId })),
+      recallKinds: Object.fromEntries([...kinds].map(([id, set]) => [id, [...set].sort()])),
+      source: 'memory_recall_events',
+    },
+    at: earliest,
   }
 }
 
@@ -139,6 +201,7 @@ export function createTurnTraceReader(overrides: Partial<TurnTraceDeps> = {}) {
     getLedgerEpoch,
     loadMessage: defaultLoadMessage,
     loadUsageNear: defaultLoadUsageNear,
+    loadLegacyRecalls: defaultLoadLegacyRecalls,
     ...overrides,
   }
 
@@ -164,8 +227,17 @@ export function createTurnTraceReader(overrides: Partial<TurnTraceDeps> = {}) {
     const message = await deps.loadMessage(assistantMessageId)
     if (!message || message.role !== 'assistant') return null
     const epoch = await deps.getLedgerEpoch()
-    const steps = legacyStepsFromContent(message.content)
-    const usage = await deps.loadUsageNear(message.sessionId, message.createdAt)
+    const [recalls, usage] = await Promise.all([
+      deps.loadLegacyRecalls(assistantMessageId).catch(() => [] as LegacyRecallRow[]),
+      deps.loadUsageNear(message.sessionId, message.createdAt),
+    ])
+    const recallStep = legacyRetrievalStep(recalls)
+    const contentSteps = legacyStepsFromContent(message.content)
+    // The recall step leads (context assembly runs before the model speaks);
+    // content-derived steps renumber after it.
+    const steps: TurnTraceStep[] = recallStep
+      ? [recallStep, ...contentSteps.map((s) => ({ ...s, ordinal: s.ordinal + 1 }))]
+      : contentSteps
     if (usage && usage.calls > 0) {
       steps.push({
         ordinal: steps.length,

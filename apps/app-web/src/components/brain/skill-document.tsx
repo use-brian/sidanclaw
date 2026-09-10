@@ -144,7 +144,7 @@ export function SkillDocument({
             onChange={(e) => onWhenToUseChange(e.target.value)}
             aria-label={skillsCopy.createWhenToUseLabel}
             className={cn(
-              "w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
+              "w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-[16px] md:text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/50",
               quietFieldCls,
             )}
           />

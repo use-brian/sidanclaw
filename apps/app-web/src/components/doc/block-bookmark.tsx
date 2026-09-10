@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 // [COMP:app-web/block-bookmark]
 /**
  * Phase 2 media block — `kind: 'bookmark'`.
@@ -24,7 +26,7 @@ import { useEffect, useRef, useState } from "react";
 import { useT } from "@/lib/i18n/client";
 import { authFetch } from "@/lib/auth-fetch";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 type BookmarkMeta = {
   title?: string;
@@ -151,7 +153,7 @@ export function BlockBookmark({ block, readOnly, onChange }: Props) {
               commitUrl();
             }
           }}
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none md:text-sm"
         />
       </div>
     );

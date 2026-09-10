@@ -69,6 +69,14 @@ describe("[COMP:app-web/crm-operations] entitlement and participation lifecycle"
     expect(selects.some((button) => button.disabled)).toBe(true);
   });
 
+  it.each([[true, "Access at last check: available"], [false, "Access at last check: unavailable"], [undefined, "Access has not been evaluated"]])("keeps raw active status separate from access (%s)", async (isEffective, label) => {
+    api.listCrmEntitlements.mockResolvedValueOnce([{ id: "entitlement-1", contactId: CONTACT_ID, planId: PLAN_ID, planKey: "member", planName: "Member", status: "active", isEffective }]);
+    await act(async () => root.render(<I18nProvider locale="en" dict={en}><CrmContactLifecycle workspaceId="workspace-1" contactId={CONTACT_ID} contactName="Example Person" /></I18nProvider>));
+    await flush();
+    expect(container.textContent).toContain(label);
+    expect(container.textContent).toContain("Active");
+  });
+
   it("shows addressable plan and event catalogs with cross-surface lifecycle reads", async () => {
     const selectPlan = vi.fn();
     const selectEvent = vi.fn();

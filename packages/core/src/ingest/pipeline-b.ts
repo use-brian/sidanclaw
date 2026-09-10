@@ -136,7 +136,7 @@ export type PipelineBEpisode = {
    * See docs/architecture/brain/ingest-pipeline.md → Source adapters →
    * Slack → "Mention resolution".
    */
-  personExternalRefs?: Array<{ name: string; externalRef: Record<string, unknown> }>
+  personExternalRefs?: Array<{ name: string; externalRef: Record<string, unknown>; phone?: string }>
 }
 
 /**
@@ -498,6 +498,49 @@ export function sourceKindCreatesTasks(sourceKind: SourceKind): boolean {
   return !RETROSPECTIVE_SOURCE_KINDS.has(sourceKind)
 }
 
+// Sources whose content is speech or chat, where an email address is not part
+// of the medium. Asking these for "a person's email" asks for something the
+// text does not contain, and a model told to prefer a value it cannot find
+// constructs one: "Ben Luk" became `benluk@example.com`, an address that
+// appears nowhere in 334,943 archived WhatsApp messages. `attestedEmail`
+// already refuses to WRITE such a value; this stops the prompt from asking for
+// it, which is where the fabrication is invited.
+//
+// Denylist, not allowlist: an unknown or newly added source keeps the
+// email-bearing wording, so this can only narrow the ask, never widen it.
+// Note the rule below is verbatim-only for EVERY source, so a genuine address
+// someone typed into a chat is still extracted — this set only changes what
+// the model is told to expect, not what it is permitted to report.
+const NON_EMAIL_BEARING_SOURCE_KINDS: ReadonlySet<SourceKind> = new Set<SourceKind>([
+  'channel_window', // archived WhatsApp/WeChat history
+  'recording',
+  'voice_memo',
+  'meeting',
+])
+
+/**
+ * The `canonical_id` rule for persons, worded for this episode's medium.
+ *
+ * Both variants say the same thing — the address must appear in the content —
+ * because that is exactly the condition `attestedEmail` enforces at the write
+ * boundary. A prompt that asks for more than the writer accepts spends tokens
+ * generating values that are then discarded, and trains the extractor toward
+ * the one failure the writer exists to catch.
+ */
+function personCanonicalIdRule(sourceKind: SourceKind): string {
+  if (NON_EMAIL_BEARING_SOURCE_KINDS.has(sourceKind)) {
+    return '- Persons: canonical_id MUST be null unless an email address appears '
+      + 'verbatim in the content above. This source is speech or chat and normally '
+      + 'contains none, so null is the expected answer. NEVER derive an address from '
+      + "a person's name, and never treat a messaging identifier "
+      + '(for example 85292052939@s.whatsapp.net, or anything ending @lid or @g.us) '
+      + 'as an email address.'
+  }
+  return '- Persons: use an email address as canonical_id ONLY when that exact '
+    + 'address appears verbatim in the content above; otherwise null. NEVER derive '
+    + "an address from a person's name or employer."
+}
+
 // v2 — explicit drop-with-reason slot. Persisted to analytics only
 // (NOT written to `memories`), so the LLM has a non-empty target for
 // status updates / ack noise / per-cycle counters that otherwise rot
@@ -805,7 +848,7 @@ Output JSON only, matching this exact shape:
   "entities": [
     { "kind": "person" | "company" | "project" | "product" | "repository",
       "display_name": "...",
-      "canonical_id": "<email | domain | url | null>",
+      "canonical_id": "<email | domain | url | null — see the Rules below; null is always valid>",
       "attributes": {} }
   ],
   "edges": [
@@ -843,7 +886,7 @@ Negative examples — DO NOT emit these as memories:
   - "Follow up with Bob next week" → tasks (text="Follow up with Bob", due_iso=<next week>). Memory's why_not_task test fails — this IS a TODO.
 ${taskPolicy}
 Rules:
-- Persons: prefer email as canonical_id; else null.
+${personCanonicalIdRule(episode.sourceKind)}
 - Companies: prefer registrable domain as canonical_id; else null.
 - Repositories: use for code repositories (GitHub, GitLab, Bitbucket, internal git). display_name is the repo name (e.g. "belvedere" or "acme/widget"); prefer the canonical URL (e.g. "https://github.com/acme/widget") as canonical_id when available. Distinct from "project" — a repository is a versioned codebase, a project is a piece of work.
 - Edge endpoints (source_ref / target_ref) MUST match an entity's display_name from this same payload.
@@ -1235,10 +1278,50 @@ function parseExtraction(rawText: string): ParseResult {
   return { ok: true, payload: result.data }
 }
 
+/**
+ * Chat providers address people with JIDs shaped exactly like an email address:
+ * `85292052939@s.whatsapp.net` has an `@`, a dot, and a real TLD, so neither a
+ * shape check nor the CRM's strict RFC validation rejects it. They are routing
+ * identifiers, not mailboxes, and writing one into a contact's email field puts
+ * an unreachable address in the CRM and invites a send that silently goes
+ * nowhere. Match on the domain, which is the only part that distinguishes them.
+ *
+ * `@lid`, `@broadcast` and `@call` carry no dot and are already excluded by the
+ * shape check; they are listed anyway so the set reads as the provider's
+ * address space rather than as whatever happened to slip through.
+ */
+const NON_EMAIL_IDENTIFIER_DOMAINS = new Set([
+  's.whatsapp.net', // WhatsApp user
+  'c.us', // WhatsApp user, legacy/web form
+  'g.us', // WhatsApp group
+  'lid', // WhatsApp privacy identifier
+  'broadcast', // WhatsApp broadcast list
+  'newsletter', // WhatsApp channel
+  'call', // WhatsApp call
+])
+
+/**
+ * An extracted email is only kept when it actually occurs in the source.
+ *
+ * The extraction prompt asks for an email as a person's `canonical_id`, and a
+ * model asked for a value it does not have will invent a plausible one:
+ * "Ben Luk" became `benluk@example.com`, a syntactically perfect address that
+ * appeared nowhere in 334,943 archived messages. Shape checks cannot catch
+ * that, and a fabricated address is worse than an empty field because someone
+ * will eventually send to it. Requiring the source to attest the value costs
+ * one substring check and rejects the whole class.
+ */
+function attestedEmail(canonical: string | null | undefined, sourceText: string): string | null {
+  if (!emailShape(canonical)) return null
+  return sourceText.toLowerCase().includes(canonical.toLowerCase()) ? canonical : null
+}
+
 function emailShape(canonical: string | null | undefined): canonical is string {
   if (typeof canonical !== 'string') return false
   // Cheap shape check; the CRM layer does the strict validation.
-  return canonical.includes('@') && canonical.includes('.')
+  if (!canonical.includes('@') || !canonical.includes('.')) return false
+  const domain = canonical.slice(canonical.lastIndexOf('@') + 1).trim().toLowerCase()
+  return !NON_EMAIL_IDENTIFIER_DOMAINS.has(domain)
 }
 
 /**
@@ -1700,7 +1783,7 @@ export async function processEpisode(
         )
       : exRaw
     try {
-      const entity = await writeEntity(ex, episode, deps, actorUserId)
+      const entity = await writeEntity(ex, episode, deps, actorUserId, resolvedContent)
       if (entity) {
         entitiesByRef.set(ex.display_name, entity)
         entitiesWritten.push(entity)
@@ -2327,11 +2410,11 @@ async function learnAlias(
 function matchPersonExternalRef(
   refs: PipelineBEpisode['personExternalRefs'],
   displayName: string,
-): Record<string, unknown> | null {
+): { externalRef: Record<string, unknown>; phone?: string } | null {
   if (!refs || refs.length === 0) return null
   const target = displayName.trim().toLowerCase()
   for (const r of refs) {
-    if (r.name.trim().toLowerCase() === target) return r.externalRef
+    if (r.name.trim().toLowerCase() === target) return { externalRef: r.externalRef, phone: r.phone }
   }
   return null
 }
@@ -2341,14 +2424,16 @@ async function writeEntity(
   episode: PipelineBEpisode,
   deps: PipelineBDeps,
   actorUserId: string,
+  sourceText: string,
 ): Promise<EntityRecord | null> {
   // Person mutation identity is separate from retrieval. Names, email,
   // aliases, fuzzy scores, and LLM guesses may rank candidates but cannot
   // select a write target. A source-adapter verified provider subject is the
   // sole automatic authority; otherwise a distinct person is created.
   if (ex.kind === 'person') {
-    const email = emailShape(ex.canonical_id) ? ex.canonical_id : null
-    const externalRef = matchPersonExternalRef(episode.personExternalRefs, ex.display_name)
+    const email = attestedEmail(ex.canonical_id, sourceText)
+    const matched = matchPersonExternalRef(episode.personExternalRefs, ex.display_name)
+    const externalRef = matched?.externalRef ?? null
     const contact = await deps.crm.createContact({
       userId: actorUserId,
       workspaceId: episode.workspaceId,
@@ -2358,6 +2443,9 @@ async function writeEntity(
         externalRef,
         stableIdentity: stableExternalIdentityFromCrmRef(externalRef) ?? undefined,
       } : {}),
+      // The adapter's number, not one the extractor read out of prose: a phone
+      // is contact data, and a wrong one reaches the wrong person.
+      ...(matched?.phone ? { phone: matched.phone } : {}),
       source: 'extracted',
       sourceEpisodeId: episode.id,
       createdByAssistantId: episode.createdByAssistantId,

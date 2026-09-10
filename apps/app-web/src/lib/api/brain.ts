@@ -1,3 +1,4 @@
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * SDK for the Brain page (app-web).
  *
@@ -7,7 +8,7 @@
  * `authFetch` with typed signatures over the company-brain retrieval
  * routes (docs/architecture/brain/retrieval-layer.md). The wire contract
  * is identical to apps/web; this file diverges only in its import paths
- * (`@/lib/auth-fetch`, `NEXT_PUBLIC_API_URL`), the same convention as
+ * (`@/lib/auth-fetch`, runtime public API config), the same convention as
  * `lib/api/views.ts` / `lib/api/approvals.ts`.
  */
 
@@ -25,7 +26,7 @@ import type {
   BrainPrimitive as InboxPrimitive,
 } from "@/lib/api/brain-inbox";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type EntityKind =
   | "person"
@@ -350,6 +351,10 @@ export type BrainGraph = {
   scopeLabel?: string | null;
   /** Search matches visible in this bounded response. */
   focusNodeIds?: string[];
+  /** For an exact-id focus (`focusIds`), how many matches each visible
+   *  group node holds - counts only, never member ids. The chat-audit
+   *  highlight badges group bubbles with it. */
+  focusGroupCounts?: Record<string, number>;
   renderBudget?: { nodes: number; edges: number };
 };
 
@@ -693,6 +698,12 @@ export async function getBrainGraph(params: {
   limit?: number;
   scopeId?: string | null;
   focusQuery?: string | null;
+  /** Exact entry ids to mark (the chat-audit retrieval highlight). The
+   *  response reports visible matches in `focusNodeIds` and per-group match
+   *  counts in `focusGroupCounts`; `revealFocus` also opens the bounded
+   *  scope holding the most matches. graph-view.md -> "Retrieval highlight". */
+  focusIds?: readonly string[] | null;
+  revealFocus?: boolean;
   /** Procedural ego graph. Includes native bundle resource nodes and their
    * explicit references without expanding the workspace-wide file layer. */
   skillId?: string | null;
@@ -709,6 +720,10 @@ export async function getBrainGraph(params: {
   if (params.limit) q.set("limit", String(params.limit));
   if (params.scopeId) q.set("scope", params.scopeId);
   if (params.focusQuery?.trim()) q.set("focus", params.focusQuery.trim());
+  if (params.focusIds && params.focusIds.length > 0) {
+    q.set("focusIds", params.focusIds.slice(0, 64).join(","));
+    if (params.revealFocus) q.set("reveal", "1");
+  }
   if (params.skillId) q.set("skillId", params.skillId);
   const include = [params.showMemory ? "memory" : "", params.skillId ? "skill_file" : ""]
     .filter(Boolean)
@@ -752,6 +767,14 @@ export async function getBrainGraph(params: {
     focusNodeIds: Array.isArray(data.focusNodeIds)
       ? data.focusNodeIds.filter((id): id is string => typeof id === "string")
       : [],
+    focusGroupCounts:
+      data.focusGroupCounts && typeof data.focusGroupCounts === "object"
+        ? Object.fromEntries(
+            Object.entries(data.focusGroupCounts).filter(
+              (entry): entry is [string, number] => typeof entry[1] === "number",
+            ),
+          )
+        : {},
     renderBudget:
       data.renderBudget &&
       typeof data.renderBudget.nodes === "number" &&

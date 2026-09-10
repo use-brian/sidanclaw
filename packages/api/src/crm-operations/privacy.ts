@@ -3,13 +3,22 @@
  *
  * Append-only evidence is immutable during normal product use. The explicit
  * erasure primitive below is the legal override: it removes personal linkage
- * and payload while retaining only non-identifying execution tombstones.
+ * and payload while retaining minimized execution receipts required by policy.
  *
  * [COMP:crm/operations-privacy]
  */
 
 import type pg from 'pg'
+import type { CrmPageQuery } from '@use-brian/core'
+import { queryCrmPage } from './pagination.js'
 import { getPool, query } from '../db/client.js'
+import { retireCrmIntakeReceipts, readCrmPrivacyPolicy } from './privacy-policy.js'
+import { acquireCrmPrivacyAdmission } from './privacy-admission.js'
+import { retainCrmAddressSuppression } from './suppression-tombstones.js'
+import { retireCrmImportCopies } from './import-copy-resolver.js'
+import { retireWorkflowCopies } from './workflow-copy-resolver.js'
+import { CRM_PRIVACY_COVERAGE } from './privacy-coverage.js'
+import { prepareCrmPrivacyCopies, assertCrmPrivacyCopiesResolvable, deleteCrmPrivacyCopies, retireCrmNotificationCopies } from './privacy-copy-resolver.js'
 
 export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_definitions',
@@ -17,10 +26,21 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'crm_intake_credentials',
   'crm_intake_credential_definitions',
   'crm_intake_idempotency',
+  'crm_privacy_policies',
+  'crm_erasure_journal',
+  'crm_privacy_previews',
+  'crm_retention_runs',
+  'crm_import_file_cleanups',
+  'crm_address_suppression_tombstones',
+  'crm_managed_mailbox_policies',
+  'crm_mailbox_integration_grants',
+  'crm_delivery_receipts',
+  'crm_delivery_receipt_contacts',
   'association_external_identities',
   'association_enquiries',
   'association_enquiry_notes',
   'crm_consent_purposes',
+  'crm_consent_purpose_versions',
   'association_consent_events',
   'crm_suppression_events',
   'crm_segments',
@@ -28,10 +48,17 @@ export const CRM_OPERATIONS_PRIVACY_TABLES = [
   'association_memberships',
   'association_events',
   'association_registrations',
+  'association_inventory_boundaries',
+  'association_waitlist_offers',
+  'association_integration_events',
   'association_audit_log',
   'workspace_audit_log',
+  'workspace_modules',
+  'crm_integration_credentials',
+  'crm_integration_credential_grants',
   'crm_domain_event_outbox',
   'crm_import_jobs',
+  'crm_import_sources',
   'crm_import_chunks',
   'crm_import_rows',
   'crm_import_errors',
@@ -47,8 +74,38 @@ const EXPORT_PROJECTIONS: Record<PrivacyTable, string> = Object.fromEntries(
 // workspace content. Its non-secret lifecycle metadata remains visible.
 EXPORT_PROJECTIONS.crm_intake_credentials = [
   'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',
-  'revoked_at', 'last_used_at', 'created_at',
+  'revoked_at', 'last_used_at', 'created_at', 'replay_scope_id', 'rotated_from_credential_id',
 ].join(',')
+EXPORT_PROJECTIONS.crm_integration_credentials = [
+  'id', 'workspace_id', 'label', 'secret_prefix', 'created_by_user_id',
+  'expires_at', 'revoked_at', 'last_used_at', 'created_at',
+].join(',')
+// Original CSV bytes are a separate multi-subject processing artifact. The
+// legacy operations export includes its inventory, never an implicit blob dump.
+EXPORT_PROJECTIONS.crm_import_sources = [
+  'id', 'workspace_id', 'source_key', 'source_hash', 'credential_id',
+  'integration_grants', 'created_at', 'octet_length(content_bytes) AS byte_count',
+].join(',')
+EXPORT_PROJECTIONS.crm_address_suppression_tombstones = 'id,workspace_id,key_version,channel,purpose_key,reason_code,occurred_at,policy_version,created_at,expires_at,released_at,release_evidence_kind,release_evidence_id'
+EXPORT_PROJECTIONS.association_integration_events = 'id,workspace_id,provider,provider_event_id,provider_reference,occurred_at,target_kind,order_id,entitlement_id,contact_id,plan_id,state,attempts,cycle_attempts,next_attempt_at,last_error_code,created_at,updated_at,applied_at'
+
+EXPORT_PROJECTIONS.crm_import_file_cleanups='id,workspace_id,owner_user_id,file_id,before_at,policy_version,summary,status,attempts,next_attempt_at,leased_until,error_code,created_at,expires_at,queued_at,completed_at,replay_expires_at'
+EXPORT_PROJECTIONS.crm_erasure_journal='id,workspace_id,table_name,operation,captured_at'
+EXPORT_PROJECTIONS.crm_retention_runs='id,workspace_id,owner_user_id,policy_version,mode,before_at,captured_at,expires_at,summary,status,receipt,error_code,completed_at,created_at'
+
+EXPORT_PROJECTIONS.crm_privacy_previews='id,workspace_id,owner_user_id,subject_id,policy_version,domain_summary,blockers,status,created_at,expires_at,consumed_at,receipt'
+
+// Claim tokens and raw request fingerprints are private replay machinery.
+EXPORT_PROJECTIONS.crm_delivery_receipts = 'workspace_id,delivery_id,connector_instance_id,provider_key,purpose_key,actor_kind,actor_credential_id,acting_user_id,envelope,status,provider_receipt,error_code,accepted_at,confirmed_at,redacted_at,created_at,updated_at'
+
+/** Retire content without reopening a stable delivery identity. Caller holds person locks. */
+export async function redactCrmDeliveryReceipts(client:pg.PoolClient,workspaceId:string,contactId?:string):Promise<void> {
+  await client.query(`UPDATE crm_delivery_receipts r SET envelope=NULL,provider_receipt=NULL,redacted_at=COALESCE(redacted_at,clock_timestamp()),
+    status=CASE WHEN status='dispatching' THEN 'needs_reconciliation' ELSE status END,
+    error_code=CASE WHEN status='dispatching' THEN 'delivery_erased_during_dispatch' ELSE error_code END,updated_at=clock_timestamp()
+    WHERE workspace_id=$1 AND ($2::uuid IS NULL OR EXISTS(SELECT 1 FROM crm_delivery_receipt_contacts c
+      WHERE c.workspace_id=r.workspace_id AND c.delivery_id=r.delivery_id AND c.contact_id=$2))`,[workspaceId,contactId ?? null])
+}
 
 export type CrmOperationsPrivacyExport = {
   schema: 'crm-operations-privacy-v1'
@@ -84,10 +141,37 @@ export async function redactCrmOperationsForContact(
   contactId: string,
 ): Promise<void> {
   const person = await client.query<{ isPerson: boolean }>(
-    `SELECT kind='person' AS "isPerson" FROM entities WHERE workspace_id=$1 AND id=$2`,
+    `SELECT kind='person' AS "isPerson" FROM entities WHERE workspace_id=$1 AND id=$2 FOR UPDATE`,
     [workspaceId, contactId],
   )
   if (!person.rows[0]?.isPerson) return
+  await prepareCrmPrivacyCopies(client,workspaceId,contactId)
+  await assertCrmPrivacyCopiesResolvable(client,workspaceId,contactId)
+  await client.query('DELETE FROM crm_privacy_previews WHERE workspace_id=$1 AND subject_id=$2',[workspaceId,contactId])
+  await retainCrmAddressSuppression(client,workspaceId,contactId)
+  // Resolve audit references before clearing the attendee/enquiry/membership
+  // links on which attribution depends. Reuse the preview/export predicates.
+  for (const [domain, assignments] of [
+    ['association_audit_log', "metadata=jsonb_build_object('erased',true)"],
+    ['workspace_audit_log', "subject_id=NULL,details=jsonb_build_object('erased',true)"],
+    ['brain_row_versions', "before_image=NULL,erased_at=COALESCE(erased_at,clock_timestamp()),mutation_reason='Personal data erased',workspace_id=$1"],
+    ['correction_audit', "reason='Personal data erased',ticket_reference=NULL,row_snapshot=jsonb_build_object('erased',true),detail=jsonb_build_object('erased',true)"],
+  ] as const) {
+    const entry = CRM_PRIVACY_COVERAGE.find((candidate) => candidate.domain === domain)!
+    await client.query(`WITH privacy_args AS (SELECT $1::uuid workspace_id,$2::uuid contact_id)
+      UPDATE ${domain} t SET ${assignments}
+      WHERE (${entry.workspacePredicate ?? 't.workspace_id=$1'}) AND (${entry.subjectWhere})`, [workspaceId, contactId])
+  }
+  await retireWorkflowCopies(client,workspaceId)
+  await retireCrmNotificationCopies(client,workspaceId,contactId)
+  await redactCrmDeliveryReceipts(client,workspaceId,contactId)
+  // Match retention's enquiry -> receipt ordering. Holding a receipt before
+  // its enquiry would deadlock against a concurrent retention transaction.
+  await client.query(`SELECT id FROM association_enquiries WHERE workspace_id=$1 AND contact_id=$2 ORDER BY id FOR UPDATE`,
+    [workspaceId, contactId])
+  await retireCrmIntakeReceipts(client, workspaceId, { contactId })
+
+  await retireCrmImportCopies(client,workspaceId)
 
   // Commerce participation can be retention-bound and therefore uses a
   // pseudonymous shell. Non-commerce rows use the same shell because their
@@ -114,40 +198,10 @@ export async function redactCrmOperationsForContact(
       WHERE workspace_id=$1 AND entity_id=$2`,
     [workspaceId, contactId],
   )
-  await client.query(
-    `UPDATE crm_domain_event_outbox
-        SET subject_id='00000000-0000-0000-0000-000000000000'::uuid,
-            payload=jsonb_build_object('erased',true,'eventType',event_type)
-      WHERE workspace_id=$1 AND (
-        subject_id=$2 OR payload->>'contactId'=$2::text
-        OR payload->>'dealId'=$2::text OR payload->>'submissionId'=$2::text
-      )`,
-    [workspaceId, contactId],
-  )
-  await client.query(
-    `UPDATE association_audit_log
-        SET metadata=jsonb_build_object('erased',true)
-      WHERE workspace_id=$1 AND (
-        subject_id=$2 OR metadata->>'contactId'=$2::text
-      )`,
-    [workspaceId, contactId],
-  )
-  await client.query(
-    `UPDATE workspace_audit_log
-        SET subject_id=NULL,details=jsonb_build_object('erased',true)
-      WHERE workspace_id=$1 AND (
-        subject_id=$2 OR details->>'contactId'=$2::text
-      )`,
-    [workspaceId, contactId],
-  )
-  await client.query(
-    `DELETE FROM crm_segments
-      WHERE workspace_id=$1 AND predicate::text LIKE '%' || $2::text || '%'`,
-    [workspaceId, contactId],
-  )
   // The remaining direct contact FKs are CASCADE-bound to entities. The
   // explicit deletes document the legal behavior and keep it stable if a
   // future migration changes an FK action.
+  await deleteCrmPrivacyCopies(client,workspaceId,contactId)
   for (const table of [
     'crm_suppression_events',
     'association_consent_events',
@@ -157,10 +211,6 @@ export async function redactCrmOperationsForContact(
   ]) {
     await client.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND contact_id=$2`, [workspaceId, contactId])
   }
-  await client.query(
-    `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND contact_id=$2`,
-    [workspaceId, contactId],
-  )
 }
 
 export type CrmOperationsRetentionResult = {
@@ -182,26 +232,54 @@ export async function pruneCrmOperationsRetention(
   const deleted: Record<string, number> = {}
   try {
     await client.query('BEGIN')
+    await acquireCrmPrivacyAdmission(client,workspaceId)
+    const retentionPolicy = (await readCrmPrivacyPolicy(workspaceId, client)).policy
+    const heldContacts = retentionPolicy.retention?.holds.filter(h => h.domain==='contact').map(h => h.id) ?? []
+    const heldSubmissions = retentionPolicy.retention?.holds.filter(h => h.domain==='submission').map(h => h.id) ?? []
+    const heldFiles = retentionPolicy.retention?.holds.filter(h => h.domain==='file').map(h => h.id) ?? []
+    const enquiries = await client.query<{ id: string }>(
+      `SELECT id FROM association_enquiries WHERE workspace_id=$1
+        AND status IN ('resolved','spam') AND updated_at<$2
+        AND NOT(id=ANY($3::uuid[])) AND NOT(contact_id=ANY($4::uuid[]))
+        ORDER BY id FOR UPDATE`, [workspaceId, before, heldSubmissions, heldContacts])
+    const submissionIds = enquiries.rows.map((row) => row.id)
+    const retiredReceiptsDeleted = await retireCrmIntakeReceipts(client, workspaceId, { submissionIds })
     const remove = async (name: string, sql: string, values: unknown[]) => {
       const result = await client.query(sql, values)
       deleted[name] = result.rowCount ?? 0
     }
+    const heldSources = retentionPolicy.importSourceErasure?.heldSourceIds ?? []
     await remove('crm_import_jobs',
       `DELETE FROM crm_import_jobs WHERE workspace_id=$1
-        AND status IN ('completed','cancelled','failed') AND updated_at < $2`,
-      [workspaceId, before])
+        AND status IN ('completed','cancelled','failed') AND updated_at < $2
+        AND (staged_file_id IS NULL OR NOT(staged_file_id=ANY($4::uuid[])))
+        AND NOT EXISTS(SELECT 1 FROM crm_import_rows r WHERE r.workspace_id=crm_import_jobs.workspace_id
+          AND r.job_id=crm_import_jobs.id AND r.entity_id=ANY($5::uuid[]))
+        AND (source_id IS NULL OR (NOT(source_id=ANY($3::uuid[]))
+          AND EXISTS(SELECT 1 FROM crm_import_sources s WHERE s.workspace_id=crm_import_jobs.workspace_id
+            AND s.id=crm_import_jobs.source_id AND s.privacy_erased)))`,
+      [workspaceId, before, heldSources, heldFiles, heldContacts])
+    await remove('crm_import_sources',
+      `DELETE FROM crm_import_sources s WHERE workspace_id=$1 AND privacy_erased
+        AND replay_expires_at<=clock_timestamp() AND NOT(id=ANY($2::uuid[]))
+        AND NOT EXISTS(SELECT 1 FROM crm_import_jobs j WHERE j.workspace_id=s.workspace_id AND j.source_id=s.id)`,
+      [workspaceId, heldSources])
     await remove('crm_domain_event_outbox',
-      `DELETE FROM crm_domain_event_outbox WHERE workspace_id=$1
-        AND status IN ('delivered','failed') AND created_at < $2`,
-      [workspaceId, before])
+      `DELETE FROM crm_domain_event_outbox e WHERE workspace_id=$1
+        AND status='delivered' AND created_at < $2
+        AND NOT(e.subject_id=ANY($3::uuid[])) AND NOT(e.subject_id=ANY($4::uuid[]))
+        AND NOT(COALESCE(e.payload->>'contactId','')=ANY($3::text[]))
+        AND NOT EXISTS(SELECT 1 FROM association_enquiries q WHERE q.workspace_id=e.workspace_id AND q.id=e.subject_id AND q.contact_id=ANY($3::uuid[]))
+        AND NOT EXISTS(SELECT 1 FROM workflow_runs r
+          WHERE r.workspace_id=e.workspace_id AND r.crm_event_id=e.id)`,
+      [workspaceId, before, heldContacts, heldSubmissions])
     await remove('crm_intake_idempotency',
-      `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND created_at < $2
-        AND (status='committed' OR created_at < $2 - interval '24 hours')`,
-      [workspaceId, before])
+      `DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND status='retired'
+        AND replay_expires_at<=clock_timestamp()`, [workspaceId])
+    deleted.crm_intake_idempotency! += retiredReceiptsDeleted
     await remove('association_enquiries',
       `DELETE FROM association_enquiries WHERE workspace_id=$1
-        AND status IN ('resolved','spam') AND updated_at < $2`,
-      [workspaceId, before])
+        AND id=ANY($2::uuid[])`, [workspaceId, submissionIds])
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {})
@@ -216,32 +294,22 @@ export async function pruneCrmOperationsRetention(
   }
 }
 
-export async function listCrmOperationsAudit(workspaceId: string, limit = 50) {
-  const result = await query<{
-    id: string; action: string; subjectKind: string; subjectId: string
-    actorKind: string; occurredAt: Date; details: Record<string, unknown>
-  }>(
-    `SELECT id,action,subject_kind AS "subjectKind",subject_id AS "subjectId",
-            actor_kind AS "actorKind",created_at AS "occurredAt",metadata AS details
-       FROM association_audit_log
-      WHERE workspace_id=$1 AND action LIKE 'crm.%'
-      ORDER BY created_at DESC,id DESC LIMIT $2`,
-    [workspaceId, Math.min(Math.max(limit, 1), 100)],
-  )
-  return result.rows
+export async function listCrmOperationsAudit(workspaceId: string, filters: CrmPageQuery = {}) {
+  return queryCrmPage(query, { workspaceId, resource: 'crm.audit', key: 'entries', query: filters,
+    sql: `SELECT id,action,subject_kind AS "subjectKind",subject_id AS "subjectId",
+            actor_kind AS "actorKind",created_at AS "occurredAt",created_at AS "createdAt",metadata AS details
+       FROM association_audit_log WHERE workspace_id=$1 AND action LIKE 'crm.%'`,
+    params: [workspaceId],
+  })
 }
 
-export async function listCrmEventDelivery(workspaceId: string, limit = 50) {
-  const result = await query<{
-    id: string; eventType: string; subjectKind: string; subjectId: string
-    status: string; attempts: number; occurredAt: Date; deliveredAt: Date | null
-  }>(
-    `SELECT id,event_type AS "eventType",subject_kind AS "subjectKind",
-            subject_id AS "subjectId",status,attempts,
-            occurred_at AS "occurredAt",delivered_at AS "deliveredAt"
-       FROM crm_domain_event_outbox
-      WHERE workspace_id=$1 ORDER BY occurred_at DESC,id DESC LIMIT $2`,
-    [workspaceId, Math.min(Math.max(limit, 1), 100)],
-  )
-  return result.rows
+export async function listCrmEventDelivery(workspaceId: string, filters: CrmPageQuery = {}) {
+  return queryCrmPage(query, { workspaceId, resource: 'crm.event-delivery', key: 'events', query: filters,
+    sql: `SELECT id,event_type AS "eventType",subject_kind AS "subjectKind",
+            subject_id AS "subjectId",status,attempts,created_at AS "createdAt",
+            occurred_at AS "occurredAt",delivered_at AS "deliveredAt",
+            retired_at AS "retiredAt",retired_from_status AS "retiredFromStatus"
+       FROM crm_domain_event_outbox WHERE workspace_id=$1`,
+    params: [workspaceId],
+  })
 }

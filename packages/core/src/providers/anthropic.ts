@@ -13,6 +13,7 @@
  * Spec: docs/architecture/engine/provider-abstraction.md → "Fallback wrapper".
  */
 import Anthropic from '@anthropic-ai/sdk'
+import { systemContextParts } from './system-context.js'
 import { providerAliasMap, providerModelIds } from '@use-brian/shared/model-registry'
 import type {
   ContentBlock,
@@ -205,22 +206,26 @@ function mapStopReason(reason: string | null | undefined): StopReason {
 type SystemBlock = { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }
 
 /**
- * Build the `system` field with prompt caching enabled. Anthropic charges
- * full input rate on the first call and the discounted cache_read rate on
- * subsequent calls within the 5-minute TTL window.
+ * Build the `system` field with the existing ephemeral cache policy on the
+ * stable prefix only. Cache writes and reads have their respective provider
+ * rates; runtime text after the breakpoint is ordinary input.
  *
  * We only mark the prompt with `cache_control` when it's long enough to
- * actually benefit (Anthropic's documented minimum cacheable size is
- * 1024 tokens for Haiku; we approximate with character count to avoid
- * pulling in a tokenizer).
+ * potentially benefit. This existing character heuristic is not a tokenizer
+ * or a guarantee of eligibility; the provider enforces model-specific minima.
  */
-function buildSystem(systemPrompt: string): SystemBlock[] | string {
-  if (!systemPrompt) return ''
+function buildSystem(systemPrompt: string, runtimeSystemContext?: string): SystemBlock[] | string {
+  const parts = systemContextParts({ systemPrompt, runtimeSystemContext })
+  if (parts.length === 0) return ''
   // Rough rule of thumb: 1 token ≈ 4 chars. Below ~4 KB the cache write
   // overhead can outweigh the discount, so send as plain string.
   const CACHE_MIN_CHARS = 4096
-  if (systemPrompt.length < CACHE_MIN_CHARS) return systemPrompt
-  return [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }]
+  if (parts.length === 1 && !runtimeSystemContext?.trim() && systemPrompt.length < CACHE_MIN_CHARS) return systemPrompt
+  return parts.map((text, index) => ({
+    type: 'text', text,
+    ...(index === 0 && systemPrompt.length >= CACHE_MIN_CHARS
+      ? { cache_control: { type: 'ephemeral' as const } } : {}),
+  }))
 }
 
 async function* streamAnthropic(
@@ -229,6 +234,7 @@ async function* streamAnthropic(
   systemPrompt: string,
   messages: AnthropicMessage[],
   options: {
+    runtimeSystemContext?: string
     maxTokens?: number
     temperature?: number
     tools?: ToolDefinition[]
@@ -265,7 +271,7 @@ async function* streamAnthropic(
       // the recovery answer, too high gives the model rope.
       max_tokens: options.maxTokens ?? 4096,
       ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      system: buildSystem(systemPrompt),
+      system: buildSystem(systemPrompt, options.runtimeSystemContext),
       messages: sanitized,
       stream: true,
     },
@@ -348,6 +354,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): LLMP
       const modelId = resolveModel(request.model)
       const messages = toAnthropicMessages(request.messages)
       yield* streamAnthropic(client, modelId, request.systemPrompt, messages, {
+        runtimeSystemContext: request.runtimeSystemContext,
         maxTokens: request.maxTokens,
         temperature: request.temperature,
         tools: request.tools,
@@ -376,6 +383,7 @@ export function createAnthropicProvider(options: AnthropicProviderOptions): LLMP
           }
           const consolidated = mergeConsecutiveSameRole(history)
           yield* streamAnthropic(client, modelId, opts.systemPrompt, consolidated, {
+            runtimeSystemContext: opts.runtimeSystemContext,
             maxTokens: opts.maxTokens,
             temperature: opts.temperature,
             tools: opts.tools,

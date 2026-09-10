@@ -2,10 +2,13 @@
  * [COMP:app-web/feed-surface-shell] Readiness gate contract.
  *
  * vitest in app-web is node-only — `renderToString` + static markup, the
- * doc-sidebar-row.test.tsx shape. Effects never run under SSR, so the
- * provider stays in its initial `loading` state and the gate must render
- * the loading status INSTEAD of children — the invariant ported feed pages
- * rely on (they read `useFeedWorkspace()` synchronously).
+ * doc-sidebar-row.test.tsx shape. The surface cache is browser-only, so
+ * under SSR the provider reports its `loading` state and the gate must
+ * render the skeleton INSTEAD of children — the invariant ported feed pages
+ * rely on (they read `useFeedWorkspace()` synchronously). The cold branch
+ * is a geometry-matched skeleton, never a "Loading..." sentence
+ * (instant-navigation contract N4 / N5); the paint-first half lives in
+ * `feed-surface-cache.test.tsx`.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -33,7 +36,7 @@ import { FeedSurfaceShell } from "../feed-surface-shell";
 const dict = en as unknown as Dictionary;
 
 describe("[COMP:app-web/feed-surface-shell] FeedSurfaceShell", () => {
-  it("gates children behind the loading state (no premature context reads)", () => {
+  it("gates children behind a skeleton, never a loading sentence (no premature context reads)", () => {
     const html = renderToString(
       <I18nProvider locale="en" dict={dict}>
         <FeedSurfaceShell workspaceId="ws-1">
@@ -41,7 +44,8 @@ describe("[COMP:app-web/feed-surface-shell] FeedSurfaceShell", () => {
         </FeedSurfaceShell>
       </I18nProvider>,
     );
-    expect(html).toContain(en.feedPage.shell.loading);
+    expect(html).toContain("data-feed-gate-skeleton");
+    expect(html).not.toContain(en.feedPage.shell.loading);
     expect(html).not.toContain("data-feed-page");
   });
 

@@ -92,10 +92,12 @@ import type {
   Tool,
   ToolContext,
   CrmOperationsTools,
+  AssociationTools,
   Embedder,
 } from '@use-brian/core'
 import { query, runWithAgentAccess } from '../db/client.js'
 import { searchRecording as searchRecordingFn, readRecordingRange, type RecordingSegmentHit } from '../db/retrieval-store.js'
+import { createListRecordingsTool } from '../recordings/recording-chat-tools.js'
 import { searchFileSegments as searchFileSegmentsFn, readFileSegmentRange, type FileSegmentHit } from '../db/retrieval-store.js'
 import type { BrainKeyScope } from '../db/brain-keys-store.js'
 import type { PageTemplateStore } from '../db/page-templates-store.js'
@@ -347,6 +349,7 @@ type BuildOpts = {
   memoryTools: BrainMemoryTools
   taskTools: BrainTaskTools
   crmTools: BrainCrmTools
+  associationTools?: AssociationTools
   retrievalTools: BrainRetrievalTools
   /**
    * Query embedder for the dedicated `searchRecording` tool's vector arm
@@ -401,7 +404,8 @@ type BuildOpts = {
 const READ_TOOL_NAMES = new Set<string>([
   // Unified read
   'searchBrain',
-  // Scoped single-recording retrieval (recording-to-brain)
+  // Recording catalog discovery and scoped transcript retrieval
+  'listRecordings',
   'searchRecording',
   // Scoped single-file retrieval (large-content-artifacts)
   'searchFileContent',
@@ -433,6 +437,7 @@ const READ_TOOL_NAMES = new Set<string>([
   'listCrmEvents',
   'listCrmParticipation',
   'listCrmPipelines',
+  'getCrmDelivery',
   // Workspace files (read) — present only when fileTools are wired
   'fileRead',
   'fileSearch',
@@ -1213,16 +1218,19 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       "to the key's ceiling, scoped to the key's workspace.",
   })
 
-  // ── Scoped recording retrieval: searchRecording (recording-to-brain).
-  // Hand-rolled (not bridged) — it routes into the dedicated `searchRecording`
-  // scope handler, which is intentionally NOT in KNOWN_SCOPES so an unscoped
-  // searchBrain never floods on a recording's 70-110 segments. Vector + ILIKE
-  // fused, scoped to one recording, through queryWithRLS + the access predicate.
+  // Catalog rows exist before transcript segments. Reuse chat's metadata
+  // lookup so pending recordings are discoverable through the same actor gate.
+  const listRecordings = bridgeCoreTool(createListRecordingsTool(), resolveCtx, workspaceId)
+
+  // Scoped transcript retrieval: vector + ILIKE fused within one recording,
+  // through queryWithRLS + the access predicate. General searchBrain can also
+  // return transcript_segment hits once transcription has persisted them.
   const searchRecordingTool: BrainTool = {
     name: 'searchRecording',
     description:
       'Retrieve passages from ONE transcribed recording, scoped to that recording only ' +
-      '(never the whole company brain). Pass the recording Episode id as `recordingId` plus a `query`; ' +
+      '(never the whole company brain). Use `listRecordings` to find a recording by name/date and ' +
+      'check its status before the transcript is ready. Pass its `recordingId` plus a `query`; ' +
       'returns the most relevant segments with `start_ms` timestamps and `speaker`, so you can cite the ' +
       'exact moment ("around 47:12, Priya said ..."). For a summarize/overview intent that spans many ' +
       'segments, page sequential windows with `fromIndex`/`toIndex` instead of relying on top-K. ' +
@@ -1586,6 +1594,11 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
 
   // ── CRM bridges
   const crmBridges = [
+    ...[...filterToolsByCapabilities(new Map([
+      [opts.crmTools.saveCrmEntitlementPlan.name, opts.crmTools.saveCrmEntitlementPlan],
+      [opts.crmTools.saveCrmEvent.name, opts.crmTools.saveCrmEvent],
+    ]), opts.agentActiveCapabilities ?? new Set()).values()]
+      .map(tool => bridgeCoreTool(tool, resolveCtx, workspaceId)),
     bridgeCoreTool(opts.crmTools.saveContact, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.getContact, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.listContacts, resolveCtx, workspaceId),
@@ -1625,7 +1638,17 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     bridgeCoreTool(opts.crmTools.recordCrmParticipation, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.updateCrmParticipation, resolveCtx, workspaceId),
     bridgeCoreTool(opts.crmTools.setDealPipelineStage, resolveCtx, workspaceId),
+    ...[...filterToolsByCapabilities(new Map([opts.crmTools.sendCrmMessage,opts.crmTools.getCrmDelivery].map(tool=>[tool.name,tool])),opts.agentActiveCapabilities ?? new Set()).values()].map(tool=>bridgeCoreTool(tool,resolveCtx,workspaceId)),
   ]
+
+  const visibleAssociation = filterToolsByCapabilities(
+    new Map(Object.values(opts.associationTools ?? {}).map(tool => [tool.name, tool])),
+    opts.agentActiveCapabilities ?? new Set(),
+  )
+  const associationReads = new Set([...visibleAssociation.values()].filter(tool => tool.isReadOnly).map(tool => tool.name))
+  const associationBridges = [...visibleAssociation.values()]
+    .filter(tool => opts.scope === 'read_write' || tool.isReadOnly)
+    .map(tool => bridgeCoreTool(tool, resolveCtx, workspaceId))
 
   // ── File bridges (workspace filesystem). Present only when a blob client is
   // configured (opts.fileTools set). Both byte-preserving saves are bridged:
@@ -1807,10 +1830,12 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     : null
 
   const all: BrainTool[] = [
+    ...associationBridges,
     ...storeBridges,
     ...(askStoreAssistant ? [askStoreAssistant] : []),
     // Reads
     searchBrain,
+    listRecordings,
     searchRecordingTool,
     searchFileContentTool,
     searchKnowledge,
@@ -1828,6 +1853,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       t.name === 'listCrmSegments' || t.name === 'previewCrmSegment' ||
       t.name === 'listCrmEntitlementPlans' || t.name === 'listCrmEntitlements' ||
       t.name === 'listCrmEvents' || t.name === 'listCrmParticipation' ||
+      t.name === 'getCrmDelivery' ||
       t.name === 'listCrmPipelines'
     ),
     ...fileBridges.filter((t) => t.name === 'fileRead' || t.name === 'fileSearch'),
@@ -1855,7 +1881,8 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
       t.name === 'saveCrmSegment' || t.name === 'archiveCrmSegment' ||
       t.name === 'grantCrmEntitlement' || t.name === 'updateCrmEntitlement' ||
       t.name === 'recordCrmParticipation' || t.name === 'updateCrmParticipation' ||
-      t.name === 'setDealPipelineStage'
+      t.name === 'setDealPipelineStage' || t.name === 'sendCrmMessage' ||
+      t.name === 'saveCrmEntitlementPlan' || t.name === 'saveCrmEvent'
     ),
     ...fileBridges.filter((t) =>
       t.name === 'fileWrite' || t.name === 'fileAppend' ||
@@ -1891,6 +1918,7 @@ export function buildBrainTools(opts: BuildOpts): BrainTool[] {
     ? all.filter(
         (t) =>
           READ_TOOL_NAMES.has(t.name) ||
+          associationReads.has(t.name) ||
           agentReadNames.has(t.name) ||
           storeNames.has(t.name) ||
           t.name === 'askStoreAssistant',

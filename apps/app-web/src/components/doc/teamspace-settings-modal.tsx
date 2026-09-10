@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Teamspace settings modal + "New teamspace" dialog
  * (docs/architecture/features/teamspaces.md → UI).
@@ -62,7 +64,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type TeamspaceSettingsTab = "general" | "members";
 
@@ -245,7 +247,7 @@ export function TeamspaceCreateDialog({
               void create();
             }
           }}
-          className="mt-1.5 h-9 w-full rounded-md border border-border bg-background px-3 text-sm font-normal text-foreground outline-none placeholder:text-muted-foreground"
+          className="mt-1.5 h-11 w-full rounded-md border border-border bg-background px-3 text-[16px] font-normal text-foreground outline-none placeholder:text-muted-foreground sm:h-9 md:text-sm"
         />
       </label>
       <div className="mt-3">
@@ -312,7 +314,7 @@ export function TeamspaceSettingsModal({
         </Dialog.Title>
         <Dialog.Close
           aria-label={t.teamspaceModalCloseAria}
-          className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="flex size-11 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground sm:size-6"
         >
           <X className="size-4" />
         </Dialog.Close>
@@ -327,7 +329,7 @@ export function TeamspaceSettingsModal({
             onClick={() => setTab(id)}
             aria-selected={tab === id}
             className={cn(
-              "-mb-px border-b-2 pb-2 text-[13px] font-medium transition-colors",
+              "-mb-px min-h-11 border-b-2 pb-2 text-[13px] font-medium transition-colors sm:min-h-0",
               tab === id
                 ? "border-primary text-foreground"
                 : "border-transparent text-muted-foreground hover:text-foreground",
@@ -338,7 +340,7 @@ export function TeamspaceSettingsModal({
         ))}
       </div>
 
-      <div className="mt-4 max-h-[min(60vh,32rem)] overflow-y-auto">
+      <div className="mt-4 max-h-[min(60dvh,32rem)] overflow-y-auto">
         {tab === "general" ? (
           <GeneralTab
             teamspace={teamspace}
@@ -515,7 +517,7 @@ function GeneralTab({
               setName(e.target.value);
               setSaved(false);
             }}
-            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            className="h-11 w-full rounded-md border border-border bg-background px-3 text-[16px] text-foreground outline-none placeholder:text-muted-foreground sm:h-9 md:text-sm"
           />
         </div>
       </div>
@@ -565,7 +567,7 @@ function GeneralTab({
             setDescription(e.target.value);
             setSaved(false);
           }}
-          className="mt-1.5 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+          className="mt-1.5 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[16px] text-foreground outline-none placeholder:text-muted-foreground md:text-sm"
         />
       </div>
 
@@ -766,7 +768,7 @@ function MembersTab({
         value={query}
         placeholder={t.teamspaceMemberSearchPlaceholder}
         onChange={(e) => setQuery(e.target.value)}
-        className="h-8 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+        className="h-11 w-full rounded-md border border-border bg-background px-3 text-[16px] text-foreground outline-none placeholder:text-muted-foreground sm:h-8 md:text-sm"
       />
 
       {error && <div className="text-xs text-destructive">{error}</div>}
@@ -825,7 +827,7 @@ function MembersTab({
                       type="button"
                       disabled={busyUserId === m.userId}
                       onClick={() => void remove(m)}
-                      className="text-[11px] text-destructive/80 hover:text-destructive disabled:opacity-50"
+                      className="min-h-11 px-2 text-[11px] text-destructive/80 hover:text-destructive disabled:opacity-50 sm:min-h-0 sm:px-0"
                     >
                       {self ? t.teamspaceLeaveAction : t.teamspaceMemberRemove}
                     </button>

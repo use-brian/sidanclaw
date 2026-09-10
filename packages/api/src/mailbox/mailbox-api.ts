@@ -1,3 +1,4 @@
+import type { CrmMailContext } from '../crm-operations/delivery-policy.js'
 /**
  * `MailboxApi` seam implementation over imapflow + nodemailer + mailparser.
  *
@@ -395,6 +396,7 @@ async function searchFolder(
 }
 
 export type CreateMailboxApiOptions = {
+  deliveryContext?: CrmMailContext
   /** Session-cache key — the connector instance id. */
   cacheKey: string
   /** Lazy credential resolution (the `getPat` pattern — resolved per call). */
@@ -794,7 +796,7 @@ export function createMailboxApi(opts: CreateMailboxApiOptions): MailboxApi {
         ...(inReplyToHeader ? { inReplyTo: inReplyToHeader } : {}),
         ...(references ? { references } : {}),
       })
-      await sendComposed(settings, composed)
+      await sendComposed(settings, composed, opts.deliveryContext, { crmPurposeKey:params.crmPurposeKey,crmTemplateKey:params.crmTemplateKey })
 
       // Best-effort Sent copy — the send already egressed; never fail on this.
       // Gmail auto-saves smtp.gmail.com submissions, so its provider-aware
@@ -808,11 +810,8 @@ export function createMailboxApi(opts: CreateMailboxApiOptions): MailboxApi {
             const sent = await resolveSentPath(client)
             if (sent) await client.append(sent, composed.raw, ['\\Seen'])
           })
-        } catch (err) {
-          console.warn(
-            '[mailbox] Sent-copy APPEND failed (send succeeded):',
-            err instanceof Error ? err.message : String(err),
-          )
+        } catch {
+          console.warn('[mailbox] Sent-copy APPEND failed (send succeeded).')
         }
       }
 

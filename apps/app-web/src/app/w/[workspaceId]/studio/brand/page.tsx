@@ -1,5 +1,6 @@
 "use client";
 
+
 /**
  * Studio → Brand — the workspace brand record's management surface.
  *
@@ -27,10 +28,11 @@
  * [COMP:app-web/studio-brand]
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "@/lib/auth-fetch";
 import { useWorkspaces } from "@/contexts/workspace-context";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
+import { RailSurfaceSkeleton } from "@/components/chrome/surface-skeleton";
 import { StudioTopbarActions } from "@/components/studio/studio-topbar";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,35 +40,11 @@ import {
   isDirty,
   recordToForm,
   type BrandFormState,
-  type BrandRecordLike,
 } from "@/lib/brand-form";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-
-type BrandSummary = {
-  id: string;
-  slug: string;
-  name: string;
-  isDefault: boolean;
-  status: "draft" | "active" | "superseded";
-  activeVersion: number | null;
-  hasDraft: boolean;
-};
-
-type BrandDetail = BrandSummary & {
-  draft: BrandRecordLike | null;
-  activeRecord: BrandRecordLike | null;
-};
-
-type BrandVersion = {
-  id: string;
-  version: number;
-  approvedBy: string | null;
-  approvedAt: string;
-};
+import { brandApiBase, useBrandData, type BrandDetail } from "./use-brand-data";
 
 type Tab = "approved" | "draft" | "history";
 
@@ -84,11 +62,17 @@ export default function StudioBrandPage() {
   const copy = t.studioPage.brandPage;
   const { activeId: workspaceId } = useWorkspaces();
 
-  const [brand, setBrand] = useState<BrandDetail | null>(null);
-  const [canApprove, setCanApprove] = useState(false);
-  const [versions, setVersions] = useState<BrandVersion[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // The record, the approve permission and the version history read the
+  // workspace's cached key (instant-navigation N1): a revisit paints the form
+  // on the first frame and revalidates behind it.
+  const { data, error: loadError, refresh: load, updateBrand } = useBrandData(workspaceId);
+  const brand = data?.brand ?? null;
+  const canApprove = data?.canApprove ?? false;
+  const versions = data?.versions ?? [];
+  // A failed ACTION (create, save, approve); a failed first load reports
+  // through `loadError` from the hook.
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? (loadError ? copy.loadError : null);
   const [issues, setIssues] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>("draft");
   const [saving, setSaving] = useState(false);
@@ -101,7 +85,7 @@ export default function StudioBrandPage() {
   const [form, setForm] = useState<BrandFormState>(() => recordToForm(null));
   const [seed, setSeed] = useState<BrandFormState>(() => recordToForm(null));
 
-  const base = workspaceId ? `${API_URL}/api/workspaces/${workspaceId}/brand` : null;
+  const base = workspaceId ? brandApiBase(workspaceId) : null;
 
   const seedFrom = useCallback((detail: BrandDetail | null) => {
     // The draft is the editable body; falling back to the approved record is
@@ -112,39 +96,22 @@ export default function StudioBrandPage() {
     setSeed(next);
   }, []);
 
-  const load = useCallback(async () => {
-    if (!base) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await authFetch(`${base}/default`);
-      if (res.status === 404) {
-        setBrand(null);
-        seedFrom(null);
-        const listRes = await authFetch(base);
-        if (listRes.ok) setCanApprove(Boolean((await listRes.json()).canApprove));
-        return;
-      }
-      if (!res.ok) throw new Error(String(res.status));
-      const body = await res.json();
-      setBrand(body.brand as BrandDetail);
-      setCanApprove(Boolean(body.canApprove));
-      seedFrom(body.brand as BrandDetail);
-      setTab((body.brand as BrandDetail).activeRecord ? "approved" : "draft");
-      const vRes = await authFetch(`${base}/${(body.brand as BrandDetail).id}/versions`);
-      if (vRes.ok) setVersions(((await vRes.json()).versions ?? []) as BrandVersion[]);
-    } catch {
-      setError(copy.loadError);
-    } finally {
-      setLoading(false);
-    }
-  }, [base, copy.loadError, seedFrom]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   const dirty = useMemo(() => isDirty(form, seed), [form, seed]);
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
+  // Adopt a (re)validated record into the form. The first snapshot seeds the
+  // form and picks the landing tab; later ones (a refresh after approve, a
+  // revalidation) re-seed ONLY while the draft is clean, so a change landing
+  // mid-edit never clobbers typing (the editable-draft rule).
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (data === undefined) return;
+    const first = !seededRef.current;
+    seededRef.current = true;
+    if (first || !dirtyRef.current) seedFrom(data.brand);
+    if (first) setTab(data.brand?.activeRecord ? "approved" : "draft");
+  }, [data, seedFrom]);
 
   const set = <K extends keyof BrandFormState>(key: K) =>
     (e: { target: { value: string } }) => setForm((f) => ({ ...f, [key]: e.target.value }));
@@ -197,8 +164,8 @@ export default function StudioBrandPage() {
         return;
       }
       const body = await res.json();
-      setBrand(body.brand as BrandDetail);
       setSeed(form);
+      updateBrand(body.brand as BrandDetail);
       setSavedAt(Date.now());
     } catch {
       setError(copy.saveError);
@@ -253,13 +220,13 @@ export default function StudioBrandPage() {
           rows={rows}
           value={form[key]}
           onChange={set(key)}
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm font-mono"
         />
       ) : (
         <input
           value={form[key]}
           onChange={set(key)}
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
         />
       )}
       {hint ? <span className="block text-xs text-muted-foreground">{hint}</span> : null}
@@ -274,7 +241,7 @@ export default function StudioBrandPage() {
         <h3 className="text-sm font-semibold">{heading}</h3>
         <dl className="space-y-1">
           {shown.map(([k, v]) => (
-            <div key={k} className="grid grid-cols-[10rem_1fr] gap-2 text-sm">
+            <div key={k} className="grid grid-cols-1 gap-0.5 text-sm sm:grid-cols-[10rem_1fr] sm:gap-2">
               <dt className="text-muted-foreground">{k}</dt>
               <dd className="whitespace-pre-wrap">{v}</dd>
             </div>
@@ -286,8 +253,17 @@ export default function StudioBrandPage() {
 
   const approvedForm = useMemo(() => recordToForm(brand?.activeRecord ?? null), [brand]);
 
-  if (loading) {
-    return <div className="p-6 text-sm text-muted-foreground">{copy.heading}</div>;
+  if (data === undefined) {
+    // Cold: nothing cached for this workspace yet. A failed first load says
+    // so; otherwise a form-shaped skeleton holds the geometry (N4).
+    if (loadError) {
+      return <div className="p-6 text-sm text-destructive">{copy.loadError}</div>;
+    }
+    return (
+      <div className="p-6">
+        <RailSurfaceSkeleton chrome={false} padded={false} rows={4} />
+      </div>
+    );
   }
 
   if (!brand) {
@@ -306,7 +282,7 @@ export default function StudioBrandPage() {
                 value={newName}
                 placeholder={copy.namePlaceholder}
                 onChange={(e) => setNewName(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
               />
             </label>
             <label className="block space-y-1">
@@ -315,7 +291,7 @@ export default function StudioBrandPage() {
                 value={newSlug}
                 placeholder={slugify(newName)}
                 onChange={(e) => setNewSlug(e.target.value)}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-[16px] md:text-sm"
               />
               <span className="block text-xs text-muted-foreground">{copy.slugHint}</span>
             </label>

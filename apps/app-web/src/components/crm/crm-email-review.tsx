@@ -31,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/skeleton";
 import { attachmentDisplayName, extractEmailSender, parseToolPreview } from "@/lib/approval-previews";
 import {
   fetchEmailReviewContext,
@@ -345,7 +346,7 @@ export function CrmEmailReviewWorkspace({
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 text-sm font-medium">
                           <span className="truncate">{contact.name}</span>
-                          <ChevronRight className="size-3.5 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+                          <ChevronRight className="size-3.5 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100" aria-hidden />
                         </div>
                         <div className="truncate text-[11px] text-muted-foreground">{contact.email}</div>
                       </div>
@@ -431,7 +432,7 @@ export function CrmEmailReviewWorkspace({
                             <time>{new Date(draft.updatedAt).toLocaleDateString()}</time>
                           </div>
                         </div>
-                        <ChevronRight className={cn("mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100", active && "opacity-100")} aria-hidden />
+                        <ChevronRight className={cn("mt-1 size-3.5 shrink-0 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100", active && "md:opacity-100")} aria-hidden />
                       </div>
                     </button>
                   </li>
@@ -472,7 +473,7 @@ export function CrmEmailReviewWorkspace({
                             <time>{new Date(item.approval.createdAt).toLocaleDateString()}</time>
                           </div>
                         </div>
-                        <ChevronRight className={cn("mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100", active && "opacity-100")} aria-hidden />
+                        <ChevronRight className={cn("mt-1 size-3.5 shrink-0 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100", active && "md:opacity-100")} aria-hidden />
                       </div>
                     </button>
                   </li>
@@ -668,12 +669,15 @@ export function CrmEmailReviewWorkspace({
                   value={body}
                   onChange={(event) => setBody(event.target.value)}
                   aria-label={t.replyBody}
-                  className="mt-2 min-h-64 w-full flex-1 resize-none rounded-xl border border-border bg-background px-3 py-3 text-[12.5px] leading-6 outline-none transition-shadow focus:ring-2 focus:ring-ring/30"
+                  className="mt-2 min-h-64 w-full flex-1 resize-none rounded-xl border border-border bg-background px-3 py-3 text-[16px] leading-6 outline-none transition-shadow focus:ring-2 focus:ring-ring/30 md:text-[12.5px]"
                 />
                 {actionError && <p role="alert" className="mt-2 text-xs text-destructive">{actionError}</p>}
               </div>
 
-              <div data-email-review-actions className="shrink-0 border-t border-border/70 bg-background/95 px-3 pt-3 pb-20 backdrop-blur">
+              {/* Below `lg` the pane scrolls as one column, so the action bar
+                  pins to the bottom over the safe area (D6 / D9); from `lg`
+                  it sits in flow with the `pb-20` that clears the fixed dock. */}
+              <div data-email-review-actions className="sticky bottom-0 z-10 shrink-0 border-t border-border/70 bg-background/95 px-3 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur lg:static lg:pb-20">
                 {dirty && (
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <p className="text-[10px] text-muted-foreground">{t.saveBeforeApprove}</p>
@@ -702,6 +706,35 @@ export function CrmEmailReviewWorkspace({
         ) : (
           <EmptySelection label={t.selectEmailDraft} />
         )}
+      </main>
+    </div>
+  );
+}
+
+/**
+ * Cold fallback for the review destination (instant-navigation contract N4):
+ * the rail + main frame in placeholder blocks, so a cold entry paints the
+ * geometry the real workspace fills instead of a "Loading..." line.
+ */
+export function CrmEmailReviewSkeleton() {
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col overflow-hidden bg-muted/10 animate-fade-in lg:flex-row"
+      aria-hidden
+      data-crm-skeleton="email-review"
+    >
+      <aside className="flex min-h-[12rem] shrink-0 flex-col gap-2 border-b border-border/70 bg-background p-3 lg:min-h-0 lg:min-w-60 lg:flex-1 lg:border-b-0 lg:border-r">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="space-y-2 rounded-xl border border-border/60 p-3">
+            <Skeleton className="h-3.5" style={{ width: `${50 + ((i * 17) % 40)}%` }} />
+            <Skeleton className="h-3 w-1/3" />
+          </div>
+        ))}
+      </aside>
+      <main className="flex min-w-0 flex-1 flex-col gap-3 bg-background p-4 lg:w-[68%]">
+        <Skeleton className="h-5 w-1/2" />
+        <Skeleton className="h-3.5 w-1/3" />
+        <Skeleton className="mt-2 h-64 w-full rounded-xl" />
       </main>
     </div>
   );

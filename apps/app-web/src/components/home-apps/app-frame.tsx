@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Custom Home app frame — the host side of running someone else's code.
  *
@@ -37,14 +39,17 @@
  * [COMP:app-web/home-app-frame]
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Loader2, Lock, Puzzle } from "lucide-react";
+import { AlertTriangle, Lock, Puzzle } from "lucide-react";
 import { OperatorTopbar } from "@/components/operator/operator-topbar";
+import { Skeleton } from "@/components/skeleton";
 import { useT, format } from "@/lib/i18n/client";
+import { useCachedResource } from "@/lib/surface-cache";
+import { homeAppSessionCacheKey } from "@/lib/surface-prefetch";
 import { fetchHomeAppSession, type HomeAppSession } from "@/lib/api/home-apps";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /**
  * Only in-app paths. A `ub:navigate` carrying an absolute URL would make the
@@ -77,27 +82,29 @@ export function AppFrame({
   const t = useT().homeApps;
   const router = useRouter();
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const [session, setSession] = useState<HomeAppSession | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setSession(await fetchHomeAppSession(appId));
-    setLoading(false);
-  }, [appId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // The session paints from the surface cache (instant-navigation contract
+  // N1): a revisit mounts the iframe on its first frame from the last-known
+  // entry URL + bridge token and revalidates behind it; only a cold entry
+  // shows the skeleton. `HOME_APPS_REFRESH_EVENT` marks the key stale (a
+  // re-sync changes `renderable`); the token timer below is its `refresh()`.
+  // A `null` session (not found / not renderable) is cached as such: it is
+  // the honest answer for the stale window, not a fallback to stale rows.
+  const resource = useCachedResource<HomeAppSession | null>(
+    workspaceId && appId ? homeAppSessionCacheKey(workspaceId, appId) : null,
+    () => fetchHomeAppSession(appId),
+  );
+  const session = resource.data ?? null;
+  const loading = resource.loading;
+  const { refresh } = resource;
 
   // Refresh the bridge token before it expires. The frame can also ask, but a
   // long-lived dashboard that never asks would silently lose brain access
   // mid-session, which reads to the user as the app being broken.
   useEffect(() => {
     if (!session?.bridgeTokenTtlMs) return;
-    const timer = setInterval(() => void load(), Math.max(session.bridgeTokenTtlMs / 2, 60_000));
+    const timer = setInterval(() => void refresh(), Math.max(session.bridgeTokenTtlMs / 2, 60_000));
     return () => clearInterval(timer);
-  }, [load, session?.bridgeTokenTtlMs]);
+  }, [refresh, session?.bridgeTokenTtlMs]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -150,10 +157,12 @@ export function AppFrame({
   );
 
   if (loading) {
+    // Cold entry only (nothing cached): the app pane's full-bleed geometry
+    // under the chrome row, never a sentence (N4).
     return chrome(
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
-        {t.loading}
+      <div aria-busy="true" data-testid="home-app-skeleton" className="flex h-full flex-col gap-3 p-4">
+        <Skeleton className="h-6 w-48 max-w-full" />
+        <Skeleton className="min-h-0 flex-1 rounded-lg" />
       </div>,
     );
   }

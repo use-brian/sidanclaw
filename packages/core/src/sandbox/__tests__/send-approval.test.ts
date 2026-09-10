@@ -58,7 +58,7 @@ const ctx: ToolContext = {
   // `activeCapabilities` refuses every browser tool before the send gate is
   // ever reached. This suite is about the send gate, so grant the capability.
   // See docs/architecture/features/builtin-primitives.md.
-  activeCapabilities: new Set(['computer']),
+  activeCapabilities: new Set(['computer', 'home_app:browsers:read', 'home_app:browsers:write']),
 }
 
 async function drain(executor: ReturnType<typeof createToolExecutor>): Promise<ContentBlock[]> {

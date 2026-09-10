@@ -1,3 +1,4 @@
+import type { HomeAppToolSet } from '@use-brian/shared'
 import type { ProgressClock } from '../engine/stall-watchdog.js'
 import type { TurnLedger } from '../engine/turn-ledger.js'
 import type { z } from 'zod'
@@ -468,6 +469,8 @@ export type Tool<Input extends z.ZodType = z.ZodType> = {
    * See `packages/core/src/tools/capability-gate.ts`.
    */
   requiresCapability?: string
+  /** Optional named mini-app set; otherwise inferred from the app capability and isReadOnly. */
+  homeAppToolSet?: HomeAppToolSet
 
   /**
    * When true, this tool is dropped from the *model-visible* tool list — it

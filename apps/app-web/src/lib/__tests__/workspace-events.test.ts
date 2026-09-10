@@ -16,6 +16,7 @@ import { WORKFLOW_REFRESH_EVENT } from "@/lib/workflow-events";
 import { HOME_APPS_REFRESH_EVENT } from "@/lib/home-apps-events";
 import { WORKSPACE_IDENTITY_REFRESH_EVENT } from "@/lib/workspace-identity-events";
 import { INBOX_REFRESH_EVENT } from "@/lib/inbox-refresh-events";
+import { GOAL_REFRESH_EVENT } from "@/lib/goal-events";
 import {
   allDomainDispatches,
   createRefreshFolder,
@@ -136,6 +137,19 @@ describe("[COMP:app-web/workspace-events] routeWorkspaceChange", () => {
     ]);
   });
 
+  // The goals board / Triage panel / goal detail read the surface cache and
+  // go stale off the spine map; before this primitive they relied on a local
+  // refetch tick only the acting tab could bump, so a draft the triage judge
+  // minted from a worker never reached an open board.
+  it("routes goal changes to the goal-refresh bus with rowId", () => {
+    expect(routeWorkspaceChange(payload("goal", { rowId: "g-1", action: "create" }))).toEqual([
+      {
+        event: GOAL_REFRESH_EVENT,
+        detail: { workspaceId: "ws-1", rowId: "g-1" },
+      },
+    ]);
+  });
+
   it("ignores unknown primitives — a newer server must never break an older client", () => {
     expect(
       routeWorkspaceChange(
@@ -163,6 +177,8 @@ describe("[COMP:app-web/workspace-events] routeWorkspaceChange", () => {
     expect(events).toContain(INBOX_REFRESH_EVENT);
     // ...and the Live roster (live-work.md §4).
     expect(events).toContain(LIVE_REFRESH_EVENT);
+    // ...and the goals board / Triage / goal detail cache keys.
+    expect(events).toContain(GOAL_REFRESH_EVENT);
   });
 });
 

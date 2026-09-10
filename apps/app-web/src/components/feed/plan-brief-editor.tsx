@@ -139,7 +139,7 @@ export function PlanBriefEditor({
               onChange={(e) => setBody(e.target.value)}
               placeholder={tp.briefPlaceholder}
               rows={5}
-              className="w-full resize-y rounded-lg border border-border/60 bg-background px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none focus-visible:shadow-none disabled:opacity-70"
+              className="w-full resize-y rounded-lg border border-border/60 bg-background px-2.5 py-2 text-[16px] md:text-[12.5px] leading-relaxed transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none focus-visible:shadow-none disabled:opacity-70"
             />
           </div>
 
@@ -157,7 +157,7 @@ export function PlanBriefEditor({
               disabled={!canEdit}
               onChange={(e) => setThemes(e.target.value)}
               placeholder={tp.themesPlaceholder}
-              className="h-8 w-full rounded-lg border border-border/60 bg-background px-2.5 text-[12.5px] transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none focus-visible:shadow-none disabled:opacity-70"
+              className="h-9 md:h-8 w-full rounded-lg border border-border/60 bg-background px-2.5 text-[16px] md:text-[12.5px] transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40 focus:outline-none focus-visible:shadow-none disabled:opacity-70"
             />
           </div>
 
@@ -179,7 +179,7 @@ export function PlanBriefEditor({
                 value={cadence}
                 disabled={!canEdit}
                 onChange={(e) => setCadence(e.target.value)}
-                className="h-7 w-14 rounded-md border border-border/60 bg-background px-2 text-[12.5px] tabular-nums transition-colors focus:border-primary/40 focus:outline-none focus-visible:shadow-none disabled:opacity-70"
+                className="h-9 md:h-7 w-16 md:w-14 rounded-md border border-border/60 bg-background px-2 text-[16px] md:text-[12.5px] tabular-nums transition-colors focus:border-primary/40 focus:outline-none focus-visible:shadow-none disabled:opacity-70"
               />
               <span className="text-[11px] text-muted-foreground">
                 {tp.cadenceUnit}
@@ -210,7 +210,7 @@ export function PlanBriefEditor({
                   cadencePerWeek: parseCadenceInput(cadence),
                 })
               }
-              className="inline-flex h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
+              className="inline-flex h-11 md:h-8 w-full items-center justify-center rounded-lg bg-action px-3 text-[12.5px] font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:opacity-50"
             >
               {tp.saveBrief}
             </button>

@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /** Hosted approval page for a self-hosted Feed device code. */
 
 import { useEffect, useState } from "react";
@@ -10,7 +12,7 @@ import { useT } from "@/lib/i18n/client";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 type LinkRequest = {
   request: {
@@ -98,7 +100,7 @@ export default function CloudLinkApprovalPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/20 px-4 py-10">
+    <main className="flex min-h-dvh items-center justify-center bg-muted/20 px-4 py-10">
       <section className="w-full max-w-xl rounded-2xl border border-border bg-background p-6 shadow-sm md:p-8">
         <div className="flex size-11 items-center justify-center rounded-xl bg-foreground text-background">
           {status === "approved" ? <ShieldCheck className="size-5" /> : <Link2 className="size-5" />}
@@ -171,7 +173,9 @@ export default function CloudLinkApprovalPage() {
             </div>
 
             {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
-            <Button className="mt-5 w-full" disabled={!selected || approving} onClick={() => void approve()}>
+            {/* 36px below `md` (M3) on the page's one primary action; the
+                primitive already lifts it to 44px below `sm`. */}
+            <Button className="mt-5 h-9 w-full md:h-8" disabled={!selected || approving} onClick={() => void approve()}>
               {t.approvalConfirm}
             </Button>
           </>

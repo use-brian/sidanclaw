@@ -1759,6 +1759,14 @@ export function viewsRoutes(opts: ViewsRouteOptions): Router {
     res.json(viewMetadata(fresh))
   })
 
+  // Version handshake: an older API must not silently ignore offline IDs.
+  router.get('/workspaces/:workspaceId/views/offline-capabilities', async (req, res) => {
+    const userId = (req as { userId?: string }).userId
+    if (!userId) return unauthorized(res)
+    if (!await opts.workspaceStore.getRole(userId, req.params.workspaceId)) return notMember(res)
+    res.json({ clientAssignedPageIds: true })
+  })
+
   // POST /workspaces/:wid/views/draft  — create an empty draft
   router.post('/workspaces/:workspaceId/views/draft', async (req, res) => {
     const userId = (req as { userId?: string }).userId
@@ -1774,12 +1782,16 @@ export function viewsRoutes(opts: ViewsRouteOptions): Router {
     // An optional `nestParentId` files the new draft under an existing
     // page in the doc sidebar tree (migration 210).
     const body = (req.body ?? {}) as {
+      id?: unknown
       name?: string
       binding?: unknown
       nestParentId?: unknown
       blocks?: unknown
       teamspaceId?: unknown
     }
+
+    const parsedId = z.string().uuid().optional().safeParse(body.id)
+    if (!parsedId.success) return badRequest(res, 'id must be a UUID')
 
     // Optional block seed (migration 281) — "Start from a template" creates the
     // draft pre-filled with a template's blocks instead of an empty page. Same
@@ -1833,27 +1845,41 @@ export function viewsRoutes(opts: ViewsRouteOptions): Router {
     const userNamed = typeof body.name === 'string' && body.name.trim().length > 0
     const name = userNamed ? body.name!.trim().slice(0, 256) : 'New draft'
 
-    const created = await opts.savedViewStore.createDraft({
-      userId,
-      workspaceId,
-      name,
-      nameOrigin: userNamed ? 'user' : 'placeholder',
-      // `saved_views.entity` is the closed 5-enum; a custom-table draft defaults
-      // it to 'tasks' (the block binding is authoritative for content).
-      entity: binding.entity === 'custom' ? 'tasks' : binding.entity,
-      viewType: binding.viewType,
-      binding,
-      page: seededPage ?? emptyPage,
-      nestParentId,
-      teamspaceId,
-      // Interactive create (the doc-editor blank / from-template flows): defer
-      // the `created` page-event-trigger instead of firing it on this empty,
-      // just-minted draft. The client commits it once the user engages
-      // (debounced typing) or navigates away, via /views/:id/commit-created.
-      // Migration 283 / docs workflow.md → "Deferred created (interactive drafts)".
-      deferCreatedEvent: true,
-    })
-    res.status(201).json(viewMetadata(created))
+    if (parsedId.data && nestParentId) {
+      const parent = await opts.savedViewStore.getById(userId, nestParentId)
+      if (!parent || parent.workspaceId !== workspaceId) return notFound(res, 'Parent page not found')
+    }
+
+    try {
+      const created = await opts.savedViewStore.createDraft({
+        ...(parsedId.data ? { id: parsedId.data } : {}),
+        userId,
+        workspaceId,
+        name,
+        nameOrigin: userNamed ? 'user' : 'placeholder',
+        // `saved_views.entity` is the closed 5-enum; a custom-table draft defaults
+        // it to 'tasks' (the block binding is authoritative for content).
+        entity: binding.entity === 'custom' ? 'tasks' : binding.entity,
+        viewType: binding.viewType,
+        binding,
+        page: seededPage ?? emptyPage,
+        nestParentId,
+        teamspaceId,
+        // Interactive create (the doc-editor blank / from-template flows): defer
+        // the `created` page-event-trigger instead of firing it on this empty,
+        // just-minted draft. The client commits it once the user engages
+        // (debounced typing) or navigates away, via /views/:id/commit-created.
+        // Migration 283 / docs workflow.md → "Deferred created (interactive drafts)".
+        deferCreatedEvent: true,
+      })
+      res.status(201).json(viewMetadata(created))
+    } catch (error) {
+      if ((error as { code?: string }).code === 'PAGE_ID_CONFLICT') {
+        res.status(409).json({ error: 'Page ID is already in use' })
+        return
+      }
+      throw error
+    }
   })
 
   // POST /views/:id/commit-created — fire the deferred `created` page-event for

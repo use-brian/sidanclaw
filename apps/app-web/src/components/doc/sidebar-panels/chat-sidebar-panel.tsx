@@ -24,12 +24,17 @@
  * the same URL state the surface reads, so the two never need a private bus
  * to agree on which thread is open.
  *
- * Fetches its own copy of the lists (the "sidebar fetches its own copy"
- * pattern the Tasks panel established) and re-fetches on
- * `CHAT_SESSIONS_REFRESH_EVENT` — the surface dispatches it when a turn
- * settles (auto-title), when a fresh session is adopted mid-turn, and when a
- * shared chat is started, so the rail tracks the conversation without either
- * side owning the other's state.
+ * Reads the SAME cached lists the surface reads (`useChatSessionsData`,
+ * `lib/chat-surface-data.ts`: `chat-roster:` / `chat-sessions:` /
+ * `chat-shared:` in the surface cache, mirrored to IndexedDB), so re-entering
+ * Chat paints the last-known rail on the first frame and revalidates behind
+ * it (instant-navigation contract N1). The panel carries no refetch listener:
+ * the spine's `session` primitive and the same-tab
+ * `CHAT_SESSIONS_REFRESH_EVENT` (a turn settling with an auto-title, a fresh
+ * session adopted mid-turn, a shared chat started) mark the keys stale
+ * through the hook, and this panel's own rename / delete patch the cached
+ * rows optimistically before dispatching the same signal. The one cold state
+ * (nothing cached anywhere) paints skeleton rows, never "Loading".
  *
  * Spec: docs/architecture/features/chat-app.md → "Sidebar panel".
  * [COMP:app-web/sidebar-panel-chat]
@@ -42,37 +47,52 @@ import { ChevronRight, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react
 import { cn } from "@/lib/utils";
 import { useT, format } from "@/lib/i18n/client";
 import { AssistantAvatar } from "@/components/assistant-avatar";
+import { Skeleton } from "@/components/skeleton";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { promptDialog } from "@/components/ui/prompt-dialog";
 import {
-  listWorkspaceAssistants,
-  type WorkspaceAssistantSummary,
-} from "@/lib/api/views";
-import {
   CHAT_SESSION_ACTIVITY_EVENT,
-  CHAT_SESSIONS_REFRESH_EVENT,
   dispatchChatSessionsRefresh,
   type ChatSessionActivityDetail,
 } from "@/lib/chat-session-events";
 import {
   createWorkspaceSession,
   deleteSession,
-  listSessionsForAssistants,
-  listWorkspaceSessions,
   renameSessionTitle,
   type DocSession,
   type WorkspaceSession,
 } from "@/lib/api/sessions";
+import {
+  patchPersonalChatSessions,
+  patchSharedChatSessions,
+  useChatSessionsData,
+} from "@/lib/chat-surface-data";
 import { isRoomUnread } from "@/lib/chat-seen";
 
-/** The Brain panel's nav-row recipe — active is the `.doc-nav-active` pill. */
+/** The Brain panel's nav-row recipe — active is the `.doc-nav-active` pill.
+ *  44px rows below `md` (responsive contract M3: "chat history rows 44px"),
+ *  with room on the right for the touch-sized row menu. */
 const rowCls = (active: boolean) =>
   cn(
-    "block w-full rounded-md px-2 py-1.5 pr-7 text-left text-sm transition-colors",
+    "flex min-h-11 w-full items-center rounded-md px-2 py-1.5 pr-11 text-left text-sm transition-colors md:min-h-0 md:pr-7",
     active
       ? "doc-nav-active font-medium text-sidebar-accent-foreground"
       : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
   );
+
+/** Cold-cache fallback: rows shaped like the rail's, never a sentence (N4). */
+function RailRowsSkeleton({ rows = 4 }: { rows?: number }) {
+  return (
+    <div aria-hidden className="flex flex-col gap-0.5">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="flex min-h-11 items-center gap-2 px-2 py-1.5 md:min-h-0">
+          <Skeleton className="size-4 shrink-0 rounded-full" />
+          <Skeleton className="h-3" style={{ width: `${44 + ((i * 19) % 40)}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const sectionHeaderCls =
   "px-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-sidebar-foreground/45";
@@ -97,9 +117,14 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
   const view: "personal" | "workspace" =
     searchParams?.get("v") === "workspace" ? "workspace" : "personal";
 
-  const [rows, setRows] = useState<DocSession[] | null>(null);
-  const [sharedRows, setSharedRows] = useState<WorkspaceSession[] | null>(null);
-  const [assistants, setAssistants] = useState<WorkspaceAssistantSummary[]>([]);
+  // The cached lists, shared with the surface. `null` only when nothing is
+  // cached in memory or on disk - the skeleton state.
+  const {
+    assistants,
+    personal: rows,
+    shared: sharedRows,
+    refreshShared,
+  } = useChatSessionsData(workspaceId);
   const [search, setSearch] = useState("");
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -114,12 +139,13 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
     Record<string, RoomActivityOverride>
   >({});
 
-  /** Reconcile the immediate same-tab signal with persisted session status.
-   *  A short grace keeps a just-started turn pulsing while the chat route is
-   *  still in preflight and has not flipped the row to `running` yet. */
-  const applySharedRows = useCallback((shared: WorkspaceSession[]) => {
-    setSharedRows(shared);
-    const byId = new Map(shared.map((row) => [row.id, row]));
+  /** Reconcile the immediate same-tab signal with persisted session status
+   *  whenever the shared list (re)paints. A short grace keeps a just-started
+   *  turn pulsing while the chat route is still in preflight and has not
+   *  flipped the row to `running` yet. */
+  useEffect(() => {
+    if (!sharedRows) return;
+    const byId = new Map(sharedRows.map((row) => [row.id, row]));
     const now = Date.now();
     setActivityBySession((current) => {
       let changed = false;
@@ -138,43 +164,7 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
       }
       return changed ? next : current;
     });
-  }, []);
-
-  const refresh = useCallback(async () => {
-    try {
-      // Sessions are assistant-bound, so the unified rail merges every
-      // accessible assistant's list — a thread started with a second
-      // assistant (in the dock or here) must not be invisible.
-      const roster = await listWorkspaceAssistants(workspaceId);
-      setAssistants(roster);
-      const [personal, shared] = await Promise.all([
-        listSessionsForAssistants({
-          workspaceId,
-          assistantIds: roster.map((a) => a.id),
-        }),
-        listWorkspaceSessions({ workspaceId }),
-      ]);
-      setRows(personal);
-      applySharedRows(shared);
-    } catch {
-      setRows((prev) => prev ?? []);
-      setSharedRows((prev) => prev ?? []);
-    }
-  }, [applySharedRows, workspaceId]);
-
-  useEffect(() => {
-    setRows(null);
-    setSharedRows(null);
-    void refresh();
-  }, [refresh]);
-
-  // The surface (and this panel itself, after a rename/delete) signals list
-  // changes here — payloads are signals, never data, so just re-fetch.
-  useEffect(() => {
-    const handler = () => void refresh();
-    window.addEventListener(CHAT_SESSIONS_REFRESH_EVENT, handler);
-    return () => window.removeEventListener(CHAT_SESSIONS_REFRESH_EVENT, handler);
-  }, [refresh]);
+  }, [sharedRows]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -248,12 +238,12 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     if (view !== "workspace" || !hasWorkingRoom) return;
     const poll = window.setInterval(() => {
-      void listWorkspaceSessions({ workspaceId })
-        .then(applySharedRows)
-        .catch(() => {});
+      // A forced revalidation of the cached shared list: rows stay painted
+      // while the status column catches up.
+      void refreshShared().catch(() => {});
     }, ROOM_ACTIVITY_STATUS_POLL_MS);
     return () => window.clearInterval(poll);
-  }, [applySharedRows, hasWorkingRoom, view, workspaceId]);
+  }, [hasWorkingRoom, refreshShared, view]);
 
   const onRename = useCallback(
     async (row: DocSession) => {
@@ -266,15 +256,21 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
       });
       if (!next || next.trim() === row.title) return;
       try {
-        await renameSessionTitle(row.id, next.trim());
+        const title = next.trim();
+        await renameSessionTitle(row.id, title);
         setError(null);
-        await refresh();
+        // Patch the cached row so the rail (and the surface's header) show
+        // the new title now; the refresh signal revalidates behind it.
+        const retitle = <R extends DocSession>(list: R[]): R[] =>
+          list.map((r) => (r.id === row.id ? { ...r, title } : r));
+        if ("startedByUserId" in row) patchSharedChatSessions(workspaceId, retitle);
+        else patchPersonalChatSessions(workspaceId, retitle);
         dispatchChatSessionsRefresh(workspaceId);
       } catch {
         setError(t.renameFailed);
       }
     },
-    [refresh, t, workspaceId],
+    [t, workspaceId],
   );
 
   const onDelete = useCallback(
@@ -298,13 +294,18 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
             scroll: false,
           });
         }
-        await refresh();
+        // Drop the row from whichever cached list held it; the refresh
+        // signal revalidates behind the paint.
+        const without = <R extends DocSession>(list: R[]): R[] =>
+          list.filter((r) => r.id !== row.id);
+        patchPersonalChatSessions(workspaceId, without);
+        patchSharedChatSessions(workspaceId, without);
         dispatchChatSessionsRefresh(workspaceId);
       } catch {
         setError(t.deleteFailed);
       }
     },
-    [activeSessionId, base, refresh, router, t, view, workspaceId],
+    [activeSessionId, base, router, t, view, workspaceId],
   );
 
   const assistantById = useMemo(
@@ -397,9 +398,13 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
         type="button"
         aria-label={t.rowActionsAria}
         onClick={() => setMenuFor(menuFor === row.id ? null : row.id)}
-        className="absolute top-1/2 right-1 -translate-y-1/2 rounded p-0.5 text-sidebar-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
+        // Always visible with a 44px hit box on a phone (responsive contract
+        // M2 / M3): the row itself navigates on tap, so a hidden 18px menu
+        // made rename / delete a blind hunt there. Desktop keeps the
+        // hover reveal at its compact size.
+        className="absolute top-1/2 right-0 flex size-11 -translate-y-1/2 items-center justify-center rounded text-sidebar-foreground/50 opacity-100 transition-opacity focus:opacity-100 md:right-1 md:size-6 md:opacity-0 md:group-hover:opacity-100"
       >
-        <MoreHorizontal className="size-3.5" aria-hidden />
+        <MoreHorizontal className="size-4 md:size-3.5" aria-hidden />
       </button>
       {menuFor === row.id && (
         <div className="absolute top-full right-1 z-20 mt-0.5 w-32 overflow-hidden rounded-md border border-border bg-popover shadow-md">
@@ -438,14 +443,20 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
         `${base}?v=workspace&s=${encodeURIComponent(created.id)}`,
         { scroll: false },
       );
-      await refresh();
+      // The fresh room must resolve as a room the moment the surface reads
+      // the list (seeded even on a cold slot); the signal revalidates.
+      patchSharedChatSessions(
+        workspaceId,
+        (rows) => [created, ...rows.filter((r) => r.id !== created.id)],
+        { seed: true },
+      );
       dispatchChatSessionsRefresh(workspaceId);
     } catch {
       setError(t.newWorkspaceChatFailed);
     } finally {
       setCreatingShared(false);
     }
-  }, [base, creatingShared, refresh, router, t, workspaceId]);
+  }, [base, creatingShared, router, t, workspaceId]);
 
   return (
     <div className="flex flex-col gap-3 px-1 pt-1">
@@ -455,7 +466,7 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
           aria-current={onChatSurface && !activeSessionId ? "page" : undefined}
           className={cn(
             rowCls(onChatSurface && !activeSessionId),
-            "flex items-center gap-2 pr-2",
+            "flex items-center gap-2 pr-2 md:pr-2",
           )}
         >
           <Plus className="size-3.5 shrink-0" aria-hidden />
@@ -468,7 +479,7 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
           disabled={creatingShared}
           className={cn(
             rowCls(false),
-            "flex items-center gap-2 pr-2 disabled:opacity-50",
+            "flex items-center gap-2 pr-2 md:pr-2 disabled:opacity-50",
           )}
         >
           <Plus className="size-3.5 shrink-0" aria-hidden />
@@ -483,7 +494,7 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
         placeholder={t.searchPlaceholder}
         aria-label={t.searchPlaceholder}
         className={cn(
-          "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px]",
+          "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12px]",
           "outline-none focus:ring-2 focus:ring-ring/50 placeholder:text-muted-foreground/60",
         )}
       />
@@ -496,11 +507,7 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
         <div>
           <div className={sectionHeaderCls}>{t.railAria}</div>
           <div className="flex flex-col gap-0.5">
-            {rows === null && (
-              <div className="select-none px-2 py-1 text-[12px] text-sidebar-foreground/40">
-                {t.loading}
-              </div>
-            )}
+            {rows === null && <RailRowsSkeleton />}
             {rows !== null && visible.length === 0 && (
               <div className="select-none px-2 py-1 text-[12px] text-sidebar-foreground/40">
                 {t.railEmpty}
@@ -517,11 +524,7 @@ export function ChatSidebarPanel({ workspaceId }: { workspaceId: string }) {
         <div>
           <div className={sectionHeaderCls}>{t.viewWorkspace}</div>
           <div className="flex flex-col gap-0.5">
-            {sharedRows === null && (
-              <div className="select-none px-2 py-1 text-[12px] text-sidebar-foreground/40">
-                {t.loading}
-              </div>
-            )}
+            {sharedRows === null && <RailRowsSkeleton />}
             {sharedRows !== null && visibleShared.length === 0 && (
               <div className="select-none px-2 py-1 text-[12px] text-sidebar-foreground/40">
                 {t.workspaceRailEmpty}

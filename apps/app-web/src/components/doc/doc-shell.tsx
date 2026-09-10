@@ -1552,6 +1552,7 @@ export function DocShell({ workspaceId, assistantId }: ShellProps) {
                         return (
                           <RecordingChrome
                             recordingId={recId}
+                            pageId={pageView.id}
                             workspaceId={workspaceId}
                             title={pageView.name ?? ""}
                             // While the recording is not processed yet, the

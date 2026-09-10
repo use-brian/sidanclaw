@@ -17,8 +17,9 @@ describe("[COMP:app-web/doc-shell] mobile workspace menu", () => {
     )?.[1];
 
     expect(triggerClass).toBeDefined();
-    expect(triggerClass).toContain("fixed left-2 top-2");
-    expect(triggerClass).toContain("size-7");
+    // 44px target inside the h-11 topbar row (responsive contract M3).
+    expect(triggerClass).toContain("fixed left-1 top-0");
+    expect(triggerClass).toContain("size-11");
     expect(triggerClass).toContain("hover:bg-muted");
     expect(triggerClass).toContain("focus-visible:ring-2");
     expect(triggerClass).not.toMatch(

@@ -290,6 +290,13 @@ Only these binding shapes are valid; copy one literally and adapt only the optio
 
 \`contacts\`, \`companies\`, and \`workflow_runs\` are TABLE-ONLY — there is no board variant. **Do NOT pass** the binding as a string like \`"tasks/table"\` — it will be rejected. **Do NOT invent** other viewTypes ("kanban", "list", "gallery") or entities. **Do NOT omit** \`groupBy\` on board variants.
 
+## Drawings
+
+Pages also support editable Excalidraw blocks: \`{ kind: "drawing", id, title: "Architecture sketch", scene: { version: 1, elements: [], appState: { viewBackgroundColor: "#ffffff" }, files: {} } }\`.
+The optional title is trimmed and limited to 200 characters; blank means unnamed. Rename with an existing edit operation and \`patch: { title: "New name" }\` only, preserving the scene and valid PNG preview. The outline and targeted block read expose the title.
+Use the existing block-ID scoped add/edit/delete operations. Read the current block before replacing its scene, preserve element IDs and all referenced files, and do not replace drawings with screenshots. Scenes are limited to 2 MiB and 5,000 elements. Only inline PNG/JPEG/WebP/GIF images are supported; links and embedded websites are rejected. Prefer Mermaid for generated structural diagrams unless the user requests a drawing.
+For visual reading, use \`getBlock\`: it attaches a saved, scene-matched PNG as actual image content and reports \`previewStatus\`. Never claim to see an unavailable export. New or edited scenes need a browser drawing-editor Save to generate it. Export and embedded file bytes are omitted from tool text; do not invent omitted file data or replace a raster-containing scene without the original assets. The scene remains canonical and editable; never author or copy a preview when editing it.
+
 ## Charts & diagrams — visualise findings, don't just describe them
 
 Two block kinds turn numbers and relationships into a picture. Reach for them whenever a finding is **quantitative** (a chart) or **structural** (a diagram) — especially in research, where a figure shown beats a figure buried in a sentence.

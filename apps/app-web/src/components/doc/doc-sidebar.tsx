@@ -52,7 +52,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useIntentPrefetch, warmDocPage } from "@/lib/surface-prefetch";
+import { inboxCacheKey, useIntentPrefetch, warmDocPage } from "@/lib/surface-prefetch";
+import {
+  markSurfaceCacheStale,
+  readSurfaceCache,
+  useCachedResource,
+} from "@/lib/surface-cache";
+import { isPhoneViewport } from "@/lib/viewport";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   DndContext,
@@ -75,6 +81,7 @@ import {
   Search,
   SlidersHorizontal,
   Trash2,
+  UserPlus,
   Users,
 } from "lucide-react";
 import type { WorkspaceSurface } from "@/lib/doc-page-url";
@@ -98,6 +105,7 @@ import { useCustomThemes } from "@/lib/custom-themes";
 import { CreateThemeDialog } from "@/components/doc/create-theme-dialog";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { openWorkspaceSettings } from "@/components/settings-modal/settings-modal";
+import { requestSidebarClose } from "@/lib/sidebar-close";
 import type { DocTheme } from "@/lib/api/doc-themes";
 import {
   Select,
@@ -120,9 +128,7 @@ import {
 } from "@/lib/sidebar-tree";
 import { parseSectionDropId, sectionDropId } from "@/lib/sidebar-sections";
 import { surfaceShortcutLabel } from "@/lib/surface-shortcuts";
-import { fetchInboxBadgeCount } from "@/lib/api/inbox";
-import { INBOX_CHANGED_EVENT } from "@/lib/inbox-events";
-import { INBOX_REFRESH_EVENT } from "@/lib/inbox-refresh-events";
+import { fetchInbox, type InboxPayload } from "@/lib/api/inbox";
 import { DOC_COMMENTS_CHANGED_EVENT } from "@/lib/comment-events";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { DocSidebarRow } from "./doc-sidebar-row";
@@ -244,23 +250,32 @@ function collapseKey(workspaceId: string): string {
  * two pills can't collide and truncate. `transition-all` eases the bg/grow.
  */
 function navItemCls(active: boolean, labeled: boolean): string {
-  const base =
-    "inline-flex h-7 shrink-0 items-center rounded-md text-sidebar-foreground/65 transition-all";
+  // Below `md` the row is a vertical, labelled list of 44px rows (responsive
+  // contract M3): a horizontal strip of 28px unlabelled icons is a desktop
+  // affordance, and tooltips never show on touch. The `md:` half is the
+  // Notion-style icon toolbar unchanged.
+  const phone =
+    "max-md:h-11 max-md:w-full max-md:justify-start max-md:gap-2.5 max-md:px-3 max-md:text-[13px]";
+  const base = `inline-flex h-7 shrink-0 items-center rounded-md text-sidebar-foreground/65 transition-all ${phone}`;
   if (active && labeled) {
     return `${base} doc-nav-active gap-1.5 px-2 text-[13px] font-medium text-sidebar-accent-foreground`;
   }
   if (active) {
-    return `${base} w-7 justify-center doc-nav-active text-sidebar-accent-foreground`;
+    return `${base} md:w-7 justify-center doc-nav-active text-sidebar-accent-foreground`;
   }
-  return `${base} w-7 justify-center hover:bg-sidebar-accent hover:text-sidebar-accent-foreground`;
+  return `${base} md:w-7 justify-center hover:bg-sidebar-accent hover:text-sidebar-accent-foreground`;
+}
+
+/** The phone-only label beside a nav icon (the pill span carries it on `md+`). */
+function PhoneNavLabel({ children }: { children: React.ReactNode }) {
+  return <span className="whitespace-nowrap md:hidden">{children}</span>;
 }
 
 export function DocSidebar(props: Props) {
   const copy = useT();
   const t = copy.docPage;
   const liveTitle = copy.liveApp.title;
-  // Creating a page isn't supported offline (no server id) — disable the entry
-  // in the bundled app when offline. No-op on web/thin (gate keeps it false).
+  // Teamspace management still requires a connection; pages can be created locally.
   const offline = useIsOffline();
   const { workspaceId, saved, drafts, activeId } = props;
   const activeOperatorApp = props.activeOperatorApp;
@@ -289,35 +304,44 @@ export function DocSidebar(props: Props) {
   );
 
   // ── Inbox unread badge (pending assistant replies + unread mentions) ──
-  // Refetched on mount, on window focus, when the Inbox marks items read
-  // (`doc:inbox-changed`), when the AI posts/resolves a comment
-  // (`doc:comments-changed` — that changes the pending-reply count), and on
-  // `INBOX_REFRESH_EVENT` (T-H8) — the server-driven signal for a room
-  // `@mention` recorded from ANY tab, device, or teammate. This component
-  // lives inside the never-unmounting `/w/[workspaceId]` layout, so without
-  // that last listener a mention recorded while the user was on another
-  // surface would not show up until a hard reload.
-  const [inboxCount, setInboxCount] = useState(0);
+  // Reads the SAME slot the Inbox flyout fills (`inboxCacheKey`, instant-
+  // navigation contract N2), so one request serves the badge and the flyout:
+  // the flyout's per-row optimistic patches move the badge at once, its
+  // revalidate-on-open lands here too, and `INBOX_REFRESH_EVENT` (T-H8, a
+  // room `@mention` recorded from ANY tab, device, or teammate) reaches this
+  // never-unmounting layout through the one spine map
+  // (`surface-cache-invalidation.ts` -> `inbox:<wid>`), not a listener here.
+  // `doc:inbox-changed` needs no listener either: its only dispatcher is the
+  // flyout, and every site that dispatches it has already written the slot.
+  // The two listeners kept are same-tab, non-spine signals that change the
+  // count without touching the slot: the AI posting or resolving a comment
+  // (`doc:comments-changed` moves the pending-reply count) and window focus;
+  // both mark the slot stale so the count revalidates behind the paint.
+  // A failed revalidation keeps the last count (the fetcher returns the
+  // previous payload rather than rejecting, so a stale slot never re-runs
+  // against a failing endpoint); a cold failure reads as no badge.
+  const inboxKey = inboxCacheKey(workspaceId);
+  const inbox = useCachedResource<InboxPayload>(inboxKey, async () => {
+    try {
+      return await fetchInbox(workspaceId);
+    } catch (err) {
+      const previous = readSurfaceCache<InboxPayload>(inboxKey).data;
+      if (previous !== undefined) return previous;
+      throw err;
+    }
+  });
+  const inboxCount = inbox.data
+    ? inbox.data.pendingCount + inbox.data.unreadMentionCount
+    : 0;
   useEffect(() => {
-    let cancelled = false;
-    const refresh = () => {
-      void fetchInboxBadgeCount(workspaceId).then((n) => {
-        if (!cancelled) setInboxCount(n);
-      });
-    };
-    refresh();
-    window.addEventListener(INBOX_CHANGED_EVENT, refresh);
-    window.addEventListener(INBOX_REFRESH_EVENT, refresh);
-    window.addEventListener(DOC_COMMENTS_CHANGED_EVENT, refresh);
-    window.addEventListener("focus", refresh);
+    const mark = () => markSurfaceCacheStale(inboxKey);
+    window.addEventListener(DOC_COMMENTS_CHANGED_EVENT, mark);
+    window.addEventListener("focus", mark);
     return () => {
-      cancelled = true;
-      window.removeEventListener(INBOX_CHANGED_EVENT, refresh);
-      window.removeEventListener(INBOX_REFRESH_EVENT, refresh);
-      window.removeEventListener(DOC_COMMENTS_CHANGED_EVENT, refresh);
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener(DOC_COMMENTS_CHANGED_EVENT, mark);
+      window.removeEventListener("focus", mark);
     };
-  }, [workspaceId]);
+  }, [inboxKey]);
 
   // ── Search filter (lightweight client-side substring) ───────────────
   // The page-title search only makes sense on Home (`'p'`), where the page tree
@@ -615,8 +639,29 @@ export function DocSidebar(props: Props) {
           head: it drops below the macOS traffic lights and is an OS window-drag
           handle (the switcher button itself opts back out) — see the
           `.is-canvas-desktop` block in globals.css. */}
-      <div data-doc-chrome data-doc-sidebar-head className="flex items-center px-2 pt-2.5 pb-1">
-        <WorkspaceSwitcher />
+      <div data-doc-chrome data-doc-sidebar-head className="flex items-center gap-1 px-2 pt-2.5 pb-1">
+        <div className="min-w-0 flex-1">
+          <WorkspaceSwitcher />
+        </div>
+        {/* Invite members, first-class in the drawer head on a phone
+            (responsive contract M1; plan §6 decision 1): hamburger, Invite,
+            form = 3 taps, the same as desktop, instead of going through the
+            switcher popover. Opens the same Members section the popover's
+            button opens and closes the drawer (M7). Hidden from `md`, where
+            the popover button is one click away. */}
+        <button
+          type="button"
+          onClick={() => {
+            openWorkspaceSettings("ws-members");
+            requestSidebarClose();
+          }}
+          aria-label={copy.workspaceSwitcher.inviteMembers}
+          title={copy.workspaceSwitcher.inviteMembers}
+          data-sidebar-invite
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:hidden"
+        >
+          <UserPlus className="size-[18px]" aria-hidden />
+        </button>
       </div>
 
       {/* Top nav — horizontal icon toolbar (Notion-style). Every item is an icon
@@ -632,7 +677,7 @@ export function DocSidebar(props: Props) {
           OS window-drag handle, so the gaps between icons and the empty space to
           the right of Search drag the window; the icon links/buttons opt back out
           via the `[data-doc-chrome] :is(a, button, …)` rule in globals.css. */}
-      <nav data-doc-chrome className="flex flex-row items-center gap-0.5 px-2 pt-1 pb-1.5">
+      <nav data-doc-chrome className="flex flex-col items-stretch gap-0.5 px-2 pt-1 pb-1.5 md:flex-row md:items-center">
         {/* Home — first of the ⌘/Ctrl+1/2/3/4 surface shortcuts (wired in
             WorkspaceChrome). The chip label is browser-dependent
             (`surfaceShortcutLabel`): ⌘n on mac, ⌃n on mac Firefox (which
@@ -646,8 +691,9 @@ export function DocSidebar(props: Props) {
           >
             <Home className="size-[17px] shrink-0" />
             {homePill ? (
-              <span className="whitespace-nowrap">{t.iconHome}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconHome}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconHome}</PhoneNavLabel>
           </Link>
         </Tooltip>
 
@@ -663,21 +709,26 @@ export function DocSidebar(props: Props) {
           >
             <Brain className="size-[17px] shrink-0" />
             {surfacePill("brain") ? (
-              <span className="whitespace-nowrap">{t.iconBrain}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconBrain}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconBrain}</PhoneNavLabel>
           </Link>
         </Tooltip>
         <Tooltip label={t.iconStudio} shortcut={surfaceShortcutLabel(3)}>
           <Link
-            href={`/w/${workspaceId}/studio`}
-            {...intentPrefetch(`/w/${workspaceId}/studio`)}
+            // The final route, not the `/studio` redirect (instant-navigation
+            // contract N6): one navigation, one skeleton, and the prefetch
+            // warms the section that actually renders.
+            href={`/w/${workspaceId}/studio/connectors`}
+            {...intentPrefetch(`/w/${workspaceId}/studio/connectors`)}
             aria-label={t.iconStudioAria}
             className={navItemCls(surfaceActive("studio"), !utilityPillOpen) + " relative"}
           >
             <SlidersHorizontal className="size-[17px] shrink-0" />
             {surfacePill("studio") ? (
-              <span className="whitespace-nowrap">{t.iconStudio}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconStudio}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconStudio}</PhoneNavLabel>
             {props.studioNudge ? (
               <span
                 aria-label={t.studioSetupNudgeAria}
@@ -695,8 +746,9 @@ export function DocSidebar(props: Props) {
           >
             <GitBranch className="size-[17px] shrink-0" />
             {surfacePill("workflow") ? (
-              <span className="whitespace-nowrap">{t.iconWorkflow}</span>
+              <span className="whitespace-nowrap max-md:hidden">{t.iconWorkflow}</span>
             ) : null}
+            <PhoneNavLabel>{t.iconWorkflow}</PhoneNavLabel>
           </Link>
         </Tooltip>
         {/* Live — a top-level workspace surface in the former Inbox slot. Its
@@ -711,8 +763,9 @@ export function DocSidebar(props: Props) {
           >
             <Activity className="size-[17px] shrink-0" />
             {surfacePill("live") ? (
-              <span className="whitespace-nowrap">{liveTitle}</span>
+              <span className="whitespace-nowrap max-md:hidden">{liveTitle}</span>
             ) : null}
+            <PhoneNavLabel>{liveTitle}</PhoneNavLabel>
             <LiveActiveBadge
               count={liveActiveCount}
               label={liveActiveLabel}
@@ -745,8 +798,9 @@ export function DocSidebar(props: Props) {
             >
               <Search className="size-[17px] shrink-0" />
               {searchPill ? (
-                <span className="whitespace-nowrap">{t.iconSearch}</span>
+                <span className="whitespace-nowrap max-md:hidden">{t.iconSearch}</span>
               ) : null}
+              <PhoneNavLabel>{t.iconSearch}</PhoneNavLabel>
             </button>
           </Tooltip>
         )}
@@ -779,11 +833,11 @@ export function DocSidebar(props: Props) {
           <input
             type="text"
             value={query}
-            autoFocus
+            autoFocus={!isPhoneViewport()}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t.sidebarSearchPlaceholder}
             aria-label={t.iconSearchAria}
-            className="h-7 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            className="h-11 w-full rounded-md border border-border bg-background px-2 text-[16px] text-foreground outline-none placeholder:text-muted-foreground md:h-7 md:text-sm"
           />
         </div>
       )}
@@ -908,8 +962,7 @@ export function DocSidebar(props: Props) {
                 collapsed={sectionCollapsed[ts.id] ?? false}
                 onToggle={() => toggleSection(ts.id)}
                 onNewPage={() => props.onNewDraft(ts.id)}
-                newPageDisabled={props.busyNewDraft || offline}
-                newPageTitle={offline ? t.offlineUnavailable : undefined}
+                newPageDisabled={props.busyNewDraft}
                 dragging={draggingId !== null}
                 onOpenSettings={(tab) => props.onTeamspaceSettings(ts.id, tab)}
                 onLeave={() => props.onLeaveTeamspace(ts.id)}
@@ -924,8 +977,7 @@ export function DocSidebar(props: Props) {
                 page here to make it private). No manage menu. */}
             <PrivateGroupSection
               onNewPage={() => props.onNewDraft(null)}
-              newPageDisabled={props.busyNewDraft || offline}
-              newPageTitle={offline ? t.offlineUnavailable : undefined}
+              newPageDisabled={props.busyNewDraft}
               dragging={draggingId !== null}
             >
               {privateTree.length > 0 && (
@@ -1073,7 +1125,7 @@ function PalettePicker() {
         onValueChange={onValueChange}
         items={itemLabels}
       >
-        <SelectTrigger className="h-8 w-full justify-between gap-2 rounded-md border-0 bg-transparent px-2 text-xs font-normal text-sidebar-foreground shadow-none hover:bg-sidebar-accent dark:bg-transparent dark:hover:bg-sidebar-accent">
+        <SelectTrigger className="h-11 w-full justify-between gap-2 rounded-md border-0 bg-transparent px-2 text-[16px] font-normal text-sidebar-foreground shadow-none hover:bg-sidebar-accent dark:bg-transparent dark:hover:bg-sidebar-accent md:h-8 md:text-xs">
           <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
             <ThemeDot colors={activeDot} />
             <SelectValue />
@@ -1098,7 +1150,9 @@ function PalettePicker() {
                   it masks the name end on hover — the title runs full-width at
                   rest. Siblings of the item, not children, so a click can't
                   select the row; the handlers also close the menu first. */}
-              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded bg-accent pl-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/theme:opacity-100">
+              {/* Always visible on a phone (responsive contract M2), hover-
+                  revealed from `md`. */}
+              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded bg-popover pl-1.5 opacity-100 transition-opacity md:bg-accent md:opacity-0 md:focus-within:opacity-100 md:group-hover/theme:opacity-100">
                 <button
                   type="button"
                   aria-label={`${t.settings.general.customThemeEdit}: ${theme.name}`}
@@ -1109,7 +1163,7 @@ function PalettePicker() {
                     e.preventDefault();
                     onEditTheme();
                   }}
-                  className="rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+                  className="flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-foreground/10 hover:text-foreground md:size-auto md:p-1"
                 >
                   <Pencil className="size-3.5" />
                 </button>
@@ -1123,7 +1177,7 @@ function PalettePicker() {
                     e.preventDefault();
                     void onDeleteTheme(theme);
                   }}
-                  className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  className="flex size-9 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive md:size-auto md:p-1"
                 >
                   <Trash2 className="size-3.5" />
                 </button>
@@ -1165,14 +1219,16 @@ function TeamspacesGroupHeader({
       <span className="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-sidebar-foreground/45">
         {t.sidebarTeamspacesGroup}
       </span>
-      <div className="flex items-center opacity-0 pointer-events-none transition-opacity group-hover/tsgroup:opacity-100 group-hover/tsgroup:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
+      {/* Visible at rest on a phone (responsive contract M2: "New teamspace"
+          has no other entry point), hover-revealed from `md`. */}
+      <div className="flex items-center opacity-100 transition-opacity md:pointer-events-none md:opacity-0 md:group-hover/tsgroup:opacity-100 md:group-hover/tsgroup:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
               <button
                 type="button"
                 aria-label={t.sidebarTeamspacesMenuAria}
-                className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground md:size-5"
               >
                 <MoreHorizontal className="size-3.5" />
               </button>
@@ -1259,7 +1315,7 @@ function TeamspaceRow({
             }}
             className="relative flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            <span className="flex items-center justify-center opacity-100 transition-opacity group-hover/row:opacity-0">
+            <span className="flex items-center justify-center opacity-100 transition-opacity md:group-hover/row:opacity-0">
               {teamspace.icon ? (
                 <span className="text-[15px] leading-none">{teamspace.icon}</span>
               ) : (
@@ -1269,7 +1325,10 @@ function TeamspaceRow({
             <ChevronRight
               aria-hidden
               className={[
-                "absolute inset-0 m-auto size-3.5 opacity-0 transition-[transform,opacity] group-hover/row:opacity-100",
+                // The icon<->chevron swap is a hover affordance; a finger has
+                // no hover, so below `md` the icon stays and the chevron is
+                // not rendered (the toggle's aria-label carries the state).
+                "absolute inset-0 m-auto size-3.5 transition-[transform,opacity] max-md:hidden md:opacity-0 md:group-hover/row:opacity-100",
                 collapsed ? "" : "rotate-90",
               ].join(" ")}
             />
@@ -1286,7 +1345,7 @@ function TeamspaceRow({
           type="button"
           onClick={onToggle}
           title={title}
-          className="flex min-w-0 flex-1 items-center py-1 pr-0 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
+          className="flex min-w-0 flex-1 items-center py-1 pr-[4.5rem] text-left md:pr-0 md:group-hover/row:pr-14 md:group-focus-within/row:pr-14"
         >
           <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
         </button>
@@ -1295,7 +1354,7 @@ function TeamspaceRow({
             revealed while the `⋯` menu is open (`has-[aria-expanded]`, which
             in this row can only be the dropdown trigger). */}
         {!dragging && (
-          <div className="absolute inset-y-0 right-1 z-10 flex items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
+          <div className="absolute inset-y-0 right-1 z-10 flex items-center gap-0.5 opacity-100 transition-opacity md:pointer-events-none md:opacity-0 md:group-hover/row:opacity-100 md:group-hover/row:pointer-events-auto md:group-focus-within/row:opacity-100 md:group-focus-within/row:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
             <TeamspaceSectionMenu
               teamspace={teamspace}
               onOpenSettings={onOpenSettings}
@@ -1311,7 +1370,7 @@ function TeamspaceRow({
                 e.stopPropagation();
                 onNewPage();
               }}
-              className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+              className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 md:size-6"
             >
               <Plus className="size-3.5" />
             </button>
@@ -1362,7 +1421,7 @@ function PrivateGroupSection({
           {t.sidebarPrivate}
         </span>
         {!dragging && (
-          <div className="flex items-center opacity-0 pointer-events-none transition-opacity group-hover/priv:opacity-100 group-hover/priv:pointer-events-auto">
+          <div className="flex items-center opacity-100 transition-opacity md:pointer-events-none md:opacity-0 md:group-hover/priv:opacity-100 md:group-hover/priv:pointer-events-auto">
             <button
               type="button"
               aria-label={t.sidebarSectionNewPageAria}
@@ -1372,7 +1431,7 @@ function PrivateGroupSection({
                 e.stopPropagation();
                 onNewPage();
               }}
-              className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50"
+              className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-50 md:size-5"
             >
               <Plus className="size-3.5" />
             </button>
@@ -1416,7 +1475,7 @@ function TeamspaceSectionMenu({
             type="button"
             aria-label={t.teamspaceMenuAria}
             onClick={(e) => e.stopPropagation()}
-            className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground md:size-5"
           >
             <MoreHorizontal className="size-3.5" />
           </button>
@@ -1526,7 +1585,7 @@ function FlatRow({
         type="button"
         onClick={() => onSelect(row.id)}
         title={title}
-        className="doc-nav-title min-w-0 flex-1 truncate py-1 pr-0 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
+        className="doc-nav-title min-w-0 flex-1 truncate py-1 pr-[4.5rem] text-left md:pr-0 md:group-hover/row:pr-14 md:group-focus-within/row:pr-14"
       >
         {title}
       </button>
@@ -1534,7 +1593,7 @@ function FlatRow({
       {/* Hover affordances — overflow menu (…) then add-child (+). Out of
           flow so the title runs full-width at rest; revealed on hover /
           focus-within / while the … menu is open. */}
-      <div className="absolute inset-y-0 right-1 z-10 flex items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover/row:opacity-100 group-hover/row:pointer-events-auto group-focus-within/row:opacity-100 group-focus-within/row:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
+      <div className="absolute inset-y-0 right-1 z-10 flex items-center gap-0.5 opacity-100 transition-opacity md:pointer-events-none md:opacity-0 md:group-hover/row:opacity-100 md:group-hover/row:pointer-events-auto md:group-focus-within/row:opacity-100 md:group-focus-within/row:pointer-events-auto has-[[aria-expanded=true]]:opacity-100 has-[[aria-expanded=true]]:pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -1542,7 +1601,7 @@ function FlatRow({
                 type="button"
                 aria-label={t.sidebarRowMenu}
                 onClick={(e) => e.stopPropagation()}
-                className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground md:size-6"
               >
                 <MoreHorizontal className="size-3.5" />
               </button>
@@ -1575,7 +1634,7 @@ function FlatRow({
             e.stopPropagation();
             onAddChild(row.id);
           }}
-          className="flex size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground md:size-6"
         >
           <Plus className="size-3.5" />
         </button>

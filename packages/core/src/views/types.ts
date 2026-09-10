@@ -488,6 +488,8 @@ export type SavedViewUpdateFields = {
  * route layer creates an empty page.
  */
 export type CreateDraftInput = {
+  /** Client-minted UUID for idempotent offline creation. Never overwrites a row. */
+  id?: string
   userId: string
   workspaceId: string
   name: string

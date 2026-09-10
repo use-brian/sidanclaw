@@ -351,7 +351,7 @@ export function SkillIterationChat({
               submit();
             }
           }}
-          className="max-h-32 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2.5 pb-1 text-[13px] outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70 disabled:opacity-60"
+          className="max-h-32 w-full resize-none overflow-y-auto bg-transparent px-3 pt-2.5 pb-1 text-[16px] md:text-[13px] outline-none focus-visible:shadow-none placeholder:text-muted-foreground/70 disabled:opacity-60"
         />
         <div className="flex items-center gap-1.5 px-2 pb-2 pt-0.5">
           <input
@@ -369,7 +369,7 @@ export function SkillIterationChat({
             aria-label={copy.attach}
             title={copy.attach}
             onClick={() => fileInputRef.current?.click()}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="inline-flex size-11 sm:size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <Paperclip className="size-4" aria-hidden />
           </button>
@@ -393,7 +393,8 @@ export function SkillIterationChat({
             disabled={busy || attachments.uploading || !input.trim()}
             onClick={submit}
             className={cn(
-              "inline-flex size-7 shrink-0 items-center justify-center rounded-lg transition-colors",
+              // `size-11 sm:size-7` (C 16 / M3): the creator chat's send.
+              "inline-flex size-11 sm:size-7 shrink-0 items-center justify-center rounded-lg transition-colors",
               input.trim() && !busy && !attachments.uploading
                 ? "bg-action text-action-foreground hover:bg-action/90"
                 : "bg-muted text-muted-foreground",

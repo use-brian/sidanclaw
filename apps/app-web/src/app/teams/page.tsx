@@ -47,7 +47,7 @@ export default async function TeamsPage(props: {
 
   return (
     <div
-      className="flex min-h-screen flex-col items-center justify-center bg-background px-4 relative overflow-hidden"
+      className="flex min-h-dvh flex-col items-center justify-center bg-background px-4 relative overflow-x-hidden overflow-y-auto"
       style={{
         backgroundImage:
           "radial-gradient(ellipse 60% 50% at 50% 0%, rgba(52,211,255,0.07) 0%, transparent 70%), radial-gradient(ellipse 50% 40% at 100% 100%, rgba(52,211,255,0.04) 0%, transparent 60%)",

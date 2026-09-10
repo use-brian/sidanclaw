@@ -33,7 +33,7 @@ export default async function DesktopConnectorConnectedPage(props: {
   const isError = status === "error";
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 text-center">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4 text-center">
       <div className="w-full max-w-sm space-y-5 animate-rise-in">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img

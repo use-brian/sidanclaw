@@ -68,7 +68,13 @@ describe("[COMP:app-web/surface-skeleton] Surface skeleton shapes", () => {
     expect(html).toContain('data-brain-graph-edges="true"');
     expect(html.match(/data-brain-graph-node=/g)).toHaveLength(19);
     expect(html.match(/data-brain-graph-label=/g)).toHaveLength(19);
-    expect(html.match(/class="skeleton/g)).toHaveLength(38);
+    // 19 discs + 19 label bars + the four overlay-chip stand-ins (stats
+    // strip, colour-mode toggle, legend, zoom controls) the live canvas draws.
+    expect(html.match(/class="skeleton/g)).toHaveLength(42);
+    // One path for every edge, not one element per edge, and no
+    // foreignObject islands inside the SVG.
+    expect(html).not.toContain("<foreignObject");
+    expect(html.match(/<line/g)).toBeNull();
     expect(html).not.toContain("--graph-entity-");
     expect(html).not.toContain("brain-outline");
     expect(html).not.toContain("brain-graph-loading-scan");

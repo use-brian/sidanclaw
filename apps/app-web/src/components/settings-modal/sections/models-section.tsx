@@ -19,9 +19,12 @@ import { Gauge, Layers3, Pencil, Plus, Trash2 } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { useWorkspaceContext } from "@/lib/workspace-context";
 import { deploymentCapabilities } from "@/lib/edition";
+import { useCachedResource } from "@/lib/surface-cache";
+import { settingsModelsCacheKey } from "@/lib/surface-prefetch";
 import { confirmDialog } from "@/components/ui/confirm-dialog";
 import { promptDialog } from "@/components/ui/prompt-dialog";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/skeleton";
 import {
   Select,
   SelectContent,
@@ -45,6 +48,7 @@ import {
   type MenuModel,
   type MeteredEstimate,
   type MeteredProfile,
+  type ModelMenu,
   type WorkspaceModelDefault,
   type WorkspaceModelRoute,
 } from "@/lib/api/models";
@@ -74,20 +78,73 @@ type CustomProfileDraft = {
   maxOutputTokens: number;
 };
 
+/** Everything the section paints, fetched as one cached unit. */
+type ModelsBundle = {
+  menu: ModelMenu;
+  custom: Awaited<ReturnType<typeof getCustomLlmConfiguration>>;
+  estimates: Record<string, MeteredEstimate | null>;
+};
+
+/** Menu + custom configuration in parallel; metered estimates (which need the menu's profiles) after. */
+async function fetchModelsBundle(workspaceId: string): Promise<ModelsBundle> {
+  const [menu, custom] = await Promise.all([
+    fetchModelMenu(workspaceId),
+    getCustomLlmConfiguration(workspaceId),
+  ]);
+  let estimates: Record<string, MeteredEstimate | null> = {};
+  if (menu.meteredBillingAvailable) {
+    const pairs = await Promise.all(
+      menu.profiles.map(async (p) => [p.id, await fetchMeteredEstimate(workspaceId, p.modelAlias, p.toolRounds).catch(() => null)] as const),
+    );
+    estimates = Object.fromEntries(pairs);
+  }
+  return { menu, custom, estimates };
+}
+
+const EMPTY_LIST: never[] = [];
+const EMPTY_CLASSES: Record<string, MenuModel[]> = {};
+const EMPTY_ESTIMATES: Record<string, MeteredEstimate | null> = {};
+
+/** Cold-open placeholder: the card geometry of the view about to paint (N4). */
+function ModelsViewSkeleton({ cards, columns = false }: { cards: number; columns?: boolean }) {
+  return (
+    <div aria-busy="true" data-testid="models-skeleton" className={columns ? "grid gap-3 sm:grid-cols-2" : "space-y-4"}>
+      {Array.from({ length: cards }).map((_, i) => (
+        <div key={i} className="space-y-2 rounded-xl border border-border/70 p-3">
+          <Skeleton className="h-3.5 w-24" />
+          <Skeleton className="h-8 w-full rounded-md" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ModelsSection() {
   const t = useT().chrome.settingsModal.models;
   const { workspaceId } = useWorkspaceContext();
   const [error, setError] = useState<string | null>(null);
-  const [models, setModels] = useState<MenuModel[]>([]);
-  const [menuClasses, setMenuClasses] = useState<Record<string, MenuModel[]>>({});
-  const [defaults, setDefaults] = useState<WorkspaceModelDefault[]>([]);
-  const [profiles, setProfiles] = useState<MeteredProfile[]>([]);
-  const [billingAvailable, setBillingAvailable] = useState(false);
-  const [estimates, setEstimates] = useState<Record<string, MeteredEstimate | null>>({});
-  const [customEndpoints, setCustomEndpoints] = useState<CustomLlmEndpoint[]>([]);
-  const [customTierDefaults, setCustomTierDefaults] = useState<CustomLlmTierDefault[]>([]);
-  const [modelRoutes, setModelRoutes] = useState<WorkspaceModelRoute[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Paints from the surface cache (instant-navigation contract N1): reopening
+  // the section renders the last-known routes, providers and profiles on its
+  // first frame and revalidates behind them; only a cold open shows the
+  // skeleton. No spine primitive names a model route, so every mutation
+  // below awaits `refresh()` (the authoritative reload into the same key). A
+  // cold failure renders the empty states, as before.
+  const bundle = useCachedResource<ModelsBundle>(
+    workspaceId ? settingsModelsCacheKey(workspaceId) : null,
+    () => fetchModelsBundle(workspaceId),
+  );
+  const { refresh } = bundle;
+  const menu = bundle.data?.menu;
+  const loading = bundle.loading;
+  const menuClasses = menu?.classes ?? EMPTY_CLASSES;
+  const models: MenuModel[] = menuClasses["metered"] ?? EMPTY_LIST;
+  const defaults: WorkspaceModelDefault[] = menu?.defaults ?? EMPTY_LIST;
+  const profiles: MeteredProfile[] = menu?.profiles ?? EMPTY_LIST;
+  const billingAvailable = menu?.meteredBillingAvailable ?? false;
+  const estimates = bundle.data?.estimates ?? EMPTY_ESTIMATES;
+  const customEndpoints: CustomLlmEndpoint[] = bundle.data?.custom.endpoints ?? EMPTY_LIST;
+  const customTierDefaults: CustomLlmTierDefault[] = bundle.data?.custom.tierDefaults ?? EMPTY_LIST;
+  const modelRoutes: WorkspaceModelRoute[] = menu?.modelRoutes ?? EMPTY_LIST;
   // Create form state.
   const [newModel, setNewModel] = useState<string>("");
   const [newName, setNewName] = useState("");
@@ -106,38 +163,8 @@ export function ModelsSection() {
 
   const reload = useCallback(async () => {
     if (!workspaceId) return;
-    try {
-      const [menu, custom] = await Promise.all([
-        fetchModelMenu(workspaceId),
-        getCustomLlmConfiguration(workspaceId),
-      ]);
-      const metered = menu.classes["metered"] ?? [];
-      setModels(metered);
-      setMenuClasses(menu.classes);
-      setDefaults(menu.defaults ?? []);
-      setProfiles(menu.profiles);
-      setCustomEndpoints(custom.endpoints);
-      setCustomTierDefaults(custom.tierDefaults);
-      setModelRoutes(menu.modelRoutes ?? []);
-      setBillingAvailable(menu.meteredBillingAvailable);
-      if (menu.meteredBillingAvailable) {
-        const pairs = await Promise.all(
-          menu.profiles.map(async (p) => [p.id, await fetchMeteredEstimate(workspaceId, p.modelAlias, p.toolRounds).catch(() => null)] as const),
-        );
-        setEstimates(Object.fromEntries(pairs));
-      }
-    } catch {
-      setModels([]);
-      setProfiles([]);
-      setCustomEndpoints([]);
-      setCustomTierDefaults([]);
-      setModelRoutes([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId]);
-
-  useEffect(() => { void reload(); }, [reload]);
+    await refresh();
+  }, [refresh, workspaceId]);
 
   useEffect(() => {
     if (!newCustomEndpointId && customEndpoints[0]) setNewCustomEndpointId(customEndpoints[0].id);
@@ -346,7 +373,7 @@ export function ModelsSection() {
 
       {activeView === "routing" ? (
         loading ? (
-          <p className="text-[12.5px] text-muted-foreground">{t.loading}</p>
+          <ModelsViewSkeleton cards={4} columns />
         ) : (
           <section className="space-y-4" role="tabpanel">
             <div>
@@ -435,7 +462,7 @@ export function ModelsSection() {
 
       {activeView === "providers" ? (
         loading ? (
-          <p className="text-[12.5px] text-muted-foreground">{t.loading}</p>
+          <ModelsViewSkeleton cards={3} />
         ) : (
           <div className="space-y-4" role="tabpanel">
             {deploymentCapabilities().selfManagedProviders ? (
@@ -511,19 +538,19 @@ export function ModelsSection() {
                           <div className="grid gap-2 sm:grid-cols-2">
                             <label className="space-y-1 text-[11.5px] text-muted-foreground">
                               {t.profileNameLabel}
-                              <input value={editingCustomProfile.name} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, name: event.target.value } : current)} maxLength={80} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] text-foreground" />
+                              <input value={editingCustomProfile.name} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, name: event.target.value } : current)} maxLength={80} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] text-foreground md:text-[12.5px]" />
                             </label>
                             <label className="space-y-1 text-[11.5px] text-muted-foreground">
                               {t.modelIdLabel}
-                              <input value={editingCustomProfile.modelId} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, modelId: event.target.value } : current)} maxLength={200} spellCheck={false} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] text-foreground" />
+                              <input value={editingCustomProfile.modelId} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, modelId: event.target.value } : current)} maxLength={200} spellCheck={false} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] text-foreground md:text-[12.5px]" />
                             </label>
                             <label className="space-y-1 text-[11.5px] text-muted-foreground">
                               {t.contextLabel}
-                              <input type="number" min={1024} max={4000000} value={editingCustomProfile.contextWindow} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, contextWindow: Number(event.target.value) } : current)} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] text-foreground" />
+                              <input type="number" min={1024} max={4000000} value={editingCustomProfile.contextWindow} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, contextWindow: Number(event.target.value) } : current)} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] text-foreground md:text-[12.5px]" />
                             </label>
                             <label className="space-y-1 text-[11.5px] text-muted-foreground">
                               {t.outputLabel}
-                              <input type="number" min={64} max={262144} value={editingCustomProfile.maxOutputTokens} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, maxOutputTokens: Number(event.target.value) } : current)} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] text-foreground" />
+                              <input type="number" min={64} max={262144} value={editingCustomProfile.maxOutputTokens} onChange={(event) => setEditingCustomProfile((current) => current ? { ...current, maxOutputTokens: Number(event.target.value) } : current)} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] text-foreground md:text-[12.5px]" />
                             </label>
                           </div>
                           <div className="flex items-center gap-2">
@@ -565,7 +592,7 @@ export function ModelsSection() {
                   ) : (
                     <div className="grid gap-2 sm:grid-cols-2">
                       <Select value={newCustomEndpointId} onValueChange={(value) => { if (value) setNewCustomEndpointId(value); }}>
-                        <SelectTrigger size="sm" aria-label={t.endpointLabel} className="text-xs">
+                        <SelectTrigger size="sm" aria-label={t.endpointLabel} className="text-[16px] md:text-xs">
                           <span>{customEndpoints.find((endpoint) => endpoint.id === newCustomEndpointId)?.name ?? t.endpointPlaceholder}</span>
                         </SelectTrigger>
                         <SelectContent>
@@ -574,15 +601,15 @@ export function ModelsSection() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <input value={newCustomName} onChange={(event) => setNewCustomName(event.target.value)} placeholder={t.customNamePlaceholder} maxLength={80} className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px]" />
-                      <input value={newCustomModelId} onChange={(event) => setNewCustomModelId(event.target.value)} placeholder={t.customModelPlaceholder} maxLength={200} spellCheck={false} className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] sm:col-span-2" />
+                      <input value={newCustomName} onChange={(event) => setNewCustomName(event.target.value)} placeholder={t.customNamePlaceholder} maxLength={80} className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12.5px]" />
+                      <input value={newCustomModelId} onChange={(event) => setNewCustomModelId(event.target.value)} placeholder={t.customModelPlaceholder} maxLength={200} spellCheck={false} className="rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] sm:col-span-2 md:text-[12.5px]" />
                       <label className="space-y-1 text-[11.5px] text-muted-foreground">
                         {t.contextLabel}
-                        <input type="number" min={1024} max={4000000} value={newCustomContextWindow} onChange={(event) => setNewCustomContextWindow(Number(event.target.value))} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px]" />
+                        <input type="number" min={1024} max={4000000} value={newCustomContextWindow} onChange={(event) => setNewCustomContextWindow(Number(event.target.value))} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12.5px]" />
                       </label>
                       <label className="space-y-1 text-[11.5px] text-muted-foreground">
                         {t.outputLabel}
-                        <input type="number" min={64} max={262144} value={newCustomMaxOutput} onChange={(event) => setNewCustomMaxOutput(Number(event.target.value))} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px]" />
+                        <input type="number" min={64} max={262144} value={newCustomMaxOutput} onChange={(event) => setNewCustomMaxOutput(Number(event.target.value))} className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12.5px]" />
                       </label>
                       <div className="sm:col-span-2">
                         <Button size="sm" disabled={customSaving || !newCustomEndpointId || !newCustomName.trim() || !newCustomModelId.trim()} onClick={() => void onCreateCustomProfile()}>
@@ -642,7 +669,7 @@ export function ModelsSection() {
           ) : null}
 
           {loading ? (
-            <p className="text-[12.5px] text-muted-foreground">{t.loading}</p>
+            <ModelsViewSkeleton cards={2} />
           ) : models.length === 0 ? (
             <p className="rounded-xl border border-dashed border-border/70 px-3 py-4 text-[12.5px] text-muted-foreground">{t.empty}</p>
           ) : (
@@ -700,13 +727,13 @@ export function ModelsSection() {
                   <div className="text-[12.5px] font-medium">{t.createTitle}</div>
                   <div className="flex flex-wrap items-center gap-2">
                     <Select value={newModel} onValueChange={(value) => { if (value) setNewModel(value); }}>
-                      <SelectTrigger size="sm" aria-label={t.modelLabel} className="min-w-40 text-xs"><span>{newModel ? nameFor(newModel) : t.modelPlaceholder}</span></SelectTrigger>
+                      <SelectTrigger size="sm" aria-label={t.modelLabel} className="min-w-40 text-[16px] md:text-xs"><span>{newModel ? nameFor(newModel) : t.modelPlaceholder}</span></SelectTrigger>
                       <SelectContent>{models.map((model) => <SelectItem key={model.alias} value={model.alias}>{model.displayName}</SelectItem>)}</SelectContent>
                     </Select>
-                    <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder={t.namePlaceholder} maxLength={60} className="w-36 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px]" />
+                    <input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder={t.namePlaceholder} maxLength={60} className="w-36 rounded-md border border-border bg-background px-2.5 py-1.5 text-[16px] md:text-[12.5px]" />
                     <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                       {t.roundsInputLabel}
-                      <input type="number" min={10} max={200} value={newRounds} onChange={(event) => setNewRounds(Number(event.target.value))} className="w-20 rounded-md border border-border bg-background px-2 py-1.5 text-[12.5px] tabular-nums" />
+                      <input type="number" min={10} max={200} value={newRounds} onChange={(event) => setNewRounds(Number(event.target.value))} className="w-20 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] tabular-nums md:text-[12.5px]" />
                     </label>
                     <Button size="sm" disabled={saving || !newModel || !newName.trim()} onClick={() => void onCreate()}>
                       <Plus className="mr-1 size-3.5" aria-hidden />{t.createCta}

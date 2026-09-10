@@ -132,7 +132,7 @@ export function BlockExtractionSlot({ block, readOnly, onChange }: Props) {
           setInstruction(next);
           onChange?.({ instruction: next });
         }}
-        className="w-full resize-y bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/60 read-only:cursor-default"
+        className="w-full resize-y bg-transparent text-[16px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/60 read-only:cursor-default md:text-sm"
       />
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
         {/* Field type — the contract's value type for this field. */}
@@ -234,7 +234,7 @@ export function BlockExtractionSlot({ block, readOnly, onChange }: Props) {
             aria-label={t.fieldKeyAria}
             placeholder={t.fieldKeyPlaceholder}
             onChange={(e) => commitFieldKey(e.target.value)}
-            className="w-36 rounded border border-border bg-transparent px-1.5 py-0.5 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring/50 read-only:cursor-default"
+            className="w-36 rounded border border-border bg-transparent px-1.5 py-0.5 font-mono text-[16px] text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring/50 read-only:cursor-default md:text-xs"
           />
         </span>
 
@@ -261,7 +261,7 @@ export function BlockExtractionSlot({ block, readOnly, onChange }: Props) {
             aria-label={t.optionsAria}
             placeholder={t.optionsPlaceholder}
             onChange={(e) => commitOptions(e.target.value)}
-            className="w-full rounded border border-border bg-transparent px-1.5 py-0.5 text-xs text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring/50 read-only:cursor-default"
+            className="w-full rounded border border-border bg-transparent px-1.5 py-0.5 text-[16px] text-foreground outline-none placeholder:text-muted-foreground/60 focus-visible:ring-2 focus-visible:ring-ring/50 read-only:cursor-default md:text-xs"
           />
         </div>
       )}

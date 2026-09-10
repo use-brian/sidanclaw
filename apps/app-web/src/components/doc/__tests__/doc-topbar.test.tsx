@@ -16,7 +16,12 @@ import { renderToString } from "react-dom/server";
 import { I18nProvider } from "@/lib/i18n/client";
 import { en } from "@/lib/i18n/dictionaries/en";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
-import { DocTopBar, type TabView } from "../doc-topbar";
+import {
+  DocTopBar,
+  PHONE_TAB_CHIPS,
+  collapseTabStrip,
+  type TabView,
+} from "../doc-topbar";
 
 const dict = en as unknown as Dictionary;
 const noop = () => {};
@@ -147,11 +152,77 @@ describe("[COMP:app-web/doc-topbar] Top-bar chrome", () => {
       html.match(new RegExp(`aria-label="${en.docPage.topbarCloseTabAria}"`, "g")) ??
       []
     ).length;
-    expect(closes).toBe(2);
+    // Two strips render (desktop + phone, CSS picks one): a ✕ per tab in each.
+    expect(closes).toBe(4);
   });
 
   it("hides the close affordance when only one tab is open", () => {
     // A lone tab can't be closed (the strip is never empty), so no ✕ renders.
     expect(bar()).not.toContain(en.docPage.topbarCloseTabAria);
+  });
+
+  it("dims an inactive tab's close on touch instead of hiding it (M2)", () => {
+    const html = bar({
+      tabs: [
+        { key: "t0", pageId: "p1", isActive: true, title: "A", icon: null, entity: "tasks", viewType: "table" },
+        { key: "t1", pageId: "p2", isActive: false, title: "B", icon: null, entity: "tasks", viewType: "table" },
+      ],
+    });
+    // The hover reveal stays behind `md:`; a bare `opacity-0` would never
+    // show the ✕ to a finger (graded: invariants/touch-reveal).
+    expect(html).toContain("opacity-60 md:opacity-0 md:group-hover/tab:opacity-100");
+    expect(html).not.toMatch(/[\s"]opacity-0 group-hover/);
+  });
+});
+
+/**
+ * Phone strip (responsive contract M8). ~160px remain for tabs at 360px once
+ * the history arrows are 44px, so the phone strip keeps label chips only up
+ * to PHONE_TAB_CHIPS tabs and then collapses to the active chip + an "N tabs"
+ * menu. `collapseTabStrip` is the pure rule; the SSR markup carries both
+ * strips (CSS picks one), so the phone strip is asserted by its marker.
+ */
+describe("[COMP:app-web/doc-topbar] Phone tab strip", () => {
+  const tab = (key: string, isActive: boolean): TabView => ({
+    key,
+    pageId: `p-${key}`,
+    isActive,
+    title: `Tab ${key}`,
+    icon: null,
+    entity: "tasks",
+    viewType: "table",
+  });
+
+  it("keeps a chip per tab up to the chip cap", () => {
+    expect(PHONE_TAB_CHIPS).toBe(2);
+    const two = [tab("a", false), tab("b", true)];
+    expect(collapseTabStrip(two)).toEqual({ chips: two, menu: [] });
+  });
+
+  it("collapses past the cap to the ACTIVE chip plus every tab in the menu", () => {
+    const three = [tab("a", false), tab("b", true), tab("c", false)];
+    const { chips, menu } = collapseTabStrip(three);
+    expect(chips.map((t) => t.key)).toEqual(["b"]);
+    expect(menu.map((t) => t.key)).toEqual(["a", "b", "c"]);
+  });
+
+  it("falls back to the first tab as the chip when none is active", () => {
+    const three = [tab("a", false), tab("b", false), tab("c", false)];
+    expect(collapseTabStrip(three).chips.map((t) => t.key)).toEqual(["a"]);
+  });
+
+  it("renders no tabs menu at two tabs, and an 'N tabs' menu at three", () => {
+    const two = bar({ tabs: [tab("a", true), tab("b", false)] });
+    expect(two).not.toContain("data-doc-tabs-menu");
+
+    const three = bar({ tabs: [tab("a", true), tab("b", false), tab("c", false)] });
+    expect(three).toContain("data-doc-tabs-menu");
+    expect(three).toContain("3 tabs");
+    expect(three).toContain(en.docPage.topbarTabsMenuAria);
+    // The phone strip shows only the active chip; the other titles are in the
+    // (closed, portaled) menu, so they appear once - from the desktop strip.
+    const phone = three.slice(three.indexOf('data-doc-tab-strip="phone"'));
+    expect(phone).toContain("Tab a");
+    expect(phone).not.toContain("Tab b");
   });
 });

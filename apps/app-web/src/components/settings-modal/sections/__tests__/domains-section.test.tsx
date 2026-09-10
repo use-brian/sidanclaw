@@ -71,9 +71,11 @@ function render(node: React.ReactElement): string {
 }
 
 describe("[COMP:app-web/settings-domains] DomainsSection", () => {
-  it("renders the loading contract under SSR (the load effect never runs)", () => {
+  it("renders the cold-open skeleton under SSR (the load effect never runs), never a sentence", () => {
     const html = render(<DomainsSection />);
-    expect(html).toContain("...");
+    // Instant-navigation contract N4 / N5: the section's geometry, not "...".
+    expect(html).toContain('data-testid="domains-skeleton"');
+    expect(html).not.toContain("...");
     expect(html).not.toContain(td.subdomainHeading);
   });
 });

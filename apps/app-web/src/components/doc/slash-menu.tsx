@@ -24,11 +24,12 @@
  *      caller (the page renderer in P2G) supplies `onSelect`; this
  *      component is standalone and does not touch page state directly.
  *
- * Positioning is intentionally simple for v1: the popup is absolutely
- * positioned below the suggestion's `clientRect` with a 4 px gap. Phase
- * 4 can swap in Floating UI for edge-flip; the wiring point is the
- * `onStart`/`onUpdate` calls that set `style.top` / `style.left` on
- * the rendered element.
+ * Positioning: the popup is absolutely positioned against the suggestion's
+ * `clientRect` through `positionSuggestionPopup` (`lib/popup-clamp.ts`),
+ * which clamps it inside the visible viewport and flips it above the caret
+ * when the on-screen keyboard leaves no room below (responsive contract M5).
+ * It re-runs on every `onUpdate` and whenever the visual viewport changes
+ * (the keyboard rising after the menu opened).
  *
  * Insert semantics live entirely in `onSelect` — the consumer decides
  * whether to transform (current block was empty) or insert (non-empty),
@@ -47,6 +48,7 @@ import {
   useState,
   type ForwardRefRenderFunction,
 } from "react";
+import { onViewportChange, positionSuggestionPopup } from "@/lib/popup-clamp";
 import {
   AudioLines,
   Bookmark,
@@ -166,6 +168,7 @@ export type SlashMenuBlockKind =
   | "data"
   | "chart"
   | "diagram"
+  | "drawing"
   // Blueprint authoring directive ("/extract") — a non-prose `extraction_slot`
   // embed carrying a section's extraction instruction. Inserted like any embed.
   | "extraction_slot"
@@ -211,6 +214,7 @@ export const FALLBACK_LABELS = {
   bookmark: "Bookmark",
   chart: "Chart",
   diagram: "Diagram",
+  drawing: "Drawing",
   extraction_slot: "Extraction slot",
 } as const;
 
@@ -457,6 +461,7 @@ export const SLASH_MENU_ITEMS: readonly SlashMenuItem[] = [
     icon: Workflow,
     blockKind: "diagram",
   },
+  { id: "drawing", labelKey: "drawing", category: "media", aliases: ["drawing", "draw", "sketch", "excalidraw"], icon: Workflow, blockKind: "drawing" },
   {
     id: "extraction_slot",
     labelKey: "extraction_slot",
@@ -743,7 +748,8 @@ const SlashMenuPopupImpl: ForwardRefRenderFunction<SlashMenuPopupRef, SlashMenuP
     <div
       role="listbox"
       aria-label={ariaLabel ?? "Block types"}
-      className="z-50 w-72 overflow-hidden rounded-md border border-border bg-popover text-sm shadow-lg"
+      // Never wider than a 360px phone minus the clamp margins (M5).
+      className="z-50 w-[min(18rem,calc(100vw-1rem))] overflow-hidden rounded-md border border-border bg-popover text-sm shadow-lg"
       data-slash-menu="root"
       data-mode={isFiltering ? "filtered" : "grouped"}
     >
@@ -868,15 +874,19 @@ export function createSlashMenuExtension(options: SlashMenuExtensionOptions = {}
             // `onKeyDown` never closed the popup — we hide it ourselves and skip
             // updates for this token. See `suggestion-dismiss.ts`.
             const dismiss = createSuggestionDismiss();
+            // The last props seen, so a viewport change (the keyboard rising
+            // after the menu opened) can re-place the popup without a new
+            // suggestion update.
+            let lastProps: SuggestionProps<SlashMenuItem> | null = null;
+            let stopViewport: (() => void) | null = null;
 
             const positionPopup = (props: SuggestionProps<SlashMenuItem>) => {
+              lastProps = props;
               const el = component?.element as HTMLElement | undefined;
               if (!el) return;
               const rect = props.clientRect?.();
               if (!rect) return;
-              el.style.position = "absolute";
-              el.style.top = `${rect.bottom + window.scrollY + 4}px`;
-              el.style.left = `${rect.left + window.scrollX}px`;
+              positionSuggestionPopup(el, rect);
             };
 
             const setHidden = (hidden: boolean) => {
@@ -907,6 +917,9 @@ export function createSlashMenuExtension(options: SlashMenuExtensionOptions = {}
                   document.body.appendChild(component.element);
                 }
                 positionPopup(props);
+                stopViewport = onViewportChange(() => {
+                  if (lastProps) positionPopup(lastProps);
+                });
               },
               onUpdate: (props) => {
                 // Stay closed for the rest of a dismissed token (Notion behavior).
@@ -938,6 +951,9 @@ export function createSlashMenuExtension(options: SlashMenuExtensionOptions = {}
               },
               onExit: () => {
                 dismiss.reset();
+                stopViewport?.();
+                stopViewport = null;
+                lastProps = null;
                 if (component) {
                   component.element.parentNode?.removeChild(component.element);
                   component.destroy();

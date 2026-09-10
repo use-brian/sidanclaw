@@ -17,24 +17,31 @@
  * authoritative filter list (controlled), and `onChange(next)` fires
  * whenever the user adds, edits, or removes a chip.
  *
- * The popover library question is intentionally settled with a plain
- * absolutely-positioned `<div>` + outside-click handler — matches the
- * slash-menu / floating-toolbar pattern in this app, avoids pulling in
- * a `Popover` primitive that's not currently shipped from `@base-ui`,
- * and keeps SSR rendering predictable for the app-web vitest suite
- * (node-only — no jsdom). Phase 4 can swap in a real popover.
+ * The popover is the project `Popover` primitive (base-ui Positioner) so it
+ * flips and clamps inside a 360px viewport instead of running off the right
+ * edge from an `absolute left-0` panel (responsive contract M5; report B row
+ * 35), and its pickers are the project `Select` (never a native `<select>`,
+ * root CLAUDE.md anti-pattern; report B row 54). The popup is a portal, so
+ * the closed-state SSR markup still carries no popover root.
  */
 
 import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ChangeEvent,
   type KeyboardEvent,
 } from "react";
 import { Filter as FilterIcon, X as XIcon } from "lucide-react";
+import { Popover, PopoverContent } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useT } from "@/lib/i18n/client";
 import type { A2UIColumn } from "@use-brian/views-renderer";
 
@@ -142,9 +149,14 @@ export function FilterBar({ columns, value, onChange, className }: FilterBarProp
   //   * null — popover closed
   //   * value.length — editing the trailing "+ Filter" (a fresh row)
   //   * 0..value.length-1 — editing the chip at that index
+  // The popover anchors to whichever control opened it (the "+ Filter"
+  // button or the chip being edited), so the Positioner can flip / shift
+  // it against that element.
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
 
-  const handleAdd = () => {
-    setOpenIndex(value.length);
+  const openAt = (index: number, el: HTMLElement) => {
+    setAnchor(el);
+    setOpenIndex(index);
   };
 
   const handleRemove = (index: number) => {
@@ -183,8 +195,8 @@ export function FilterBar({ columns, value, onChange, className }: FilterBarProp
           aria-label={t.filterButtonAria}
           aria-haspopup="dialog"
           aria-expanded={openIndex === 0}
-          onClick={handleAdd}
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          onClick={(e) => openAt(value.length, e.currentTarget)}
+          className="inline-flex h-9 items-center gap-1 rounded-md border border-dashed border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground md:h-7"
         >
           <FilterIcon className="h-3.5 w-3.5" aria-hidden />
           <span>{t.filterButton}</span>
@@ -196,7 +208,7 @@ export function FilterBar({ columns, value, onChange, className }: FilterBarProp
               key={`${filter.propertyName}-${i}`}
               filter={filter}
               columns={columns}
-              onEdit={() => setOpenIndex(i)}
+              onEdit={(el) => openAt(i, el)}
               onRemove={() => handleRemove(i)}
               removeLabel={t.filterRemoveAria}
               operatorLabel={(op) => operatorLabelFor(op, t.operators)}
@@ -208,22 +220,38 @@ export function FilterBar({ columns, value, onChange, className }: FilterBarProp
             aria-label={t.filterButtonAria}
             aria-haspopup="dialog"
             aria-expanded={openIndex === value.length}
-            onClick={handleAdd}
-            className="inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+            onClick={(e) => openAt(value.length, e.currentTarget)}
+            className="inline-flex h-9 items-center gap-1 rounded-md border border-dashed border-border bg-background px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground md:h-7"
           >
             <span>{t.filterAddAnother}</span>
           </button>
         </>
       )}
 
-      {openIndex !== null ? (
-        <FilterPopover
-          columns={columns}
-          initial={openIndex < value.length ? value[openIndex] : null}
-          onCommit={(filter) => handleCommit(openIndex, filter)}
-          onCancel={handleCancel}
-        />
-      ) : null}
+      <Popover
+        open={openIndex !== null}
+        onOpenChange={(open) => {
+          if (!open) setOpenIndex(null);
+        }}
+      >
+        <PopoverContent
+          anchor={anchor}
+          align="start"
+          role="dialog"
+          aria-label={t.filterButton}
+          data-popover="filter"
+          className="w-[min(20rem,calc(100vw-1rem))] p-3"
+        >
+          {openIndex !== null ? (
+            <FilterPopover
+              columns={columns}
+              initial={openIndex < value.length ? value[openIndex] : null}
+              onCommit={(filter) => handleCommit(openIndex, filter)}
+              onCancel={handleCancel}
+            />
+          ) : null}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
@@ -240,7 +268,8 @@ function FilterChip({
 }: {
   filter: Filter;
   columns: readonly A2UIColumn[];
-  onEdit: () => void;
+  /** Receives the chip's edit control so the popover can anchor to it. */
+  onEdit: (el: HTMLElement) => void;
   onRemove: () => void;
   removeLabel: string;
   operatorLabel: (op: string) => string;
@@ -252,12 +281,12 @@ function FilterChip({
     <span
       data-chip="filter"
       data-property={filter.propertyName}
-      className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-muted/40 px-2 text-xs text-foreground"
+      className="inline-flex h-9 items-center gap-1 rounded-md border border-border bg-muted/40 px-2 text-xs text-foreground md:h-7"
     >
       <button
         type="button"
         data-action="edit-chip"
-        onClick={onEdit}
+        onClick={(e) => onEdit(e.currentTarget)}
         className="inline-flex items-center gap-1 outline-none hover:text-foreground"
       >
         <span className="font-medium">{propLabel}</span>
@@ -269,7 +298,7 @@ function FilterChip({
         data-action="remove-chip"
         aria-label={removeLabel}
         onClick={onRemove}
-        className="-mr-1 flex h-4 w-4 items-center justify-center rounded text-muted-foreground hover:bg-border hover:text-foreground"
+        className="-mr-1 flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-border hover:text-foreground md:size-4"
       >
         <XIcon className="h-3 w-3" aria-hidden />
       </button>
@@ -329,7 +358,8 @@ function FilterPopover({
         : String(initial.value ?? "")
       : "",
   );
-  const ref = useRef<HTMLDivElement | null>(null);
+  // Outside-press and Escape are the Popover primitive's (`onOpenChange`),
+  // so this panel only owns the field state and Enter-to-apply.
 
   // When the property changes, reset op to first valid for the new kind.
   useEffect(() => {
@@ -338,26 +368,17 @@ function FilterPopover({
     }
   }, [ops, op]);
 
-  // Outside click → cancel.
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        onCancel();
-      }
-    }
-    if (typeof document !== "undefined") {
-      document.addEventListener("mousedown", onDocClick);
-      return () => document.removeEventListener("mousedown", onDocClick);
-    }
-    return undefined;
-  }, [onCancel]);
+  // Label maps for the two pickers (`Select` renders the chosen value's label
+  // through `items`).
+  const propertyItems = useMemo(
+    () => Object.fromEntries(columns.map((c) => [c.field, c.header])) as Record<string, string>,
+    [columns],
+  );
+  const opItems = useMemo(
+    () => Object.fromEntries(ops.map((o) => [o, operatorLabelFor(o, t.operators)])) as Record<string, string>,
+    [ops, t.operators],
+  );
 
-  const handlePropertyChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    setPropertyName(e.target.value);
-  };
-  const handleOpChange = (e: ChangeEvent<HTMLSelectElement>) => {
-    setOp(e.target.value);
-  };
   const handleValueChange = (e: ChangeEvent<HTMLInputElement>) => {
     setValueInput(e.target.value);
   };
@@ -391,61 +412,76 @@ function FilterPopover({
   };
 
   return (
-    <div
-      ref={ref}
-      role="dialog"
-      aria-label={t.filterButton}
-      onKeyDown={handleKey}
-      data-popover="filter"
-      className="absolute left-0 top-full z-40 mt-1 w-80 rounded-md border border-border bg-popover p-3 text-sm shadow-lg"
-    >
+    <div onKeyDown={handleKey} className="text-sm">
       <div className="flex flex-col gap-2">
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">
             {t.filterPickProperty}
           </span>
-          <select
-            data-field="property"
+          <Select
             value={propertyName}
-            onChange={handlePropertyChange}
-            className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+            items={propertyItems}
+            onValueChange={(v) => {
+              if (v) setPropertyName(String(v));
+            }}
           >
-            {columns.map((c) => (
-              <option key={c.field} value={c.field}>
-                {c.header}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
+            <SelectTrigger
+              data-field="property"
+              aria-label={t.filterPickProperty}
+              className="h-11 w-full md:h-8"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {columns.map((c) => (
+                <SelectItem key={c.field} value={c.field}>
+                  {c.header}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1">
           <span className="text-xs font-medium text-muted-foreground">
             {t.filterPickOperator}
           </span>
-          <select
-            data-field="operator"
+          <Select
             value={op}
-            onChange={handleOpChange}
-            className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+            items={opItems}
+            onValueChange={(v) => {
+              if (v) setOp(String(v));
+            }}
           >
-            {ops.map((o) => (
-              <option key={o} value={o}>
-                {operatorLabelFor(o, t.operators)}
-              </option>
-            ))}
-          </select>
-        </label>
+            <SelectTrigger
+              data-field="operator"
+              aria-label={t.filterPickOperator}
+              className="h-11 w-full md:h-8"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="start">
+              {ops.map((o) => (
+                <SelectItem key={o} value={o}>
+                  {operatorLabelFor(o, t.operators)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         {!VALUE_LESS_OPS.has(op) ? (
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">
               {t.filterValuePlaceholder}
             </span>
+            {/* 16px on a phone (iOS zooms a smaller field on focus, M4); the
+                date type keeps the platform's own picker. */}
             <input
               data-field="value"
               type={col?.kind === "number" ? "number" : col?.kind === "date" ? "date" : "text"}
               value={valueInput}
               onChange={handleValueChange}
               placeholder={t.filterValuePlaceholder}
-              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+              className="h-11 rounded-md border border-border bg-background px-2 text-[16px] md:h-8 md:text-sm"
             />
           </label>
         ) : null}
@@ -454,7 +490,7 @@ function FilterPopover({
             type="button"
             data-action="cancel"
             onClick={onCancel}
-            className="h-7 rounded-md border border-border bg-background px-2 text-xs hover:bg-muted"
+            className="h-9 rounded-md border border-border bg-background px-2 text-xs hover:bg-muted md:h-7"
           >
             {t.close}
           </button>
@@ -462,7 +498,7 @@ function FilterPopover({
             type="button"
             data-action="apply"
             onClick={handleApply}
-            className="h-7 rounded-md bg-action px-2 text-xs text-action-foreground hover:bg-action/90"
+            className="h-9 rounded-md bg-action px-2 text-xs text-action-foreground hover:bg-action/90 md:h-7"
           >
             {t.apply}
           </button>

@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   keepCrmRecordsSeparate: vi.fn(),
   mergeCrmRecords: vi.fn(),
   reviewCrmSeparationAgain: vi.fn(),
+  setCrmRecordArchived: vi.fn(),
   undoCrmMerge: vi.fn(),
 }));
 const dialogs = vi.hoisted(() => ({ confirmDialog: vi.fn() }));
@@ -66,6 +67,7 @@ beforeEach(async () => {
   api.fetchCrmDuplicates.mockResolvedValueOnce(groups).mockResolvedValue([]);
   api.fetchCrmSeparations.mockResolvedValueOnce([]).mockResolvedValue([separation]);
   api.keepCrmRecordsSeparate.mockResolvedValue({ separation, idempotent: false });
+  api.setCrmRecordArchived.mockResolvedValue(undefined);
   dialogs.confirmDialog.mockResolvedValue(true);
   host = document.createElement("div");
   document.body.append(host);
@@ -92,7 +94,7 @@ afterEach(() => {
 });
 
 describe("[COMP:app-web/crm-duplicate-decisions] duplicate review", () => {
-  it("offers Merge and Keep separate for every non-survivor", () => {
+  it("offers Merge, Keep separate and Archive for every non-survivor", () => {
     expect(document.body.textContent).toContain("Jordan Kim");
     expect(Array.from(document.body.querySelectorAll("button")).some(
       (button) => button.textContent?.trim() === "Merge",
@@ -100,6 +102,38 @@ describe("[COMP:app-web/crm-duplicate-decisions] duplicate review", () => {
     expect(Array.from(document.body.querySelectorAll("button")).some(
       (button) => button.textContent?.trim() === "Keep separate",
     )).toBe(true);
+    expect(Array.from(document.body.querySelectorAll("button")).some(
+      (button) => button.textContent?.trim() === "Archive",
+    )).toBe(true);
+  });
+
+  it("archives the non-survivor without touching the record that is kept", async () => {
+    // Archive exists for a record that is junk rather than the same person
+    // twice: merging that one would fold its wrong attributes into the
+    // survivor, so the survivor must be left completely alone.
+    const archive = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Archive",
+    );
+    expect(archive).toBeTruthy();
+
+    await act(async () => { archive!.click(); });
+    await settle();
+
+    expect(api.setCrmRecordArchived).toHaveBeenCalledTimes(1);
+    expect(api.setCrmRecordArchived).toHaveBeenCalledWith("workspace-1", RIGHT, true);
+    expect(api.mergeCrmRecords).not.toHaveBeenCalled();
+  });
+
+  it("asks before archiving, and does nothing when the confirm is declined", async () => {
+    dialogs.confirmDialog.mockResolvedValueOnce(false);
+    const archive = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Archive",
+    );
+    await act(async () => { archive!.click(); });
+    await settle();
+
+    expect(dialogs.confirmDialog).toHaveBeenCalled();
+    expect(api.setCrmRecordArchived).not.toHaveBeenCalled();
   });
 
   it("removes a kept pair and exposes reversible Review again state", async () => {

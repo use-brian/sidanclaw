@@ -201,4 +201,13 @@ describe("[COMP:app-web/view-config-filter-bar] SSR markup", () => {
     const removes = html.match(/data-action="remove-chip"/g) ?? [];
     expect(removes.length).toBe(2);
   });
+
+  it("never renders a native <select> (the pickers are the project Select)", () => {
+    // Report B row 54: the property / operator pickers were native
+    // `<select>`s, a root CLAUDE.md ban. Closed or open, none may render.
+    expect(mount([])).not.toMatch(/<select/);
+    expect(mount([{ propertyName: "title", op: "contains", value: "x" }])).not.toMatch(
+      /<select/,
+    );
+  });
 });

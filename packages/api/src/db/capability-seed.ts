@@ -1,28 +1,15 @@
-import { BUILTIN_PRIMITIVE_CONNECTOR_IDS } from '@use-brian/shared'
+import { BUILTIN_PRIMITIVE_CONNECTOR_IDS, DEFAULT_HOME_APP_TOOL_CAPABILITIES } from '@use-brian/shared'
 
 /**
- * Seed the built-in workspace primitives (`files` / `office` / `computer`) for
- * a newly created assistant.
- *
- * These are the `auth_type: 'none'` connectors, whose tools carry
- * `requiresCapability: '<connector id>'`. The grant is their ON state, so an
- * assistant created without one starts with that primitive switched OFF.
- *
- * `files` is NOT seeded here: it is a primary-only default (an app specialist
- * having no file tools is deliberate — see files.md → "Tools (8,
- * capability-gated)"), and the primary creation paths seed it explicitly
- * alongside the §17 primitives. `office` and `computer` were injected
- * unconditionally before the off switch existed, so every creation path must
- * seed them or a new assistant would silently lose capability its predecessors
- * had. Migration 412 is the same statement for assistants that already exist.
- *
- * Derived from the registry, so a 4th `auth_type: 'none'` connector is seeded
- * without editing this list — subtract, never enumerate.
- *
+ * Seed the default-on built-in primitives and Home app tool sets at assistant
+ * creation. Page, Feed, and the declared sets preserve prior availability.
+ * Existing Tasks/CRM grants remain kind-specific; Files is seeded separately
+ * for primary and standard assistants. App specialists do not receive Files.
  * See docs/architecture/features/builtin-primitives.md.
  */
 export const DEFAULT_ON_BUILTIN_CAPABILITIES: readonly string[] = [
   ...BUILTIN_PRIMITIVE_CONNECTOR_IDS,
+  ...DEFAULT_HOME_APP_TOOL_CAPABILITIES,
 ].filter((id) => id !== 'files').sort()
 
 type QueryFn = (sql: string, params: unknown[]) => Promise<unknown>

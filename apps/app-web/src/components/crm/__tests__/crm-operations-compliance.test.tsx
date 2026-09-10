@@ -87,6 +87,20 @@ afterEach(() => {
 });
 
 describe("[COMP:app-web/crm-operations] operations UI", () => {
+  it("records the explicitly selected language with the displayed stored wording", async () => {
+    api.getCrmCompliance.mockResolvedValue({ purposes: [{ ...purpose,localeWordings: { ja: "同意します" } }],events: [],suppressions: [] });
+    await mount(<CrmContactCompliance workspaceId={WORKSPACE_ID} contactId={CONTACT_ID} />);
+    const language = host.querySelector<HTMLButtonElement>(`button[aria-label="${en.crmPage.operations.wordingLocale}"]`)!;
+    await act(async () => language.click());
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find((item) => item.textContent === "日本語")!;
+    await act(async () => option.click());
+    expect(host.textContent).toContain("同意します");
+    const grant = Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((item) => item.textContent?.trim() === en.crmPage.operations.grant)!;
+    await act(async () => grant.click());
+    await settle();
+    expect(api.recordCrmConsent).toHaveBeenCalledWith(WORKSPACE_ID,CONTACT_ID,{ purposeKey: "marketing",action: "granted",source: "manual",locale: "ja" });
+  });
+
   it("renders fail-closed sendability and writes consent through the canonical API", async () => {
     await mount(<CrmContactCompliance workspaceId={WORKSPACE_ID} contactId={CONTACT_ID} />);
     expect(host.textContent).toContain("Blocked");

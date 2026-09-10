@@ -21,89 +21,69 @@
  * [COMP:app-web/recording-detail]
  */
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useT } from "@/lib/i18n/client";
-import { getRecording, type RecordingSummary } from "@/lib/api/recordings";
-import { RecordingPlayerProvider, RecordingVideoStage } from "@/lib/recordings/recording-player-context";
-import { RecordingPlayerBar } from "@/components/recordings/recording-player-bar";
-import { TranscriptPane } from "@/components/recordings/transcript-pane";
-import { ActionItemsRail } from "@/components/recordings/action-items-rail";
-import { HashSeek } from "@/components/recordings/recording-chrome";
+import { RecordingPlayerProvider } from "@/lib/recordings/recording-player-context";
+import { useRecordingSummary } from "@/lib/recordings/use-recording-summary";
+import { RecordingChromeContent } from "@/components/recordings/recording-chrome";
 import { ReclassifyContextButton } from "@/components/context/reclassify-context-dialog";
 
 export default function RecordingDetailPage() {
   const t = useT();
   const params = useParams<{ workspaceId: string; recordingId: string }>();
-  const [rec, setRec] = useState<RecordingSummary | null>(null);
-  const [missing, setMissing] = useState(false);
-
-  useEffect(() => {
-    let live = true;
-    getRecording(params.recordingId)
-      .then((r) => live && setRec(r))
-      .catch(() => live && setMissing(true));
-    return () => {
-      live = false;
-    };
-  }, [params.recordingId]);
-
-  if (missing) {
-    return (
-      <main className="mx-auto max-w-3xl p-6">
-        <p className="text-sm text-muted-foreground">{t.recordings.detailNotFound}</p>
-      </main>
-    );
-  }
-
-  const statusNote =
-    rec?.status === "queued"
-      ? t.recordings.detailStatusQueued
-      : rec?.status === "processing"
-        ? t.recordings.detailStatusProcessing
-        : rec?.status === "failed"
-          ? t.recordings.detailStatusFailed
-          : null;
-
+  const searchParams = useSearchParams();
+  const pageId = searchParams.get("page");
+  const { summary: rec, error } = useRecordingSummary(
+    params.workspaceId,
+    params.recordingId,
+  );
   const title = rec?.title ?? rec?.fileName ?? "";
+  const canPlay = rec?.status === "processed" || (rec?.durationMs ?? 0) > 0;
 
   return (
-    <RecordingPlayerProvider recordingId={params.recordingId} durationMs={rec?.durationMs ?? 0}>
-      <HashSeek />
-      <main className="mx-auto max-w-3xl space-y-4 p-6">
+    <main className="mx-auto w-full max-w-3xl space-y-4 p-6">
+      <nav className="flex items-center gap-4">
+        {pageId ? (
+          <Link
+            href={`/w/${params.workspaceId}/p/${encodeURIComponent(pageId)}`}
+            className="text-xs text-muted-foreground hover:underline"
+          >
+            {t.common.back}
+          </Link>
+        ) : null}
         <Link
-          href={`/w/${params.workspaceId}/p`}
+          href={`/w/${params.workspaceId}/p?panel=recordings`}
           className="text-xs text-muted-foreground hover:underline"
         >
           {t.recordings.detailBack}
         </Link>
-        <div className="flex items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold">{title}</h1>
-          {rec ? <ReclassifyContextButton workspaceId={params.workspaceId} primitive="recording" rowId={rec.recordingId} /> : null}
-        </div>
-
-        {statusNote ? <p className="text-sm text-muted-foreground">{statusNote}</p> : null}
-        {rec?.truncated ? (
-          <p className="text-sm text-muted-foreground">{t.recordings.detailTruncated}</p>
-        ) : null}
-
-        <RecordingVideoStage />
-        <RecordingPlayerBar title={title} className="sticky top-0 z-10" />
-
-        <section>
-          <h2 className="mb-2 text-sm font-medium">{t.recordings.actionItemsTitle}</h2>
-          <ActionItemsRail
-            recordingId={params.recordingId}
-            workspaceId={params.workspaceId}
-          />
-        </section>
-
-        <section>
-          <h2 className="mb-2 text-sm font-medium">{t.recordings.detailTranscript}</h2>
-          <TranscriptPane recordingId={params.recordingId} />
-        </section>
-      </main>
-    </RecordingPlayerProvider>
+      </nav>
+      {rec ? (
+        <>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h1 className="min-w-0 break-words text-xl font-semibold">{title}</h1>
+            <ReclassifyContextButton workspaceId={params.workspaceId} primitive="recording" rowId={rec.recordingId} />
+          </div>
+          <RecordingPlayerProvider
+            key={params.recordingId}
+            recordingId={canPlay ? params.recordingId : null}
+            durationMs={rec.durationMs ?? 0}
+          >
+            <RecordingChromeContent
+              recordingId={params.recordingId}
+              workspaceId={params.workspaceId}
+              title={title}
+              summary={rec}
+              standalone
+            />
+          </RecordingPlayerProvider>
+        </>
+      ) : (
+        <p role="status" className="text-sm text-muted-foreground">
+          {error ? t.recordings.detailNotFound : t.recordings.panelLoading}
+        </p>
+      )}
+    </main>
   );
 }

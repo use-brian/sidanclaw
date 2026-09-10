@@ -23,12 +23,23 @@
  * [COMP:app-web/sidebar-panel-feed]
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
+import { useCachedResource } from "@/lib/surface-cache";
+import {
+  feedSessionsCacheKey,
+  feedWorkspaceCacheKey,
+} from "@/lib/surface-prefetch";
+import {
+  loadFeedPlatformSessions,
+  loadFeedWorkspaceRecord,
+  type FeedPlatformSessions,
+  type FeedWorkspaceRecord,
+} from "@/lib/feed-surface-cache";
 import {
   FEED_GROUPS,
   FEED_CURRENT_PLATFORM_EVENT,
@@ -43,11 +54,6 @@ import {
   setCurrentFeedPlatform,
   type FeedPlatform,
 } from "@/lib/feed-nav";
-import {
-  fetchFeedDistributionAssistants,
-  fetchFeedDraftSessions,
-  type FeedDraftSessionSummary,
-} from "@/lib/api/feed";
 import {
   POST_QUEUE_STATUSES,
   buildPostQueue,
@@ -65,7 +71,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useSidebarData } from "@/components/doc/doc-sidebar-data";
-import { FEED_POSTS_CHANGED_EVENT } from "@/lib/feed-posts-events";
+import { requestSidebarClose } from "@/lib/sidebar-close";
 
 export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
   const t = useT();
@@ -73,7 +79,20 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const { feedProfiles } = useSidebarData();
-  const profiles = useMemo(() => feedProfiles ?? [], [feedProfiles]);
+
+  // The Feed shell's workspace record, read from the SAME cache key the
+  // `FeedProfilesProvider` reads (instant-navigation N2): the assistant set
+  // for the post list comes from it, and it doubles as the profiles source
+  // when the sidebar-data projection has not resolved yet. A warm key paints
+  // synchronously; a cold one answers from IndexedDB in milliseconds.
+  const workspaceKey = feedWorkspaceCacheKey(workspaceId);
+  const workspace = useCachedResource<FeedWorkspaceRecord>(workspaceKey, () =>
+    loadFeedWorkspaceRecord(workspaceId, workspaceKey),
+  );
+  const profiles = useMemo(
+    () => feedProfiles ?? workspace.data?.profiles ?? [],
+    [feedProfiles, workspace.data],
+  );
 
   // ── Current platform ────────────────────────────────────────────────────
   // The URL is authoritative AND available during render, so it resolves
@@ -125,24 +144,29 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
   }
 
   // ── The post list (D14) ─────────────────────────────────────────────────
-  const [assistantIds, setAssistantIds] = useState<string[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    void fetchFeedDistributionAssistants(workspaceId).then((assistants) => {
-      if (!cancelled) setAssistantIds(assistants.map((a) => a.id));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [workspaceId]);
-
-  const allAssistantIds = useMemo(() => {
-    const ids = new Set(assistantIds);
-    for (const profile of profiles) ids.add(profile.assistantId);
-    return Array.from(ids);
-  }, [assistantIds, profiles]);
-
-  const [items, setItems] = useState<PostQueueItem[]>([]);
+  // One platform's sessions for every distribution assistant, from the key
+  // the per-platform posts list reads too (`feed-sessions:<wid>:<viewer>:
+  // <platform>`), so the rail and the pane never pay for the same list
+  // twice and cannot disagree. The loader resolves the assistant set from
+  // the workspace record itself - joining that record's in-flight load on a
+  // cold start rather than waiting on it through a second effect (N7) - and
+  // the local "posts changed" signal marks the family stale, so this
+  // persistent panel carries no refetch listener of its own (N3).
+  const sessionsKey = feedSessionsCacheKey(workspaceId, platform);
+  const sessionsResource = useCachedResource<FeedPlatformSessions>(
+    sessionsKey,
+    () =>
+      loadFeedPlatformSessions({
+        workspaceId,
+        platform,
+        sessionsKey,
+        workspaceKey,
+      }),
+  );
+  const items = useMemo<PostQueueItem[]>(
+    () => buildPostQueue(sessionsResource.data ?? []),
+    [sessionsResource.data],
+  );
   const [filter, setFilter] = useState<PostQueueFilter>("all");
 
   // Seed the filter from `?status=` ONCE. The Approvals panel deep-links
@@ -158,42 +182,9 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
     setFilter(parseQueueFilter(fromUrl));
   }, [searchParams]);
 
-  // Generation guard. The platform resolves in two steps (URL synchronously,
-  // then the stored fallback), so two loads can be in flight at once — and
-  // without this the SLOWER one wins, which showed an empty Instagram list
-  // over the Threads posts that had already arrived.
-  const loadGeneration = useRef(0);
-  const loadPosts = useCallback(async () => {
-    const generation = ++loadGeneration.current;
-    if (allAssistantIds.length === 0) {
-      if (generation === loadGeneration.current) setItems([]);
-      return;
-    }
-    const perAssistant = await Promise.all(
-      allAssistantIds.map(async (assistantId) => ({
-        assistantId,
-        sessions: await fetchFeedDraftSessions(assistantId, platform).catch(
-          () => [] as FeedDraftSessionSummary[],
-        ),
-      })),
-    );
-    if (generation !== loadGeneration.current) return;
-    setItems(buildPostQueue(perAssistant));
-  }, [allAssistantIds, platform]);
-
-  useEffect(() => {
-    void loadPosts();
-  }, [loadPosts]);
-
-  // The pane creates, renames, and resolves posts. Without a signal the list
-  // would only refresh on a full page load, because the sidebar never
-  // unmounts (the persistent-layout rule in the root CLAUDE.md).
-  useEffect(() => {
-    const onChanged = () => void loadPosts();
-    window.addEventListener(FEED_POSTS_CHANGED_EVENT, onChanged);
-    return () => window.removeEventListener(FEED_POSTS_CHANGED_EVENT, onChanged);
-  }, [loadPosts]);
-
+  // The platform resolves in two steps (URL synchronously, then the stored
+  // fallback); each platform is its own cache key, so the slower of two
+  // loads can no longer paint the wrong platform's list over the right one.
   const visible = useMemo(() => filterQueue(items, filter), [items, filter]);
   const activePostId = feedPostIdFromPathname(pathname);
   const reviewCount = useMemo(
@@ -243,6 +234,7 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
                 <Link
                   href={href}
                   aria-current={activeRow ? "page" : undefined}
+                  onClick={requestSidebarClose}
                   className={rowCls(activeRow)}
                 >
                   <span className="min-w-0 flex-1 truncate">
@@ -306,6 +298,7 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
                 <Link
                   href={href}
                   aria-current={activeRow ? "page" : undefined}
+                  onClick={requestSidebarClose}
                   className={rowCls(activeRow)}
                 >
                   <span className="min-w-0 flex-1 truncate">
@@ -329,6 +322,7 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
                 <Link
                   href={href}
                   aria-current={activeRow ? "page" : undefined}
+                  onClick={requestSidebarClose}
                   className={rowCls(activeRow)}
                 >
                   <span className="min-w-0 flex-1 truncate">
@@ -416,6 +410,9 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
                 <Link
                   href={href}
                   aria-current={activeRow ? "page" : undefined}
+                  // Drawer hygiene (M7): a post row navigates, so it closes
+                  // the phone drawer - the extra tap in report D's flow 3.
+                  onClick={requestSidebarClose}
                   className={rowCls(activeRow)}
                 >
                   <StatusDot status={item.status} />
@@ -434,6 +431,7 @@ export function FeedSidebarPanel({ workspaceId }: { workspaceId: string }) {
           <li>
             <Link
               href={feedPath(workspaceId, { platform, segment: "posts" })}
+              onClick={requestSidebarClose}
               className={cn(rowCls(false), "text-[13px]")}
             >
               <Plus className="size-3.5 shrink-0" aria-hidden />

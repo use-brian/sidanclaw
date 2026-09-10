@@ -27,7 +27,7 @@
  * [COMP:app-web/tasks-surface]
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   ChevronRight,
@@ -43,6 +43,12 @@ import { OperatorTopbar } from "@/components/operator/operator-topbar";
 import { cn } from "@/lib/utils";
 import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
 import { surfaceDataKey } from "@/lib/surface-prefetch";
+import { useSurfaceContentCache } from "@/lib/offline/surface-content-cache";
+import { PHONE_QUERY, isPhoneViewport } from "@/lib/viewport";
+import {
+  OperatorBoardSkeleton,
+  OperatorRowsSkeleton,
+} from "@/components/operator/operator-skeletons";
 import { useT } from "@/lib/i18n/client";
 import {
   TaskSuggestionsBanner,
@@ -62,6 +68,7 @@ import {
 import {
   bulkTasks,
   fetchWorkspaceTasks,
+  isTaskRowList,
   taskIcon,
   taskPriority,
   type BulkTaskSet,
@@ -128,6 +135,26 @@ const SERVER_BULK_BATCH_SIZE = 200;
 
 const NONE = "__none__";
 
+function subscribePhoneViewport(onChange: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return () => {};
+  }
+  const query = window.matchMedia(PHONE_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+/**
+ * Reactive `isPhoneViewport()` for the row shape switch (card below `md`,
+ * grid from `md`). The server snapshot is `false`, and the rows this gates
+ * only ever render from the browser-only cache, so there is no hydration seam.
+ * Rendering ONE shape per row (instead of two trees toggled by CSS) keeps a
+ * 500-row list at one set of cell triggers.
+ */
+function usePhoneViewport(): boolean {
+  return useSyncExternalStore(subscribePhoneViewport, isPhoneViewport, () => false);
+}
+
 export function TasksSurface({ workspaceId }: { workspaceId: string }) {
   const t = useT().tasksPage;
   const brainT = useT().brainPage;
@@ -144,9 +171,17 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
   // the operator bar has usually already warmed this exact key
   // (`lib/surface-prefetch.ts`), so even a first visit often lands on data.
   const tasksKey = surfaceDataKey("tasks", workspaceId);
-  const tasks = useCachedResource(tasksKey, () =>
-    fetchWorkspaceTasks(workspaceId),
-  );
+  // Disk tier (plan §6.4): the list survives a reload, painting the last known
+  // rows while the network revalidates. Declared ABOVE `useCachedResource` so
+  // the disk read claims the key before the hook's own load starts.
+  const fetchTasks = useSurfaceContentCache({
+    key: tasksKey,
+    workspaceId,
+    resource: "tasks",
+    isValue: isTaskRowList,
+    fetch: () => fetchWorkspaceTasks(workspaceId),
+  });
+  const tasks = useCachedResource(tasksKey, fetchTasks);
   const rows = tasks.data ?? null;
   // Only an error with NOTHING to show is a load failure; a failed revalidation
   // behind a painted list stays quiet.
@@ -783,7 +818,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
                 setTaskRulesOpen(true);
               }}
               className={cn(
-                "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px]",
+                "inline-flex h-11 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-11 max-sm:justify-center max-sm:px-0 sm:h-7",
                 taskRulesOpen
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60",
@@ -806,14 +841,14 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
               aria-label={t.viewTable}
               onClick={() => setView({ view: "table" })}
               className={cn(
-                "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px]",
+                "inline-flex h-11 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-11 max-sm:justify-center max-sm:px-0 sm:h-7",
                 view.view === "table"
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60",
               )}
             >
               <Rows3 className="size-3.5" aria-hidden />
-              {t.viewTable}
+              <span className="max-sm:hidden">{t.viewTable}</span>
             </button>
             <button
               type="button"
@@ -821,14 +856,14 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
               aria-label={t.viewBoard}
               onClick={() => setView({ view: "board" })}
               className={cn(
-                "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px]",
+                "inline-flex h-11 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-11 max-sm:justify-center max-sm:px-0 sm:h-7",
                 view.view === "board"
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60",
               )}
             >
               <Kanban className="size-3.5" aria-hidden />
-              {t.viewBoard}
+              <span className="max-sm:hidden">{t.viewBoard}</span>
             </button>
             <button
               type="button"
@@ -836,16 +871,16 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
               aria-label={t.viewSuggestions}
               onClick={() => setView({ view: "suggestions" })}
               className={cn(
-                "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px]",
+                "relative inline-flex h-11 items-center gap-1.5 rounded-md px-2 text-[12.5px] max-sm:w-11 max-sm:justify-center max-sm:px-0 sm:h-7",
                 view.view === "suggestions"
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/70 hover:bg-sidebar-accent/60",
               )}
             >
               <Sparkles className="size-3.5" aria-hidden />
-              {t.viewSuggestions}
+              <span className="max-sm:hidden">{t.viewSuggestions}</span>
               {suggestionCount > 0 && (
-                <span className="rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums text-primary">
+                <span className="rounded-full bg-primary/15 px-1.5 text-[11px] tabular-nums text-primary max-sm:absolute max-sm:-right-0.5 max-sm:-top-0.5">
                   {suggestionCount}
                 </span>
               )}
@@ -884,7 +919,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
               type="button"
               disabled={bulkBusy}
               onClick={selectAllFiltered}
-              className="inline-flex h-7 items-center rounded-md px-2 text-[12.5px] font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+              className="inline-flex h-9 items-center rounded-md px-2 text-[12.5px] font-medium text-primary hover:bg-primary/10 disabled:opacity-50 md:h-7"
             >
               {format(t.selectAllFiltered, {
                 count: String(filtered.length),
@@ -978,7 +1013,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
                 serverSet: { status: "archived" },
               })
             }
-            className="inline-flex h-7 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-accent/60 disabled:opacity-50"
+            className="inline-flex h-9 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-accent/60 disabled:opacity-50 md:h-7"
           >
             {t.bulkArchive}
           </button>
@@ -986,7 +1021,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
             type="button"
             disabled={bulkBusy}
             onClick={() => void bulkDelete()}
-            className="inline-flex h-7 items-center rounded-md px-2 text-[12.5px] text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+            className="inline-flex h-9 items-center rounded-md px-2 text-[12.5px] text-red-500 hover:bg-red-500/10 disabled:opacity-50 md:h-7"
           >
             {t.bulkDelete}
           </button>
@@ -994,7 +1029,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
             type="button"
             aria-label={t.bulkClear}
             onClick={() => setSelected(new Set())}
-            className="ml-auto inline-flex h-7 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-accent/60"
+            className="ml-auto inline-flex h-9 items-center rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-accent/60 md:h-7"
           >
             {t.bulkClear}
           </button>
@@ -1019,7 +1054,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
                   setView({ quick: active ? null : f, statuses: [] })
                 }
                 className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors",
+                  "inline-flex h-9 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors md:h-7",
                   active
                     ? "border-foreground bg-foreground text-background"
                     : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -1036,7 +1071,7 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
             <button
               type="button"
               onClick={selectAllFiltered}
-              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-7"
             >
               <ListChecks className="size-3.5" aria-hidden />
               {format(t.selectAllFiltered, {
@@ -1119,8 +1154,8 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
       ) : (
       <div className="min-h-0 flex-1 overflow-auto">
         {rows === null ? (
-          <div className="p-6 text-sm text-muted-foreground">
-            {loadError ? (
+          loadError ? (
+            <div className="p-6 text-sm text-muted-foreground">
               <span>
                 {t.loadFailed}{" "}
                 <button
@@ -1131,10 +1166,14 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
                   {t.retry}
                 </button>
               </span>
-            ) : (
-              t.loading
-            )}
-          </div>
+            </div>
+          ) : view.view === "board" ? (
+            // Cold body paints the board / row geometry under the chrome
+            // already on screen, never a sentence (N4 / N5).
+            <OperatorBoardSkeleton columns={4} />
+          ) : (
+            <OperatorRowsSkeleton />
+          )
         ) : filtered.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">
             {all.length === 0 ? t.emptyAll : t.empty}
@@ -1148,10 +1187,13 @@ export function TasksSurface({ workspaceId }: { workspaceId: string }) {
             onStatusDrop={(row, status) =>
               void commitField(row, { status }, { status })
             }
+            onStatusChange={(row, status) => commitField(row, { status }, { status })}
             onOpenRecord={(row) => setOpenTaskId(row.id)}
           />
         ) : (
-          <div className="min-w-[640px]">
+          // The grid needs its 640px from `md`; below that the rows stack
+          // into cards (responsive contract M1) and take the viewport width.
+          <div className="md:min-w-[640px]">
             {groups.map((group) => (
               <div key={group.key || "__all__"}>
                 {view.group !== "none" && (
@@ -1286,10 +1328,23 @@ function TaskTableRow({
 }) {
   const t = useT().tasksPage;
   const icon = taskIcon(row);
+  const phone = usePhoneViewport();
+  if (phone) {
+    return (
+      <TaskCardRow
+        row={row}
+        roster={roster}
+        selected={selected}
+        onToggle={onToggle}
+        onOpen={onOpen}
+        commitField={commitField}
+      />
+    );
+  }
   return (
     <div
       className={cn(
-        "group/task grid grid-cols-[28px_minmax(0,1fr)_128px_44px_96px_110px_100px] items-center gap-1 px-4 py-1.5 transition-colors md:grid-cols-[28px_minmax(0,1fr)_128px_150px_96px_110px_100px]",
+        "group/task grid grid-cols-[28px_minmax(0,1fr)_128px_150px_96px_110px_100px] items-center gap-1 px-4 py-1.5 transition-colors",
         selected ? "bg-primary/5" : "hover:bg-muted/40",
       )}
     >
@@ -1297,9 +1352,11 @@ function TaskTableRow({
         checked={selected}
         onCheckedChange={() => onToggle(row.id)}
         aria-label={format(t.selectRowAria, { title: row.title })}
+        // Hover-revealed from `md` (this grid only renders from `md`); the
+        // touch path is the card row below.
         className={cn(
           "transition-opacity",
-          !selected && "opacity-0 group-hover/task:opacity-100 group-focus-within/task:opacity-100",
+          !selected && "opacity-100 md:opacity-0 md:group-hover/task:opacity-100 md:group-focus-within/task:opacity-100",
         )}
       />
       <button
@@ -1357,6 +1414,110 @@ function TaskTableRow({
 }
 
 
+/**
+ * The phone row (responsive contract M1): the board card's shape - title,
+ * then status + due + assignee on one line - with a visible 20px checkbox
+ * and the peek as the editor. Status stays an inline `Select` (the same
+ * `StatusCell` the grid uses, 36px tall below `md`) because changing status
+ * is the one edit worth not opening the peek for; every other field is
+ * edited in the peek the title opens.
+ */
+function TaskCardRow({
+  row,
+  roster,
+  selected,
+  onToggle,
+  onOpen,
+  commitField,
+}: {
+  row: TaskRow;
+  roster: AssignableMember[] | null;
+  selected: boolean;
+  onToggle: (id: string) => void;
+  onOpen: (row: TaskRow) => void;
+  commitField: (
+    row: TaskRow,
+    changes: AdjustMemoryChanges,
+    patch: Partial<TaskRow>,
+  ) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const t = useT().tasksPage;
+  const icon = taskIcon(row);
+  const member =
+    row.assigneeId && roster ? resolveAssignee(roster, row.assigneeId) : null;
+  const memberName = member ? memberDisplayName(member) : null;
+  const overdue =
+    row.due !== null &&
+    row.status !== "done" &&
+    row.status !== "archived" &&
+    new Date(row.due).getTime() < Date.now();
+  return (
+    <div
+      data-task-card-row
+      className={cn(
+        "flex items-start gap-3 border-b border-border/40 px-4 py-3 transition-colors",
+        selected && "bg-primary/5",
+      )}
+    >
+      <Checkbox
+        checked={selected}
+        onCheckedChange={() => onToggle(row.id)}
+        aria-label={format(t.selectRowAria, { title: row.title })}
+        className="mt-1 size-5"
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <button
+          type="button"
+          onClick={() => onOpen(row)}
+          title={t.openRecord}
+          className="flex w-full items-start gap-1.5 text-left text-[15px] font-medium leading-snug text-foreground"
+        >
+          {icon && (
+            <span className="mt-px shrink-0 leading-none" aria-hidden>
+              {icon}
+            </span>
+          )}
+          <span className="min-w-0 break-words">{row.title}</span>
+        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusCell
+            value={row.status}
+            onCommit={(status) => commitField(row, { status }, { status })}
+          />
+          {row.due && (
+            <span
+              className={cn(
+                "text-[12px] tabular-nums text-muted-foreground",
+                overdue && "text-red-500",
+              )}
+            >
+              {new Date(row.due).toLocaleDateString(undefined, {
+                month: "short",
+                day: "numeric",
+              })}
+            </span>
+          )}
+          {member && (
+            <span className="ml-auto inline-flex min-w-0 items-center gap-1.5" title={memberName ?? undefined}>
+              <UserAvatar
+                name={memberName ?? undefined}
+                email={member.email ?? undefined}
+                avatarUrl={member.avatarUrl}
+                size={20}
+              />
+              {/* The name travels with the avatar: touch cannot open a
+                  tooltip (C78). */}
+              <span className="max-w-[8rem] truncate text-[12px] text-muted-foreground">
+                {memberName}
+              </span>
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Action menu for the bulk bar — always shows its action label; picking
  *  an item fires `onPick` over the whole selection (a menu, not a value
  *  binding, so the same item can be picked twice in a row). */
@@ -1378,7 +1539,7 @@ function BulkMenu({
           <button
             type="button"
             disabled={disabled}
-            className="inline-flex h-7 items-center rounded-md border border-border px-2 text-[12.5px] font-medium hover:bg-accent/60 disabled:opacity-50"
+            className="inline-flex h-9 items-center rounded-md border border-border px-2 text-[12.5px] font-medium hover:bg-accent/60 disabled:opacity-50 md:h-7"
           >
             {label}
           </button>

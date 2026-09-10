@@ -24,10 +24,20 @@
  *     window, and the only place that pairing exists is the browser that asked.
  *     The group says so rather than implying a synced history.
  *
- * Fetches its own copy of everything (the "sidebar fetches its own copy"
- * pattern) - the panel outlives any individual section's mount.
+ * Reads through the surface cache, never its own copy (instant-navigation
+ * contract N2): reachability comes from the SAME `shopify:<wid>` key the
+ * surface reads (one request, one paint for both), and the drafts group has
+ * its own `shopify-drafts:<wid>` key whose fetcher asks for the shop identity
+ * and the `status:draft` products in parallel (N7). The drafts key is gated on
+ * `connected` - an unshared store has no tools to call, so asking would only
+ * manufacture a failure - which on a cold load is one gated round trip after
+ * the reachability answer, and on a warm one is nothing at all: both keys
+ * paint on the first frame. An empty cache paints skeleton rows (N4). No
+ * spine primitive exists for an external store, so the panel carries no
+ * listener and the keys revalidate on mount past the stale window.
  *
  * [COMP:app-web/shopify-app] (the sidebar-panel flavour)
+ * [COMP:app-web/shopify-surface-cache] (the shared-key read + first-paint rule)
  */
 
 import { useEffect, useState } from "react";
@@ -35,8 +45,11 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { ClipboardList, ExternalLink, Megaphone, PackageSearch, Sparkles, Store } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { callTool, listTools } from "@/lib/api/shopify";
+import { useCachedResource } from "@/lib/surface-cache";
+import { shopifyDraftsCacheKey, shopifyToolsCacheKey } from "@/lib/surface-prefetch";
 import { readRuns, runHref, type ShopifyRun } from "@/lib/shopify-history";
 import {
   SHOPIFY_SECTIONS,
@@ -69,10 +82,45 @@ const SECTION_ICON: Record<ShopifySection, LucideIcon> = {
 
 type DraftProduct = { id?: string; title?: string; updated_at?: string };
 
+/** What the `shopify-drafts:<wid>` key holds: the shop identity (for the
+ *  admin deep links + the footer) and the newest draft products. */
+type DraftsRecord = {
+  shop: { name: string | null; domain: string | null };
+  drafts: DraftProduct[];
+};
+
 /** `gid://shopify/Product/123` → `123`, for the admin deep link. */
 function numericId(gid: string | undefined): string | null {
   const m = /\/(\d+)(?:\?|$)/.exec(String(gid ?? ""));
   return m ? m[1] : null;
+}
+
+/** The drafts fetcher: shop identity and draft products in ONE parallel round (N7). */
+async function loadDrafts(workspaceId: string): Promise<DraftsRecord> {
+  const [info, list] = await Promise.all([
+    callTool<{ name?: string; myshopify_domain?: string }>(workspaceId, "shopifyGetShop", {}),
+    callTool<{ items?: DraftProduct[] }>(workspaceId, "shopifyListProducts", {
+      query: "status:draft",
+      first: 10,
+    }),
+  ]);
+  return {
+    shop: { name: info.name ?? null, domain: info.myshopify_domain ?? null },
+    drafts: [...(list.items ?? [])]
+      .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))
+      .slice(0, 6),
+  };
+}
+
+/** Two placeholder lines in the nested sub-row geometry - the cold-cache frame
+ *  for the drafts group, never a sentence (N4). Decorative only. */
+function DraftsSkeleton() {
+  return (
+    <div className="space-y-1.5 py-1 pr-2 pl-8" aria-hidden data-shopify-drafts-skeleton>
+      <Skeleton className="h-3 w-3/4" />
+      <Skeleton className="h-3 w-1/2" />
+    </div>
+  );
 }
 
 export function ShopifySidebarPanel({ workspaceId }: { workspaceId: string }) {
@@ -82,12 +130,27 @@ export function ShopifySidebarPanel({ workspaceId }: { workspaceId: string }) {
   const active = shopifySectionFromParams(searchParams);
   const onSurface = pathname.startsWith(`/w/${workspaceId}/shopify`);
 
-  const [shop, setShop] = useState<{ name: string | null; domain: string | null }>({
-    name: null,
-    domain: null,
-  });
-  const [connected, setConnected] = useState<boolean | null>(null);
-  const [drafts, setDrafts] = useState<DraftProduct[] | null>(null);
+  const tools = useCachedResource(shopifyToolsCacheKey(workspaceId), () => listTools(workspaceId));
+  // `null` while nothing is known. A store we cannot reach reads as "not
+  // connected" here, as before: the panel is navigation first, and the
+  // section rows must render whatever the store says.
+  const connected: boolean | null = tools.data
+    ? tools.data.connected
+    : tools.error !== undefined
+      ? false
+      : null;
+  const draftsResource = useCachedResource(
+    connected ? shopifyDraftsCacheKey(workspaceId) : null,
+    () => loadDrafts(workspaceId),
+  );
+  const shop = draftsResource.data?.shop ?? { name: null, domain: null };
+  // `null` = nothing cached and nothing failed yet (skeleton). A failed read
+  // degrades to "no lists shown" rather than blanking the section rows.
+  const drafts: DraftProduct[] | null = draftsResource.data
+    ? draftsResource.data.drafts
+    : draftsResource.error !== undefined
+      ? []
+      : null;
   const [runs, setRuns] = useState<ShopifyRun[]>([]);
 
   // Re-read on every section change: a run recorded in the Analyse section
@@ -102,47 +165,6 @@ export function ShopifySidebarPanel({ workspaceId }: { workspaceId: string }) {
     setRuns(readRuns(workspaceId));
   }, [workspaceId, active]);
 
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const tools = await listTools(workspaceId);
-        if (!alive) return;
-        setConnected(tools.connected);
-        if (!tools.connected) return;
-
-        const info = await callTool<{ name?: string; myshopify_domain?: string }>(
-          workspaceId,
-          "shopifyGetShop",
-          {},
-        );
-        if (!alive) return;
-        setShop({ name: info.name ?? null, domain: info.myshopify_domain ?? null });
-
-        const list = await callTool<{ items?: DraftProduct[] }>(workspaceId, "shopifyListProducts", {
-          query: "status:draft",
-          first: 10,
-        });
-        if (!alive) return;
-        setDrafts(
-          [...(list.items ?? [])]
-            .sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")))
-            .slice(0, 6),
-        );
-      } catch {
-        // The panel is navigation first. A store we cannot reach must not stop
-        // the section rows rendering, so this degrades to "no lists shown".
-        if (alive) {
-          setConnected(false);
-          setDrafts([]);
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [workspaceId]);
-
   const labels: Record<ShopifySection, string> = {
     draft: t.shopifyApp.tabDraft,
     inventory: t.shopifyApp.tabInventory,
@@ -155,7 +177,7 @@ export function ShopifySidebarPanel({ workspaceId }: { workspaceId: string }) {
     if (!connected) return null;
 
     if (section === "draft") {
-      if (drafts === null) return <p className={subNoteCls}>{t.shopifyApp.loading}</p>;
+      if (drafts === null) return <DraftsSkeleton />;
       if (drafts.length === 0) return <p className={subNoteCls}>{t.shopifyApp.noDrafts}</p>;
       return drafts.map((d) => {
         const id = numericId(d.id);

@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 // [COMP:app-web/redeem] — see docs/architecture/features/promo-codes.md
 //
 // Client half of the in-app redeem page. The server component
@@ -12,8 +14,9 @@ import { useCallback, useEffect, useState } from "react";
 import { authFetch, refreshUserCookie } from "@/lib/auth-fetch";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
+import { isPhoneViewport } from "@/lib/viewport";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 type RedeemResult =
   | { kind: "idle" }
@@ -85,7 +88,7 @@ export function RedeemForm({
   }, []);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
           <h1 className="text-2xl font-bold tracking-tight">{t.redeem.title}</h1>
@@ -100,15 +103,18 @@ export function RedeemForm({
               void submit();
             }}
           >
+            {/* No auto-focus on a phone (responsive contract M4): a shared
+                `?code=` link would otherwise land on a raised keyboard and,
+                under 16px, a zoomed viewport before any touch. */}
             <input
               type="text"
-              autoFocus
+              autoFocus={!isPhoneViewport()}
               placeholder={t.redeem.placeholder}
               value={code}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setCode(e.target.value.toUpperCase())
               }
-              className="flex h-12 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-center text-sm tracking-widest uppercase shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              className="flex h-12 w-full rounded-xl border border-input bg-transparent px-3 py-1 text-center text-[16px] tracking-widest uppercase shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
               disabled={result.kind === "submitting"}
             />
             <button

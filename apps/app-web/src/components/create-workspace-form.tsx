@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * In-app workspace-creation form, used by the workspace switcher's
  * create mode.
@@ -22,8 +24,9 @@
 import { useState } from "react";
 import { useT } from "@/lib/i18n/client";
 import { authFetch } from "@/lib/auth-fetch";
+import { isPhoneViewport } from "@/lib/viewport";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type CreatedWorkspace = {
   id: string;
@@ -89,7 +92,8 @@ export function CreateWorkspaceForm({
     <div className="flex flex-col gap-2 text-left">
       <input
         type="text"
-        autoFocus={autoFocus}
+        // Never raise the keyboard on open below `md` (responsive contract M4).
+        autoFocus={autoFocus && !isPhoneViewport()}
         value={name}
         onChange={(e) => {
           setName(e.target.value);
@@ -98,7 +102,7 @@ export function CreateWorkspaceForm({
         placeholder={t.namePlaceholder}
         maxLength={100}
         className={cn(
-          "w-full text-sm bg-muted/50 border border-border rounded-md",
+          "w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-md",
           "px-3 py-2 outline-none",
         )}
       />
@@ -112,7 +116,7 @@ export function CreateWorkspaceForm({
         rows={3}
         maxLength={500}
         className={cn(
-          "w-full text-sm bg-muted/50 border border-border rounded-md",
+          "w-full text-[16px] md:text-sm bg-muted/50 border border-border rounded-md",
           "px-3 py-2 outline-none resize-none",
         )}
       />
@@ -130,7 +134,7 @@ export function CreateWorkspaceForm({
             className={cn(
               "inline-flex items-center justify-center",
               "rounded-md border border-border bg-card hover:bg-muted",
-              "px-3 py-1.5 text-xs transition-colors",
+              "min-h-11 px-3 py-1.5 text-xs transition-colors sm:min-h-0",
             )}
           >
             {t.cancel}
@@ -143,7 +147,7 @@ export function CreateWorkspaceForm({
           className={cn(
             "inline-flex items-center justify-center",
             "rounded-md bg-action text-action-foreground hover:bg-action/90",
-            "px-3 py-1.5 text-xs font-medium transition-colors",
+            "min-h-11 px-3 py-1.5 text-xs font-medium transition-colors sm:min-h-0",
             "disabled:opacity-50 disabled:cursor-not-allowed",
           )}
         >

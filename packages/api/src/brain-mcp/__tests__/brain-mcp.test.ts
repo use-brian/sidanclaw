@@ -12,11 +12,12 @@ import express from 'express'
 import request from 'supertest'
 import type { Request } from 'express'
 import { z } from 'zod'
-import { buildTool, type PipelineBResult, type Tool, type ToolContext } from '@use-brian/core'
+import { buildTool, createAssociationTools, type PipelineBResult, type Tool, type ToolContext } from '@use-brian/core'
 import { hashSecret } from '../../db/api-key-store.js'
 import { mintBrainPlaintext, type BrainKeyStore } from '../../db/brain-keys-store.js'
 import { authenticateBrainRequest } from '../auth.js'
 import { brainMcpRoutes } from '../server.js'
+import { queryWithRLS } from '../../db/client.js'
 import {
   buildBrainTools,
   effectiveBrainClearance,
@@ -53,6 +54,7 @@ vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
 
 vi.mock('../../db/client.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../db/client.js')>()),
+  queryWithRLS: vi.fn(),
   query: vi.fn().mockImplementation(async (sql: string) => {
     if (sql.includes('assistant_capabilities')) {
       return { rows: [{ capability: 'tasks' }, { capability: 'crm' }] }
@@ -148,6 +150,10 @@ const CRM_TOOLS_STUB: BrainCrmTools = {
   recordCrmParticipation: stubCoreTool('recordCrmParticipation'),
   updateCrmParticipation: stubCoreTool('updateCrmParticipation'),
   setDealPipelineStage: stubCoreTool('setDealPipelineStage'),
+  saveCrmEntitlementPlan: { ...stubCoreTool('saveCrmEntitlementPlan'), requiresCapability: 'configure', homeAppToolSet: { app: 'crm', set: 'write' } },
+  saveCrmEvent: { ...stubCoreTool('saveCrmEvent'), requiresCapability: 'configure', homeAppToolSet: { app: 'crm', set: 'write' } },
+  sendCrmMessage: {...stubCoreTool('sendCrmMessage'),requiresCapability:'crm',homeAppToolSet:{app:'crm',set:'write'}},
+  getCrmDelivery: {...stubCoreTool('getCrmDelivery',true),requiresCapability:'crm',homeAppToolSet:{app:'crm',set:'read'}},
 }
 
 const RETRIEVAL_TOOLS_STUB: BrainRetrievalTools = {
@@ -236,6 +242,7 @@ const READ_TOOL_NAMES = [
   'listCrmPipelines',
   'previewCrmSegment',
   'listTasks',
+  'listRecordings',
   'searchBrain',
   'searchFileContent',
   'searchKnowledge',
@@ -280,7 +287,98 @@ const WRITE_TOOL_NAMES = [
   'updateTask',
 ] as const
 
+describe('[COMP:api/brain-mcp] recording discovery before transcription', () => {
+  it.each(['read', 'read_write'] as const)('lists pending recordings with a %s credential and no file storage', async (scope) => {
+    const tools = buildBrainTools({
+      workspaceId: 'ws', scope, keyId: 'k', maxClearance: 'internal',
+      ...ALL_STUBS, fileTools: undefined,
+    })
+    const tool = tools.find((t) => t.name === 'listRecordings')
+    expect(tool).toBeDefined()
+    const states = ['awaiting_upload', 'queued', 'processing', 'failed', 'processed']
+    vi.mocked(queryWithRLS).mockResolvedValueOnce({ rows: states.map((status) => ({
+      id: `recording-${status}`, workspaceId: 'ws', title: null, fileName: 'Team meeting.m4a',
+      kind: 'meeting', status, createdAt: new Date('2026-01-12T10:00:00Z'),
+      durationMs: '120000', bytes: null, transcriptFileId: null, truncated: false,
+      compartments: [], projectIds: [], gcsKey: 'ws/recordings/private-key',
+      storageUri: 'gs://private-bucket/recording',
+    })) } as never)
+
+    const result = await tool!.handler({
+      query: 'Team meeting', kind: 'meeting', since: '2026-01-12T00:00:00Z',
+      until: '2026-01-13T00:00:00Z', limit: 10,
+    })
+    expect(result.isError).toBeUndefined()
+    expect(JSON.parse(textBody(result))).toEqual(states.map((status) => ({
+      recordingId: `recording-${status}`, title: 'Team meeting.m4a', kind: 'meeting',
+      status, occurredAt: '2026-01-12T10:00:00.000Z', durationMs: 120000,
+      truncated: false, hasTranscript: false,
+    })))
+    // Exercise the real shared tool and catalog store, mocking only PostgreSQL.
+    const [userId, sql, params] = vi.mocked(queryWithRLS).mock.calls.at(-1)!
+    expect(userId).toBe('11111111-1111-1111-1111-111111111111')
+    expect(sql).toContain('FROM recordings')
+    expect(sql).toContain('workspace_id = $1')
+    expect(sql).toContain('sensitivity_rank(')
+    expect(sql).toContain('valid_to IS NULL')
+    expect(sql).toContain('retracted_at IS NULL')
+    expect(sql).not.toMatch(/status =|transcript_file_id IS NOT NULL|JOIN transcript/)
+    expect(params).toEqual(expect.arrayContaining([
+      'ws', 'internal', 'meeting', new Date('2026-01-12T00:00:00Z'),
+      new Date('2026-01-13T00:00:00Z'), '%Team meeting%', 10,
+    ]))
+  })
+})
+
 describe('[COMP:api/brain-mcp] buildBrainTools — scope gating', () => {
+  it('advertises native Association tools only for current app/set grants and credential scope', () => {
+    const associationTools = createAssociationTools({ execute: vi.fn() })
+    const base = { workspaceId: 'ws', keyId: 'k', maxClearance: null, ...ALL_STUBS, associationTools }
+    expect(buildBrainTools({ ...base, scope: 'read_write' }).some(tool => tool.name.includes('Association'))).toBe(false)
+    const appRead = new Set(['association', 'home_app:association:read'])
+    expect(buildBrainTools({ ...base, scope: 'read', agentActiveCapabilities: appRead }).filter(tool => tool.name.includes('Association')).map(tool => tool.name))
+      .toEqual(['getAssociationModuleStatus', 'listAssociationTickets'])
+    const all = new Set([...appRead, 'home_app:association:write', 'crm', 'home_app:crm:read', 'home_app:crm:write'])
+    const names = buildBrainTools({ ...base, scope: 'read', agentActiveCapabilities: all }).map(tool => tool.name)
+    for (const tool of Object.values(associationTools)) expect(names.includes(tool.name)).toBe(tool.isReadOnly)
+    expect(buildBrainTools({ ...base, scope: 'read_write', agentActiveCapabilities: all }).filter(tool => tool.name.includes('Association'))).toHaveLength(14)
+  })
+
+  it('rechecks Association permission in a direct MCP call after discovery', async () => {
+    const execute = vi.fn()
+    const tools = buildBrainTools({
+      workspaceId: '11111111-1111-4111-8111-111111111111', scope: 'read_write', keyId: '33333333-3333-4333-8333-333333333333', maxClearance: null,
+      ...ALL_STUBS, associationTools: createAssociationTools({ execute }),
+      agentActiveCapabilities: new Set(['association', 'home_app:association:read']),
+    })
+    // The per-call resolver's database grants omit Association, simulating revocation.
+    const result = await tools.find(tool => tool.name === 'getAssociationModuleStatus')!.handler({})
+    expect(result).toMatchObject({ isError: true })
+    expect(JSON.stringify(result)).toContain('not_authorized')
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('gates managed delivery discovery on CRM read/write grants and credential scope',()=>{
+    for(const scope of ['read','read_write'] as const) for(const caps of [[],['crm'],['crm','home_app:crm:read'],['crm','home_app:crm:write'],['crm','home_app:crm:read','home_app:crm:write']]) {
+      const names=buildBrainTools({workspaceId:'ws',keyId:'k',maxClearance:null,scope,...ALL_STUBS,agentActiveCapabilities:new Set(caps)}).map(tool=>tool.name)
+      expect(names.includes('getCrmDelivery')).toBe(caps.includes('home_app:crm:read'))
+      expect(names.includes('sendCrmMessage')).toBe(scope==='read_write' && caps.includes('home_app:crm:write'))
+    }
+  })
+
+  it('keeps generic plan/event configuration behind configure plus CRM write and write scope', () => {
+    for (const scope of ['read', 'read_write'] as const) {
+      for (const configure of [false, true]) {
+        const tools = buildBrainTools({ workspaceId: 'ws', keyId: 'k', maxClearance: null, scope, ...ALL_STUBS,
+          agentActiveCapabilities: new Set(['crm', 'home_app:crm:write', ...(configure ? ['configure'] : [])]),
+        })
+        for (const name of ['saveCrmEntitlementPlan', 'saveCrmEvent']) {
+          expect(tools.some(tool => tool.name === name)).toBe(configure && scope === 'read_write')
+        }
+      }
+    }
+  })
+
   it('a read_write key exposes every read tool plus every write tool', () => {
     const tools = buildBrainTools({
       workspaceId: 'ws', scope: 'read_write', keyId: 'k', maxClearance: null,

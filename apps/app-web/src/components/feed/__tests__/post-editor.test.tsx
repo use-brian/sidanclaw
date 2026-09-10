@@ -144,8 +144,8 @@ describe("[COMP:app-web/feed-post-editor] proposal replay", () => {
     expect(postEditorSource).toContain("te.previewMode");
   });
 
-  it("edits the working title in place through the Feed rename route", () => {
-    expect(postEditorSource).toContain("updateFeedDraftSessionTitle");
+  it("edits the working title through the durable working copy", () => {
+    expect(postEditorSource).toContain("await persist({ title })");
     expect(postEditorSource).toContain("aria-label={te.editTitle}");
     expect(postEditorSource).toContain('event.key === "Enter"');
     expect(postEditorSource).toContain('event.key === "Escape"');

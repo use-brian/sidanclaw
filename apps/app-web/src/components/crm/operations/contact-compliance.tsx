@@ -16,12 +16,14 @@ import {
   type CrmDeliveryChannel,
   type CrmSendabilityVerdict,
 } from "@/lib/api/crm";
+import { LOCALES, LOCALE_LABELS, type Locale } from "@/lib/i18n/config";
 import { useT } from "@/lib/i18n/client";
 
 export function CrmContactCompliance({ workspaceId, contactId }: { workspaceId: string; contactId: string }) {
   const t = useT().crmPage.operations;
   const [compliance, setCompliance] = useState<CrmCompliance | null>(null);
   const [purposeKey, setPurposeKey] = useState("");
+  const [wordingLocale, setWordingLocale] = useState<Locale | "default">("default");
   const [channel, setChannel] = useState<CrmDeliveryChannel>("email");
   const [verdict, setVerdict] = useState<CrmSendabilityVerdict | null>(null);
   const [busy, setBusy] = useState(false);
@@ -35,6 +37,7 @@ export function CrmContactCompliance({ workspaceId, contactId }: { workspaceId: 
 
   useEffect(() => {
     setCompliance(null);
+    setWordingLocale("default");
     setVerdict(null);
     void reload().catch(() => setError(t.complianceLoadFailed));
   }, [workspaceId, contactId]);
@@ -54,7 +57,7 @@ export function CrmContactCompliance({ workspaceId, contactId }: { workspaceId: 
     })) return;
     setBusy(true); setError(null);
     try {
-      await recordCrmConsent(workspaceId, contactId, { purposeKey, action, source: "manual" });
+      await recordCrmConsent(workspaceId, contactId, { purposeKey, action, source: "manual", ...(wordingLocale === "default" ? {} : { locale: wordingLocale }) });
       await reload();
     } catch { setError(t.complianceSaveFailed); }
     finally { setBusy(false); }
@@ -82,7 +85,7 @@ export function CrmContactCompliance({ workspaceId, contactId }: { workspaceId: 
       {error && <div className="mb-2 text-xs text-destructive">{error}</div>}
       {!compliance ? <div className="text-xs text-muted-foreground">{t.loading}</div> : compliance.purposes.length === 0 ? <div className="text-xs text-muted-foreground">{t.noPurposesForContact}</div> : <>
         <div className="grid gap-2 sm:grid-cols-2">
-          <Select value={purposeKey} onValueChange={(value) => setPurposeKey(value ?? "")}>
+          <Select value={purposeKey} onValueChange={(value) => { setPurposeKey(value ?? ""); setWordingLocale("default"); }}>
             <SelectTrigger><SelectValue placeholder={t.pickPurpose} /></SelectTrigger>
             <SelectContent>{compliance.purposes.map((purpose) => <SelectItem key={purpose.id} value={purpose.purposeKey}>{purpose.label}</SelectItem>)}</SelectContent>
           </Select>
@@ -94,6 +97,18 @@ export function CrmContactCompliance({ workspaceId, contactId }: { workspaceId: 
         <div className={`mt-2 rounded-lg px-3 py-2 text-xs ${verdict?.verdict === "allowed" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : verdict?.verdict === "blocked" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>
           <div className="font-semibold">{verdict ? t.verdictLabels[verdict.verdict] : t.checking}</div>
           {verdict?.reasons.length ? <div className="mt-1">{verdict.reasons.map((reason) => t.reasonLabels[reason]).join(", ")}</div> : null}
+        </div>
+        <div className="mt-2">
+          <Select value={wordingLocale} onValueChange={(value) => setWordingLocale((value ?? "default") as typeof wordingLocale)}>
+            <SelectTrigger aria-label={t.wordingLocale}><SelectValue /></SelectTrigger><SelectContent>
+              <SelectItem value="default">{t.wordingStoredDefault}</SelectItem>
+              {LOCALES.filter((locale) => compliance.purposes.find((purpose) => purpose.purposeKey === purposeKey)?.localeWordings?.[locale]).map((locale) => <SelectItem key={locale} value={locale}>{LOCALE_LABELS[locale]}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{(() => {
+            const purpose = compliance.purposes.find((item) => item.purposeKey === purposeKey);
+            return (wordingLocale !== "default" ? purpose?.localeWordings?.[wordingLocale] : undefined) ?? purpose?.wording;
+          })()}</p>
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
           <Button size="xs" variant="outline" disabled={busy} onClick={() => void consent("granted")}>{t.grant}</Button>

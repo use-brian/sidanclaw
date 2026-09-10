@@ -617,14 +617,14 @@ function AddFromGithub({
               onChange={(e) => setBranch(e.target.value)}
               placeholder={t.branchPlaceholder}
               aria-label={t.branchPlaceholder}
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] md:text-xs outline-none"
             />
             <input
               value={rootPath}
               onChange={(e) => setRootPath(e.target.value)}
               placeholder={t.rootPathPlaceholder}
               aria-label={t.rootPathPlaceholder}
-              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs outline-none"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-[16px] md:text-xs outline-none"
             />
           </div>
         </div>

@@ -369,7 +369,7 @@ export function DockRecorderButton({
                 aria-label={t.audioOptions}
                 title={t.audioOptions}
                 className={cn(
-                  "inline-flex h-full w-4 items-center justify-center border-l border-border/70",
+                  "inline-flex h-full w-8 items-center justify-center border-l border-border/70 sm:w-4",
                   "text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
                   "disabled:pointer-events-none disabled:opacity-50",
                   floating ? "rounded-r-full" : "rounded-r-md",
@@ -535,7 +535,7 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
             aria-label={paused ? t.resume : t.pause}
             title={paused ? t.resume : t.pause}
             onClick={() => (paused ? rec.resume() : rec.pause())}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:size-7"
           >
             {paused ? <Play className="size-3.5" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
           </button>
@@ -552,7 +552,7 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
                 if (ok) rec.discard();
               });
             }}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+            className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-destructive sm:size-7"
           >
             <X className="size-3.5" aria-hidden />
           </button>
@@ -561,7 +561,7 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
             aria-label={t.stop}
             title={t.stop}
             onClick={() => rec.stop()}
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-destructive px-2.5 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-destructive px-2.5 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 sm:h-7"
           >
             <Square className="size-3 fill-current" aria-hidden />
             {t.stop}
@@ -585,15 +585,15 @@ export function DockRecorderStrip({ rec, className }: { rec: DockRecorderApi; cl
 export function DockRecorderNotice({ rec, className }: { rec: DockRecorderApi; className?: string }) {
   const t = useT().recorder;
   const notice = rec.notice;
-  if (!notice) return null;
+  if (!notice && !rec.savingCount) return null;
   const informational =
-    notice.kind === "micHint" ||
-    notice.kind === "kept" ||
-    notice.kind === "queued" ||
-    notice.kind === "autoStopped" ||
-    notice.kind === "pauseStopped";
+    notice?.kind === "micHint" ||
+    notice?.kind === "kept" ||
+    notice?.kind === "queued" ||
+    notice?.kind === "autoStopped" ||
+    notice?.kind === "pauseStopped";
   const text =
-    notice.kind === "queued" || notice.kind === "handOffFailed"
+    !notice ? "" : notice.kind === "queued" || notice.kind === "handOffFailed"
       ? notice.text
       : notice.kind === "micHint"
         ? t.micHint
@@ -613,25 +613,33 @@ export function DockRecorderNotice({ rec, className }: { rec: DockRecorderApi; c
                       ? t.voiceFailed
                       : t.captureFailed;
   return (
-    <div
-      role="status"
-      className={cn(
-        "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs",
-        informational
-          ? "border-border bg-background/95 text-muted-foreground"
-          : "border-destructive/30 bg-destructive/10 text-destructive",
-        className,
+    <div className={cn("space-y-1.5", className)}>
+      {rec.savingCount > 0 && (
+        <div role="status" className="rounded-md border border-border bg-background/95 px-2.5 py-1.5 text-xs text-muted-foreground">
+          {t.savingBackground.replace("{count}", String(rec.savingCount))}
+        </div>
       )}
-    >
-      <span className="min-w-0 flex-1">{text}</span>
-      <button
-        type="button"
-        aria-label={t.dismiss}
-        onClick={rec.clearNotices}
-        className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <X className="size-3.5" aria-hidden />
-      </button>
+      {notice && (
+        <div
+          role="status"
+          className={cn(
+            "flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs",
+            informational
+              ? "border-border bg-background/95 text-muted-foreground"
+              : "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
+        >
+          <span className="min-w-0 flex-1">{text}</span>
+          <button
+            type="button"
+            aria-label={t.dismiss}
+            onClick={rec.clearNotices}
+            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

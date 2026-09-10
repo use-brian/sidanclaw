@@ -73,6 +73,25 @@ describe('[COMP:api/brain-stream-fanout] subscribeToBrainChanges', () => {
     expect(_getBrainSubscriberCount()).toBe(0)
   })
 
+  // The `goal` primitive (goals board / Triage / goal detail liveness) is a
+  // member of the vocabulary: a payload typed against the union compiles and
+  // fans out like any other. Pinned so a union edit that drops it fails here,
+  // not as a silently-ignored "unknown primitive" on every client.
+  it('fans out the goal primitive with its row id', () => {
+    const received: BrainChangePayload[] = []
+    subscribeToBrainChanges('ws-a', (p) => received.push(p))
+
+    const payload: BrainChangePayload = {
+      workspaceId: 'ws-a',
+      primitive: 'goal',
+      action: 'update',
+      rowId: 'goal-1',
+    }
+    _dispatchLocalForTests(payload)
+
+    expect(received).toEqual([payload])
+  })
+
   it('a throwing subscriber does not block the others', () => {
     const received: BrainChangePayload[] = []
     subscribeToBrainChanges('ws-a', () => {

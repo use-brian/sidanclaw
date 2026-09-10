@@ -1,3 +1,4 @@
+import { homeAppToolRequirements } from '@use-brian/shared'
 /**
  * In-memory fixture workspace for the capability probe battery (D4,
  * docs/plans/behavioral-evals.md §1/§3).
@@ -26,6 +27,7 @@
 import {
   LAYER_1_SYSTEM_PROMPT,
   createCrmTools,
+  createEntityAliasTools,
   createDocTools,
   createGoogleCalendarTools,
   createMemoryTools,
@@ -146,8 +148,11 @@ function stubExecute(tool: Tool): Tool {
     // writes get a shape-matched ack carrying a deterministic fixture id so
     // multi-step flows can proceed (v1.1 debt (b)); then the empty-workspace
     // read ack; then a bare "Done." for id-less writes.
-    execute: async () => ({
+    execute: async (input: Record<string, unknown>) => ({
       data:
+        (tool.name === 'noteAlias' || tool.name === 'splitAlias'
+          ? { entityId: input.entity_id ?? fixtureId(tool.name), aliases: tool.name === 'noteAlias' && typeof input.alias === 'string' ? [input.alias.trim().toLowerCase()] : [] }
+          : undefined) ??
         SEMANTIC_ACKS[tool.name] ??
         WRITE_ACK_TEMPLATES[tool.name]?.(fixtureId(tool.name)) ??
         (tool.isReadOnly
@@ -211,6 +216,7 @@ export function buildFixtureWorkspace(): FixtureWorkspace {
   addAll(tools, createSchedulingTools(anyStub()))
   addAll(tools, createTaskTools(anyStub(), anyStub()))
   addAll(tools, createCrmTools(anyStub()))
+  addAll(tools, createEntityAliasTools(anyStub()))
   addAll(tools, createMemoryTools(anyStub()))
   addAll(tools, createRetrievalTools(anyStub()))
   addAll(tools, createWorkflowBrainTools(anyStub()))
@@ -228,11 +234,15 @@ export function buildFixtureWorkspace(): FixtureWorkspace {
     FIXTURE_USER_CONTEXT +
     buildUnavailableCapabilitiesPrompt(unavailable, tools)
 
-  // Frozen-state capability grants: 'tasks' (§3 explicit) + 'crm' (probe
-  // expectations require saveContact/listDeals callable). The other declared
-  // capability ids (files/views/goals/bug_triage) gate builders this fixture
-  // does not inject.
-  const activeCapabilities: ReadonlySet<string> = new Set(['crm', 'tasks'])
+  // Every injected fixture tool is intentionally usable. Derive both app and
+  // named-set grants so evals never mistake a missing fixture grant for a
+  // model failure when the production tool metadata evolves.
+  const activeCapabilities: ReadonlySet<string> = new Set(
+    [...tools.values()].flatMap((tool) => [
+      ...(tool.requiresCapability ? [tool.requiresCapability] : []),
+      ...homeAppToolRequirements(tool),
+    ]),
+  )
 
   return { systemPrompt, tools, unavailable, activeCapabilities }
 }

@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Feed first run — extracted from `feed-home.tsx`'s `EmptyHome` when the home
  * dashboard was retired (feed-revamp.md §8). It renders at the surface index
@@ -38,7 +40,7 @@ import { useT, format } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export function FeedOnboarding({
   canCreateBrand,
@@ -233,7 +235,7 @@ export function FeedOnboarding({
   }
 
   return (
-    <div className="flex h-full min-h-[70vh] items-center justify-center px-6">
+    <div className="flex h-full min-h-[70dvh] items-center justify-center px-6">
       <div className="w-full max-w-sm space-y-5 text-center">
         <div className="mx-auto inline-flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground ring-1 ring-border">
           <Megaphone className="size-5" aria-hidden />
@@ -310,7 +312,7 @@ export function FeedOnboarding({
                 value={voiceHandle}
                 onChange={(e) => setVoiceHandle(e.target.value)}
                 placeholder={t.home.onboardVoicePlaceholder}
-                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus:outline-none"
+                className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm focus:outline-none"
               />
               <button
                 type="submit"
@@ -348,7 +350,7 @@ export function FeedOnboarding({
                   onChange={(e) => setName(e.target.value)}
                   placeholder={t.home.emptyNamePlaceholder}
                   disabled={busy}
-                  className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus:outline-none disabled:opacity-50"
+                  className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm focus:outline-none disabled:opacity-50"
                 />
                 <button
                   type="submit"

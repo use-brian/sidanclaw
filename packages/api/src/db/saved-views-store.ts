@@ -507,7 +507,7 @@ export function createDbSavedViewStore(
       return result.rows.length > 0
     },
 
-    async createDraft({ userId, workspaceId, name, nameOrigin, icon, entity, viewType, binding, page, nestParentId, autoPruneDays, originPrompt, anchorKey, writtenBy, deferCreatedEvent, teamspaceId, projectId, state }) {
+    async createDraft({ id, userId, workspaceId, name, nameOrigin, icon, entity, viewType, binding, page, nestParentId, autoPruneDays, originPrompt, anchorKey, writtenBy, deferCreatedEvent, teamspaceId, projectId, state }) {
       // Born-saved rows are durable artifacts (a paid synthesis brief), not
       // speculative renders: no prune date at all, so neither the daily prune
       // worker nor a later `unsave` can strand them on an expired timestamp.
@@ -555,7 +555,7 @@ export function createDbSavedViewStore(
         // a private page, never an insert into a teamspace the caller can't
         // see (the policy WITH CHECK backstops that anyway).
         `INSERT INTO saved_views
-           (workspace_id, created_by, name, name_origin, description, icon, entity, view_type, binding, page, state, nest_parent_id, position, origin_prompt, auto_prune_at, anchor_key, created_event_pending, teamspace_id, project_id)
+           (workspace_id, created_by, name, name_origin, description, icon, entity, view_type, binding, page, state, nest_parent_id, position, origin_prompt, auto_prune_at, anchor_key, created_event_pending, teamspace_id, project_id${id ? ', id' : ''})
          VALUES ($1, $2, $3, $4, NULL, $10, $5, $6, $7, $8, $17, $9,
            (SELECT COALESCE(MAX(position) + 1, 0) FROM saved_views
               WHERE nest_parent_id IS NOT DISTINCT FROM $9 AND workspace_id = $1),
@@ -569,7 +569,8 @@ export function createDbSavedViewStore(
              WHEN $18::boolean THEN $19::uuid
              WHEN $9::uuid IS NOT NULL THEN (SELECT p.project_id FROM saved_views p WHERE p.id = $9)
              ELSE NULL
-           END)
+           END${id ? ', $20::uuid' : ''})
+         ${id ? 'ON CONFLICT (id) DO NOTHING' : ''}
          RETURNING ${FULL_SELECT}`,
         [
           workspaceId,
@@ -591,8 +592,22 @@ export function createDbSavedViewStore(
           bornState,
           projectId !== undefined,
           projectId ?? null,
+          ...(id ? [id] : []),
         ],
       )
+      if (id && result.rows.length === 0) {
+        // A lost response or concurrent retry must not create another page or
+        // overwrite a page whose content has already been edited. RLS plus
+        // creator/workspace checks keep a guessed ID from exposing a row.
+        const existing = await queryWithRLS<FullRow>(userId,
+          `SELECT ${FULL_SELECT} FROM saved_views
+           WHERE id = $1 AND workspace_id = $2 AND created_by = $3`,
+          [id, workspaceId, userId])
+        if (!existing.rows[0]) {
+          throw Object.assign(new Error('Page ID is already in use'), { code: 'PAGE_ID_CONFLICT' })
+        }
+        return rowToFull(existing.rows[0])
+      }
       const view = rowToFull(result.rows[0])
       // Deferred (interactive) drafts hold their `created` event until the
       // client commits it (debounced typing / navigate-away) via

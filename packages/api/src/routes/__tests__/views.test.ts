@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, type Mocked } from 'vitest'
 import express from 'express'
 import request from 'supertest'
+import { drawingSceneDigest, type DrawingBlock } from '@use-brian/shared/drawing'
 
 vi.mock('../../db/client.js', () => ({
   query: vi.fn(),
@@ -1425,6 +1426,25 @@ describe('[COMP:api/views-routes] view-page metadata', () => {
 })
 
 describe('[COMP:api/views-routes] view-page edits', () => {
+  it.each([undefined, 'Architecture sketch'])('persists a drawing named %s with its export, rejects bad metadata, and requires authentication', async title => {
+    const scene: DrawingBlock['scene'] = { version: 1, elements: [], appState: { viewBackgroundColor: '#fff' }, files: {} }
+    const block: DrawingBlock = { kind: 'drawing', id: 'drawing-1', ...(title ? { title } : {}), scene, preview: {
+      mimeType: 'image/png', width: 1, height: 1, sceneDigest: await drawingSceneDigest(scene),
+      data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==',
+    } }
+    const page = { blocks: [block] }
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.updatePage.mockResolvedValueOnce(true)
+    stores.savedViewStore.getById.mockResolvedValueOnce(savedViewFixture({ page }))
+    expect((await request(app).patch('/api/views/sv-page-1/page').send({ page })).status).toBe(200)
+    expect(stores.savedViewStore.updatePage).toHaveBeenCalledWith(USER_ID, 'sv-page-1', page)
+    const invalid = { blocks: [{ ...block, preview: { ...block.preview, width: 2 } }] }
+    expect((await request(app).patch('/api/views/sv-page-1/page').send({ page: invalid })).status).toBe(400)
+    expect(stores.savedViewStore.updatePage).toHaveBeenCalledTimes(1)
+    const anonymous = makeApp({ userId: null })
+    expect((await request(anonymous.app).patch('/api/views/sv-page-1/page').send({ page })).status).toBe(401)
+    expect(anonymous.stores.savedViewStore.updatePage).not.toHaveBeenCalled()
+  })
   it('PATCH /views/:id/page rejects invalid page bodies', async () => {
     const { app } = makeApp({ userId: USER_ID })
     const res = await request(app)
@@ -1835,5 +1855,46 @@ describe('[COMP:api/doc-auto-title] POST /saved-views/:id/auto-title', () => {
     expect(res.status).toBe(200)
     expect(res.body).toEqual({ applied: false, title: null, icon: null })
     expect(stores.savedViewStore.setAutoTitle).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('[COMP:api/views-routes] offline draft identity', () => {
+  const id = '00000000-0000-4000-8000-000000000099'
+  it('advertises stable IDs only to workspace members', async () => {
+    const member = makeApp({ userId: USER_ID })
+    const allowed = await request(member.app).get(`/api/workspaces/${WORKSPACE_ID}/views/offline-capabilities`)
+    expect(allowed.status).toBe(200)
+    expect(allowed.body).toEqual({ clientAssignedPageIds: true })
+    const outsider = makeApp({ userId: USER_ID, role: null })
+    expect((await request(outsider.app).get(`/api/workspaces/${WORKSPACE_ID}/views/offline-capabilities`)).status).toBe(403)
+  })
+  it('accepts a stable UUID and returns that identity' , async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.createDraft.mockResolvedValueOnce(savedViewFixture({ id }))
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id })
+    expect(result.status).toBe(201)
+    expect(result.body.id).toBe(id)
+    expect(stores.savedViewStore.createDraft).toHaveBeenCalledWith(expect.objectContaining({ id, userId: USER_ID, workspaceId: WORKSPACE_ID, deferCreatedEvent: true }))
+  })
+  it('rejects malformed IDs before creation', async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id: 'not-a-uuid' })
+    expect(result.status).toBe(400)
+    expect(stores.savedViewStore.createDraft).not.toHaveBeenCalled()
+  })
+  it('rejects a parent outside the workspace', async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.getById.mockResolvedValueOnce(savedViewFixture({ workspaceId: 'another-workspace' }))
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id, nestParentId: id })
+    expect(result.status).toBe(404)
+    expect(stores.savedViewStore.createDraft).not.toHaveBeenCalled()
+  })
+  it('returns a conflict without leaking another owner or workspace', async () => {
+    const { app, stores } = makeApp({ userId: USER_ID })
+    stores.savedViewStore.createDraft.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 'PAGE_ID_CONFLICT' }))
+    const result = await request(app).post(`/api/workspaces/${WORKSPACE_ID}/views/draft`).send({ id })
+    expect(result.status).toBe(409)
+    expect(result.body).toEqual({ error: 'Page ID is already in use' })
   })
 })

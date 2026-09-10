@@ -66,7 +66,7 @@ function CopyField({
           readOnly
           value={value}
           onFocus={(e) => e.currentTarget.select()}
-          className="h-8 flex-1 rounded-md border border-border bg-muted px-2.5 font-mono text-xs outline-none"
+          className="h-8 flex-1 rounded-md border border-border bg-muted px-2.5 font-mono text-[16px] outline-none md:text-xs"
         />
         <button
           type="button"

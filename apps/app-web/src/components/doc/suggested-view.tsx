@@ -14,7 +14,7 @@
  * re-entry via `reloadDock()`, and pushes the Refresh result (one primary-
  * assistant curation turn) back through `setDock`. The composer hands a prompt
  * + chosen assistant into a fresh Personal thread in the Chat operator app.
- * Spec: docs/architecture/features/home-dock.md.
+ * Spec: docs/architecture/features/home-dock.md; docs/home-suggested.md (header).
  *
  * [COMP:app-web/home-suggested]
  */
@@ -42,7 +42,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useT } from "@/lib/i18n/client";
+import { useLocale, useT } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import { AssistantAvatar } from "@/components/assistant-avatar";
 import { SuggestedFileDrop } from "@/components/doc/suggested-file-drop";
@@ -60,7 +60,7 @@ import {
   personalChatHandoffPath,
   stashChatHandoff,
 } from "@/lib/chat-handoff";
-import { type PanelId } from "@/lib/doc-page-url";
+import { type PanelId, docEntryPath, panelTabEntry } from "@/lib/doc-page-url";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useSidebarData } from "./doc-sidebar-data";
 
@@ -119,6 +119,7 @@ export function SuggestedView({
   onOpenPanel,
 }: Props) {
   const copy = useT();
+  const locale = useLocale();
   const t = copy.docPage.suggested;
   const tChat = copy.chat;
   const router = useRouter();
@@ -131,6 +132,12 @@ export function SuggestedView({
   const [refreshing, setRefreshing] = useState(false);
   const [noteDismissed, setNoteDismissed] = useState(false);
   const [q, setQ] = useState("");
+  const [mounted, setMounted] = useState(false);
+
+  // Server and hydration share empty labels; only the browser knows local time.
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Revalidate the shared dock once when Home re-mounts (soft-nav back from
   // approvals/brain/etc., where the counts likely moved) — skipped while the
@@ -200,11 +207,11 @@ export function SuggestedView({
     router.push(personalChatHandoffPath(workspaceId, selectedAssistantId));
   }
 
-  const now = new Date();
-  const hours = now.getHours();
+  const now = mounted ? new Date() : null;
+  const hours = now?.getHours() ?? 0;
   const greeting =
     hours < 12 ? t.greetingMorning : hours < 18 ? t.greetingAfternoon : t.greetingEvening;
-  const dateLabel = now.toLocaleDateString(undefined, {
+  const dateLabel = now?.toLocaleDateString(locale === "zh" ? "zh-TW" : locale, {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -229,11 +236,11 @@ export function SuggestedView({
       {/* Header */}
       <div className="flex items-start gap-3">
         <div className="flex-1">
-          <div className="mb-1.5 text-[11.5px] font-bold uppercase tracking-wider text-muted-foreground/70">
+          <div className="mb-1.5 min-h-[1lh] text-[11.5px] font-bold uppercase tracking-wider text-muted-foreground/70">
             {dateLabel}
           </div>
-          <h1 className="text-[28px] font-bold tracking-tight text-foreground">
-            {userName ? `${greeting}, ${userName}` : greeting}
+          <h1 className="min-h-[1lh] text-[28px] font-bold tracking-tight text-foreground">
+            {mounted ? (userName ? `${greeting}, ${userName}` : greeting) : null}
           </h1>
           <p className="mt-1.5 text-[13.5px] text-muted-foreground">{t.subtitle}</p>
         </div>
@@ -333,21 +340,22 @@ export function SuggestedView({
           placeholder={t.buildPlaceholder}
           /* The wrapping bar draws the focus ring (focus-within); the inner
              input opts out of the global :focus-visible box-shadow —
-             `outline-none` alone never silences it (globals.css → ":focus-visible"). */
-          className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground"
+             `outline-none` alone never silences it (globals.css → ":focus-visible").
+             16px on a phone (iOS zooms a smaller field on focus, M4). */
+          className="min-w-0 flex-1 bg-transparent text-[16px] text-foreground outline-none focus-visible:shadow-none placeholder:text-muted-foreground md:text-sm"
         />
         <button
           type="submit"
           disabled={!q.trim() || !selectedAssistantId}
           aria-label={tChat.send}
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground"
+          className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-action text-action-foreground transition-colors hover:bg-action/90 disabled:bg-foreground/10 disabled:text-muted-foreground md:size-7"
         >
           <ArrowUp className="size-4" aria-hidden />
         </button>
       </form>
 
       {/* Drop files to add to the brain — store raw bytes + decompose content. */}
-      <SuggestedFileDrop workspaceId={workspaceId} />
+      <SuggestedFileDrop workspaceId={workspaceId} assistantId={assistantId} />
 
       {loading ? (
         <DockSkeleton />
@@ -362,7 +370,8 @@ export function SuggestedView({
                   type="button"
                   aria-label="Dismiss"
                   onClick={() => setNoteDismissed(true)}
-                  className="absolute right-2.5 top-2.5 grid size-6 place-items-center rounded-md text-muted-foreground/40 opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                  // Always visible on touch, hover-revealed from `md` (M2); 36px on a phone.
+                  className="absolute right-2.5 top-2.5 grid size-9 place-items-center rounded-md text-muted-foreground/40 opacity-100 transition-opacity hover:bg-accent hover:text-foreground md:size-6 md:opacity-0 md:group-hover:opacity-100"
                 >
                   <X className="size-3.5" aria-hidden />
                 </button>
@@ -765,8 +774,9 @@ function ApprovalSummaryCard({
       </button>
     );
   }
+  // The final panel URL, not the legacy `/approvals` redirect (N6).
   return (
-    <Link href={`/w/${workspaceId}/approvals`} className={cardClass}>
+    <Link href={docEntryPath(workspaceId, panelTabEntry("approvals"))} className={cardClass}>
       {inner}
     </Link>
   );
@@ -796,7 +806,7 @@ function cardConfig(kind: ResolvedNeed["kind"], workspaceId: string, t: Suggeste
         Icon: CheckCircle2,
         // The route redirects to the panel; `onOpenPanel` opens it as a tab
         // directly (the href is the no-JS / other-host fallback).
-        href: `/w/${workspaceId}/approvals`,
+        href: docEntryPath(workspaceId, panelTabEntry("approvals")),
         panel: "approvals" as PanelId | null,
         title: t.approvalsTitle,
         fallbackCaption: t.approvalsCaption,
@@ -810,7 +820,7 @@ function cardConfig(kind: ResolvedNeed["kind"], workspaceId: string, t: Suggeste
       return {
         accent: "workflow" as const,
         Icon: Target,
-        href: `/w/${workspaceId}/goals`,
+        href: docEntryPath(workspaceId, panelTabEntry("goals")),
         panel: "goals" as PanelId | null,
         title: t.autopilotTitle,
         fallbackCaption: t.autopilotCaption,

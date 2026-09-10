@@ -147,14 +147,14 @@ export function CrmActivityTimeline({
             value={subject}
             onChange={(event) => setSubject(event.target.value)}
             placeholder={t.activitySubject}
-            className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-xs outline-none"
+            className="h-9 w-full rounded-lg border border-border bg-background px-2.5 text-[16px] outline-none md:h-8 md:text-xs"
           />
           <textarea
             value={summary}
             onChange={(event) => setSummary(event.target.value)}
             placeholder={t.notePlaceholder}
             rows={4}
-            className="w-full resize-y rounded-lg border border-border bg-background px-2.5 py-2 text-xs outline-none"
+            className="w-full resize-y rounded-lg border border-border bg-background px-2.5 py-2 text-[16px] outline-none md:text-xs"
           />
           <label className="block text-[11px] text-muted-foreground">
             <span className="mb-1 block">{t.occurredAt}</span>
@@ -162,12 +162,12 @@ export function CrmActivityTimeline({
               type="datetime-local"
               value={occurredAt}
               onChange={(event) => setOccurredAt(event.target.value)}
-              className="h-8 w-full rounded-lg border border-border bg-background px-2.5 text-xs text-foreground outline-none"
+              className="h-9 w-full rounded-lg border border-border bg-background px-2.5 text-[16px] text-foreground outline-none md:h-8 md:text-xs"
             />
           </label>
           <div className="flex justify-end gap-2">
-            <Button size="xs" variant="ghost" onClick={() => setComposerOpen(false)}>{t.cancel}</Button>
-            <Button size="xs" disabled={saving || !summary.trim()} onClick={() => void saveActivity()}>{saving ? t.saving : t.saveActivity}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setComposerOpen(false)}>{t.cancel}</Button>
+            <Button size="sm" disabled={saving || !summary.trim()} onClick={() => void saveActivity()}>{saving ? t.saving : t.saveActivity}</Button>
           </div>
         </div>
       )}

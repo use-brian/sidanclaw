@@ -28,6 +28,8 @@ vi.mock('../client.js', () => ({
   query: (text: string, values?: unknown[]) => fakePool.query(text, values),
 }))
 
+vi.mock('../../crm-operations/privacy-admission.js',()=>({acquireCrmPrivacyAdmission:vi.fn(async()=>{})}))
+
 import { createSoftDeleteStore } from '../soft-delete-store.js'
 import type { RowSnapshot } from '@use-brian/core'
 
@@ -50,7 +52,7 @@ beforeEach(() => {
   fakeClient.query.mockReset()
   fakeClient.query.mockImplementation(async (text: string, values?: unknown[]) => {
     clientQueries.push({ text, values })
-    return { rows: [], rowCount: 1 }
+    return { rows: text.includes('FOR UPDATE') ? [{ isPerson: false }] : [], rowCount: 1 }
   })
   fakeClient.release.mockClear()
   fakePool.query.mockReset()
@@ -158,7 +160,7 @@ describe('[COMP:corrections/soft-delete-store] applyHardPurge', () => {
     fakeClient.query.mockImplementation(async (text: string, values?: unknown[]) => {
       clientQueries.push({ text, values })
       if (text.includes('DELETE FROM')) throw new Error('delete boom')
-      return { rows: [], rowCount: 1 }
+      return { rows: text.includes('FOR UPDATE') ? [{ isPerson: false }] : [], rowCount: 1 }
     })
     await expect(
       store.applyHardPurge({
@@ -174,5 +176,30 @@ describe('[COMP:corrections/soft-delete-store] applyHardPurge', () => {
     ).rejects.toThrow('delete boom')
     expect(clientQueries.map((q) => q.text)).toContain('ROLLBACK')
     expect(fakeClient.release).toHaveBeenCalledOnce()
+  })
+
+  it('never inserts personal reason, ticket or caller snapshot into the purge receipt', async () => {
+    fakeClient.query.mockImplementation(async (text: string, values?: unknown[]) => {
+      clientQueries.push({ text, values })
+      return { rows: text.includes("SELECT kind='person'") ? [{ isPerson: true }] : [], rowCount: 1 }
+    })
+    await store.applyHardPurge({ primitive: 'contact',workspaceId: 'ws-1',rowId: 'e-1',actorUserId: 'u-1',
+      reason: 'Private request from person@example.com',ticketReference: 'person@example.com',
+      snapshot: { ...fileSnapshot,primitive: 'contact',rowId: 'e-1' },now: NOW })
+    const audit = clientQueries.find((q) => q.text.includes('INSERT INTO correction_audit'))!
+    expect(audit.values?.slice(4)).toEqual(['Personal data erased',null,JSON.stringify({ erased: true })])
+    expect(JSON.stringify(clientQueries)).not.toContain('person@example.com')
+  })
+
+  it('rejects a stale purge snapshot without inserting another audit', async () => {
+    fakeClient.query.mockImplementation(async (text: string, values?: unknown[]) => {
+      clientQueries.push({ text, values })
+      return { rows: [],rowCount: 0 }
+    })
+    await expect(store.applyHardPurge({ primitive: 'contact',workspaceId: 'ws-1',rowId: 'e-1',actorUserId: 'u-1',
+      reason: 'Erasure',ticketReference: null,snapshot: { ...fileSnapshot,primitive: 'contact' },now: NOW }))
+      .rejects.toMatchObject({ code: 'row_not_found' })
+    expect(clientQueries.some((q) => q.text.includes('INSERT INTO correction_audit'))).toBe(false)
+    expect(clientQueries.at(-1)?.text).toBe('ROLLBACK')
   })
 })

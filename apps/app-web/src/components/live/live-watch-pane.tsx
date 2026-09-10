@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Live watch pane — token-by-token body of one focused session. The parent
  * Live surface owns the shared top-bar title and Open-in-chat action.
@@ -69,7 +71,7 @@ import { ChatConfirmationCard } from "@/components/chrome/chat-confirmation-card
 import { PendingQuestionPanel } from "@/components/chrome/pending-question-panel";
 import { QueuedInputs } from "@/components/ui/queued-inputs";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 /** How much settled history the pane shows above the live turn. */
 const HISTORY_TAIL = 8;
@@ -471,7 +473,12 @@ export function LiveWatchPane({
 
       <aside
         data-live-activity-rail
-        className="sticky top-0 flex flex-col gap-3 rounded-2xl border border-border/70 bg-card p-4 shadow-sm"
+        // Below `xl` the grid is one column, so the rail rendered UNDER the
+        // settled history and the growing live turn: on a phone Force stop was
+        // off-screen exactly when the turn was running. `order-first` puts the
+        // interventions above the transcript there; the rail sticks to the top
+        // only in the two-column layout, where it has a column to stick in.
+        className="order-first flex flex-col gap-3 rounded-2xl border border-border/70 bg-card p-4 shadow-sm xl:sticky xl:top-0 xl:order-none"
       >
         <div className="flex items-center justify-between gap-2">
           <span className="inline-flex items-center gap-2 text-xs font-semibold text-foreground">
@@ -500,7 +507,7 @@ export function LiveWatchPane({
               type="button"
               onClick={() => void forceStop()}
               disabled={stopping}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-destructive/25 bg-background px-3 py-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-destructive/25 bg-background px-3 py-2 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0"
             >
               {stopping ? (
                 <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />
@@ -529,13 +536,13 @@ export function LiveWatchPane({
                 rows={3}
                 maxLength={8_000}
                 placeholder={tl.steerPlaceholder}
-                className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:shadow-none"
+                className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-2 text-[16px] leading-relaxed text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:shadow-none md:text-xs"
               />
               <button
                 type="button"
                 onClick={steerNow}
                 disabled={!steerDraft.trim()}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-action px-3 py-2 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-action px-3 py-2 text-xs font-medium text-action-foreground transition-colors hover:bg-action/90 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-0"
               >
                 <SendHorizontal className="size-3.5" aria-hidden />
                 {tl.steerNow}

@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Inline editor for one connector instance's `ingest_rules` rows.
  *
@@ -29,6 +31,7 @@
  */
 
 import { useState, useMemo, useEffect } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { authFetch } from "@/lib/auth-fetch";
 import { useT } from "@/lib/i18n/client";
 import {
@@ -52,7 +55,7 @@ import {
   type ContextTeam,
 } from "@/lib/api/context-scopes";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type EditableRule = {
   id: string;
@@ -302,19 +305,23 @@ function RuleCard({
             </div>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Row actions: 44px with an icon on a phone (M3), the bare text
+            links on `sm+` where a pointer can land on 11px. */}
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           <button
             onClick={onEdit}
             disabled={busy}
-            className="text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+            className="inline-flex h-11 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 sm:h-auto sm:px-0 sm:hover:bg-transparent"
           >
+            <Pencil className="size-3.5 sm:hidden" aria-hidden />
             {copy.editAction}
           </button>
           <button
             onClick={onDelete}
             disabled={busy}
-            className="text-[11px] text-muted-foreground hover:text-destructive disabled:opacity-40"
+            className="inline-flex h-11 items-center gap-1 rounded-md px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-40 sm:h-auto sm:px-0 sm:hover:bg-transparent"
           >
+            <Trash2 className="size-3.5 sm:hidden" aria-hidden />
             {copy.deleteAction}
           </button>
         </div>
@@ -560,7 +567,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
     };
     return (
       <div className="flex flex-col gap-2 rounded-lg border border-border px-3.5 py-3">
-        <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
           <label className="flex flex-col gap-1">
             <span className="text-muted-foreground">{copy.labels.ruleOrder}</span>
             <input
@@ -568,7 +575,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
               min={0}
               value={current.ruleOrder}
               onChange={(e) => update({ ...current, ruleOrder: e.target.value })}
-              className="bg-muted px-2 py-1 rounded border border-border focus:outline-none"
+              className="bg-muted px-2 py-1 rounded border border-border text-[16px] md:text-xs focus:outline-none"
             />
           </label>
           <label className="flex flex-col gap-1">
@@ -580,7 +587,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
                 if (v) update({ ...current, filterType: v });
               }}
             >
-              <SelectTrigger size="sm" className="text-xs">
+              <SelectTrigger size="sm" className="text-[16px] md:text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -600,14 +607,14 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
             placeholder={paramsHint(current.filterType)}
             spellCheck={false}
             rows={3}
-            className="bg-muted px-2 py-1 rounded border border-border font-mono text-[11px] focus:outline-none"
+            className="bg-muted px-2 py-1 rounded border border-border font-mono text-[16px] md:text-[11px] focus:outline-none"
           />
           <span className="text-[10px] text-muted-foreground/70">
             {copy.labels.filterParamsHint.replace("{example}", paramsHint(current.filterType))}
           </span>
         </label>
 
-        <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
           <label className="flex flex-col gap-1">
             <span className="text-muted-foreground">{copy.labels.routingMode}</span>
             <Select
@@ -624,7 +631,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
                 }
               }}
             >
-              <SelectTrigger size="sm" className="text-xs">
+              <SelectTrigger size="sm" className="text-[16px] md:text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -647,7 +654,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
                 })
               }
             >
-              <SelectTrigger size="sm" className="text-xs">
+              <SelectTrigger size="sm" className="text-[16px] md:text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -661,7 +668,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
         </div>
 
         {current.routingMode === "scheduled" && (
-          <div className="grid grid-cols-2 gap-2 text-xs">
+          <div className="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-muted-foreground">{copy.labels.routingSchedule}</span>
               <input
@@ -669,7 +676,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
                 value={current.routingSchedule}
                 onChange={(e) => update({ ...current, routingSchedule: e.target.value })}
                 placeholder="0 9 * * 1-5"
-                className="bg-muted px-2 py-1 rounded border border-border font-mono text-[11px] focus:outline-none"
+                className="bg-muted px-2 py-1 rounded border border-border font-mono text-[16px] md:text-[11px] focus:outline-none"
               />
             </label>
             <label className="flex flex-col gap-1">
@@ -679,7 +686,7 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
                 value={current.routingTimezone}
                 onChange={(e) => update({ ...current, routingTimezone: e.target.value })}
                 placeholder="UTC"
-                className="bg-muted px-2 py-1 rounded border border-border focus:outline-none"
+                className="bg-muted px-2 py-1 rounded border border-border text-[16px] md:text-xs focus:outline-none"
               />
             </label>
           </div>
@@ -709,14 +716,14 @@ export function IngestRuleEditor({ instanceId, source, rules, onChange, workspac
           <button
             onClick={onSave}
             disabled={busy}
-            className="text-xs font-medium bg-action text-action-foreground px-3 py-1 rounded-lg hover:bg-action/90 disabled:opacity-40"
+            className="inline-flex h-11 items-center text-xs font-medium bg-action text-action-foreground px-3 rounded-lg hover:bg-action/90 disabled:opacity-40 sm:h-7"
           >
             {busy ? copy.saving : copy.save}
           </button>
           <button
             onClick={onCancel}
             disabled={busy}
-            className="text-xs font-medium border border-border text-muted-foreground px-3 py-1 rounded-lg hover:bg-muted disabled:opacity-40"
+            className="inline-flex h-11 items-center text-xs font-medium border border-border text-muted-foreground px-3 rounded-lg hover:bg-muted disabled:opacity-40 sm:h-7"
           >
             {copy.cancel}
           </button>

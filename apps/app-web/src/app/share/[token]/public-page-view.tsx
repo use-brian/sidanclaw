@@ -382,7 +382,7 @@ export function MobileCommentDrawer({
               type="button"
               onClick={onClose}
               aria-label={t.commentDrawerClose}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-8 md:w-8"
             >
               <X className="size-4" aria-hidden />
             </button>
@@ -499,7 +499,7 @@ export function PublicPageView({ source, initial }: { source: PublicSource; init
       durationMs={recording?.durationMs ?? 0}
       mintMediaUrl={mintRecordingMediaUrl}
     >
-    <div className="min-h-screen">
+    <div className="min-h-dvh">
       {/* Top bar — breadcrumb (root → current, clickable) + acquisition CTA. */}
       <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b border-border bg-background/85 px-4 py-2 backdrop-blur">
         <nav className="flex min-w-0 items-center gap-1 text-sm" aria-label="Breadcrumb">
@@ -530,7 +530,7 @@ export function PublicPageView({ source, initial }: { source: PublicSource; init
           href={source.kind === "site" ? webAppUrl() : "/"}
           target="_blank"
           rel="noopener noreferrer"
-          className="shrink-0 rounded-md bg-foreground px-3 py-1.5 text-xs font-semibold text-background transition-opacity hover:opacity-90"
+          className="inline-flex h-9 shrink-0 items-center rounded-md bg-foreground px-3 text-xs font-semibold text-background transition-opacity hover:opacity-90"
         >
           {t.poweredByCta}
         </a>

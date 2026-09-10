@@ -40,9 +40,11 @@ export function GenericToolPreview({
   return (
     <dl className="w-full max-w-2xl mt-1 rounded-md border border-border bg-background px-3 py-2 space-y-2">
       {preview.fields.map((field, index) => (
+        // Label above value below `sm` (C 24): a fixed 112px label column left
+        // ~50px for the value at 360px, so every field wrapped word by word.
         <div
           key={`${field.label}-${index}`}
-          className="grid grid-cols-[7rem_minmax(0,1fr)] gap-2"
+          className="grid grid-cols-1 gap-0.5 sm:grid-cols-[7rem_minmax(0,1fr)] sm:gap-2"
         >
           <dt className="text-[11px] text-muted-foreground">{field.label}</dt>
           <dd className="text-xs whitespace-pre-wrap break-words">
@@ -366,8 +368,9 @@ function FieldRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-baseline gap-2 min-w-0">
-      <span className="w-28 shrink-0 text-[11px] text-muted-foreground">
+    // Stacked below `sm` for the same reason as the generic grid (C 24).
+    <div className="flex flex-col gap-0.5 min-w-0 sm:flex-row sm:items-baseline sm:gap-2">
+      <span className="shrink-0 text-[11px] text-muted-foreground sm:w-28">
         {label}
       </span>
       <div className="min-w-0 flex-1">{children}</div>

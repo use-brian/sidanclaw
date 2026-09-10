@@ -21,10 +21,9 @@
  * **The chrome is status-honest.** A page is linked to its recording the
  * moment the recording id exists (the live-capture auto-link), so the linked
  * recording may still be uploading, queued, processing, or failed. Rendering
- * the processed-state UI for those - a dead 0:00:00 player, "no action items",
- * an empty transcript - reads as breakage; the chrome instead fetches the
- * recording's status and shows a status card until `processed`, naming the
- * failure (`lastError`) when there is one.
+ * the processed-state UI for those would invent action items and a transcript.
+ * The chrome shows their processing status, but keeps the player available
+ * once a positive duration proves that the media reached storage.
  *
  * Layout: the action items are ALWAYS open - they are the thing a person acts
  * on after a meeting, and hiding them behind a toggle buried the point of the
@@ -44,21 +43,15 @@ import { formatStamp } from "@use-brian/shared";
 import { useT } from "@/lib/i18n/client";
 import { promptDialog } from "@/components/ui/prompt-dialog";
 import { RecordingVideoStage, useRecordingPlayer } from "@/lib/recordings/recording-player-context";
+import { dispatchRecordingParticipantsUpdated } from "@/lib/recordings/recording-events";
 import {
-  RECORDING_PARTICIPANTS_UPDATED_EVENT,
-  type RecordingParticipantsUpdatedDetail,
-} from "@/lib/recordings/recording-events";
-import {
-  getRecording,
   updateRecordingParticipants,
   type RecordingSummary,
 } from "@/lib/api/recordings";
+import { useRecordingSummary } from "@/lib/recordings/use-recording-summary";
 import { RecordingPlayerBar } from "./recording-player-bar";
 import { TranscriptPane } from "./transcript-pane";
 import { ActionItemsRail } from "./action-items-rail";
-
-/** Re-poll cadence while the linked recording is still queued/processing. */
-const STATUS_POLL_MS = 10_000;
 
 /**
  * The transcript card a citation pops. Fixed above the chat dock at the
@@ -103,7 +96,7 @@ export function CitationTranscriptCard({
     <aside
       role="dialog"
       aria-label={t.recordings.detailTranscript}
-      className="fixed bottom-24 right-4 z-50 flex max-h-[55vh] w-[min(26rem,calc(100vw-2rem))] flex-col rounded-lg border border-border bg-background shadow-lg"
+      className="fixed bottom-24 right-4 z-50 flex max-h-[55dvh] w-[min(26rem,calc(100vw-2rem))] flex-col rounded-lg border border-border bg-background shadow-lg"
     >
       <header className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
         <span className="text-sm font-medium">
@@ -116,7 +109,7 @@ export function CitationTranscriptCard({
           type="button"
           onClick={clearTranscriptFocus}
           aria-label={t.recordings.citationCardClose}
-          className="rounded px-1.5 text-sm text-muted-foreground hover:bg-muted"
+          className="inline-flex h-11 w-11 items-center justify-center rounded text-sm text-muted-foreground hover:bg-muted sm:h-7 sm:w-7"
         >
           ✕
         </button>
@@ -145,75 +138,40 @@ export function HashSeek() {
   return null;
 }
 
-export function RecordingChrome({
-  recordingId,
-  workspaceId,
-  title,
-  onUnlink,
-  livePane,
-}: {
+type RecordingChromeProps = {
   recordingId: string;
   workspaceId: string;
   title: string;
-  /**
-   * Present only when the recording is MANUALLY linked (migration 339), absent
-   * when it is anchor-derived. A synthesis brief's recording is derived from
-   * the page's identity and must not be unlinkable — there would be nothing to
-   * re-link it to — so the doc shell passes this only for a manual link.
-   */
+  /** Originating page for the standalone view's return link. */
+  pageId?: string;
+  /** Only manually linked recordings may be unlinked. */
   onUnlink?: () => void;
-  /**
-   * The provisional live transcript pane (doc shell mounts it on the `live:`
-   * marker). Rendered beside the status card only while the recording is not
-   * processed — the final transcript replaces it after that.
-   */
+  /** Provisional live transcript, replaced by the final transcript on completion. */
   livePane?: React.ReactNode;
+};
+
+export function RecordingChrome(props: RecordingChromeProps) {
+  const { summary } = useRecordingSummary(props.workspaceId, props.recordingId);
+  return <RecordingChromeContent key={props.recordingId} {...props} summary={summary} />;
+}
+
+/** One status/player/transcript surface for the page and standalone route. */
+export function RecordingChromeContent({
+  recordingId,
+  workspaceId,
+  title,
+  pageId,
+  onUnlink,
+  livePane,
+  summary,
+  standalone = false,
+}: RecordingChromeProps & {
+  summary: RecordingSummary | null;
+  standalone?: boolean;
 }) {
   const t = useT();
-  const [showTranscript, setShowTranscript] = useState(false);
-  const [summary, setSummary] = useState<RecordingSummary | null>(null);
-
-  const reloadSummary = useCallback(async () => {
-    try {
-      setSummary(await getRecording(recordingId));
-    } catch {
-      // Unknown status renders the processed layout — the pre-status behavior.
-      setSummary(null);
-    }
-  }, [recordingId]);
-
-  useEffect(() => {
-    void reloadSummary();
-  }, [reloadSummary]);
-
-  // Brian's speaker-assignment tool writes the same participant metadata as
-  // the manual rename path. Its chat receipt is only an invalidation hint:
-  // re-read the canonical row so the visible transcript changes immediately.
-  useEffect(() => {
-    const onParticipantsUpdated = (event: Event) => {
-      const detail = (event as CustomEvent<RecordingParticipantsUpdatedDetail>).detail;
-      if (detail?.recordingId !== recordingId) return;
-      void reloadSummary();
-    };
-    window.addEventListener(
-      RECORDING_PARTICIPANTS_UPDATED_EVENT,
-      onParticipantsUpdated,
-    );
-    return () =>
-      window.removeEventListener(
-        RECORDING_PARTICIPANTS_UPDATED_EVENT,
-        onParticipantsUpdated,
-      );
-  }, [recordingId, reloadSummary]);
-
-  // A queued/processing recording becomes playable with no user action —
-  // poll while in flight, stop once terminal (the board's polling rule).
-  const inFlight = summary?.status === "queued" || summary?.status === "processing";
-  useEffect(() => {
-    if (!inFlight) return;
-    const timer = setInterval(() => void reloadSummary(), STATUS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [inFlight, reloadSummary]);
+  const [showTranscript, setShowTranscript] = useState(standalone);
+  const recordingHref = `/w/${workspaceId}/recordings/${recordingId}${pageId ? `?page=${encodeURIComponent(pageId)}` : ""}`;
 
   const handleRenameSpeaker = useCallback(
     async (speaker: string) => {
@@ -235,16 +193,19 @@ export function RecordingChrome({
       ];
       try {
         await updateRecordingParticipants(recordingId, next);
-        await reloadSummary();
+        dispatchRecordingParticipantsUpdated({ recordingId });
       } catch {
         // Non-fatal — the transcript keeps its stable labels.
       }
     },
-    [summary, recordingId, reloadSummary, t],
+    [summary, recordingId, t],
   );
 
   const status = summary?.status;
   const notProcessed = status !== undefined && status !== "processed";
+  // Preserve playback when the metadata read fails: the independently minted
+  // media URL can still work. A known unfinished upload needs proven bytes.
+  const canPlay = !notProcessed || (summary?.durationMs ?? 0) > 0;
 
   return (
     <div className="mb-6 flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3">
@@ -255,16 +216,28 @@ export function RecordingChrome({
         {...(notProcessed ? { emptyCopy: t.recordings.transcriptPending } : {})}
       />
 
+      {summary?.truncated ? (
+        <p className="text-sm text-muted-foreground">{t.recordings.detailTruncated}</p>
+      ) : null}
+
+      {canPlay ? (
+        <>
+          <RecordingVideoStage />
+          <RecordingPlayerBar title={title} className="sticky top-0 z-10" />
+        </>
+      ) : null}
+
       {notProcessed ? (
-        /* Status-honest card: no dead player, no "no action items" for a
-           recording that has not produced any yet. */
+        /* Processing status stays visible beside independently playable media. */
         <section className="flex flex-col gap-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <h2 className="text-sm font-medium">
               {status === "failed"
                 ? t.recordings.statusFailedTitle
                 : status === "awaiting_upload"
-                  ? t.recordings.statusAwaitingUploadTitle
+                  ? canPlay
+                    ? t.recordings.statusStagedTitle
+                    : t.recordings.statusAwaitingUploadTitle
                   : t.recordings.statusProcessingTitle}
             </h2>
             <span className="flex shrink-0 items-center gap-3">
@@ -277,12 +250,14 @@ export function RecordingChrome({
                   {t.recordings.linkUnlink}
                 </button>
               ) : null}
-              <Link
-                href={`/w/${workspaceId}/recordings/${recordingId}`}
-                className="text-xs text-muted-foreground hover:underline"
-              >
-                {t.recordings.chromeOpenRecording}
-              </Link>
+              {!standalone ? (
+                <Link
+                  href={recordingHref}
+                  className="text-xs text-muted-foreground hover:underline"
+                >
+                  {t.recordings.chromeOpenRecording}
+                </Link>
+              ) : null}
             </span>
           </div>
           <p className="text-sm text-muted-foreground">
@@ -291,17 +266,15 @@ export function RecordingChrome({
                 ? t.recordings.statusFailedBodyDetail.replace("{detail}", summary.lastError)
                 : t.recordings.statusFailedBody
               : status === "awaiting_upload"
-                ? t.recordings.statusAwaitingUploadBody
+                ? canPlay
+                  ? t.recordings.statusStagedBody
+                  : t.recordings.statusAwaitingUploadBody
                 : t.recordings.statusProcessingBody}
           </p>
           {livePane}
         </section>
       ) : (
         <>
-          {/* Visible only for a video recording; citation seeks land on this frame. */}
-          <RecordingVideoStage />
-          <RecordingPlayerBar title={title} className="sticky top-0 z-10" />
-
           {/* Always open — the reason someone opens a meeting page. */}
           <section>
             <div className="mb-1.5 flex items-baseline justify-between gap-2">
@@ -316,12 +289,14 @@ export function RecordingChrome({
                     {t.recordings.linkUnlink}
                   </button>
                 ) : null}
-                <Link
-                  href={`/w/${workspaceId}/recordings/${recordingId}`}
-                  className="text-xs text-muted-foreground hover:underline"
-                >
-                  {t.recordings.chromeOpenRecording}
-                </Link>
+                {!standalone ? (
+                  <Link
+                    href={recordingHref}
+                    className="text-xs text-muted-foreground hover:underline"
+                  >
+                    {t.recordings.chromeOpenRecording}
+                  </Link>
+                ) : null}
               </span>
             </div>
             <ActionItemsRail recordingId={recordingId} workspaceId={workspaceId} />

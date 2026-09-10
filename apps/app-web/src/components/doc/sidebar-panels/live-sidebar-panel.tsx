@@ -20,6 +20,7 @@ import {
   Radio,
 } from "lucide-react";
 import { AssistantAvatar } from "@/components/assistant-avatar";
+import { Skeleton } from "@/components/skeleton";
 import { useT } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n/format";
 import type { LiveWorkItem } from "@/lib/api/live";
@@ -52,6 +53,28 @@ function EmptySignal({ label }: { label: string }) {
       <span className="h-px flex-1 bg-sidebar-border/60" aria-hidden />
       <span className="size-1 rounded-full bg-current" aria-hidden />
     </div>
+  );
+}
+
+/**
+ * Cold-cache rows, geometry-matched to `renderRow` (avatar + two lines). Only
+ * the first load of a session ever shows these: the roster then lives in the
+ * surface cache and every later entry paints rows on the first frame. Never
+ * an empty section that fills in, and never a "Loading..." sentence (N4).
+ */
+function RosterSkeletonRows({ rows }: { rows: number }) {
+  return (
+    <ul className="flex flex-col gap-0.5" aria-busy data-live-roster-skeleton>
+      {Array.from({ length: rows }).map((_, i) => (
+        <li key={i} className="flex items-center gap-2.5 rounded-lg px-2 py-2">
+          <Skeleton className="size-7 shrink-0 rounded-full" />
+          <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <Skeleton className="h-3" style={{ width: `${44 + ((i * 23) % 30)}%` }} />
+            <Skeleton className="h-2.5 w-2/3" />
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -201,7 +224,7 @@ export function LiveRosterList({
         href={`/w/${workspaceId}/live`}
         aria-current={overviewActive ? "page" : undefined}
         className={cn(
-          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors",
+          "flex h-10 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors md:h-8",
           overviewActive
             ? "doc-nav-active font-medium text-sidebar-accent-foreground"
             : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -216,7 +239,7 @@ export function LiveRosterList({
         aria-pressed={inboxOpen}
         onClick={onToggleInbox}
         className={cn(
-          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors",
+          "flex h-10 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors md:h-8",
           inboxOpen
             ? "doc-nav-active font-medium text-sidebar-accent-foreground"
             : "text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
@@ -243,7 +266,9 @@ export function LiveRosterList({
             {groups.working.length}
           </span>
         </div>
-        {groups.working.length === 0 && loaded ? (
+        {!loaded ? (
+          <RosterSkeletonRows rows={2} />
+        ) : groups.working.length === 0 ? (
           <EmptySignal label={tl.emptyWorking} />
         ) : (
           <ul className="flex flex-col gap-0.5">{groups.working.map(renderRow)}</ul>
@@ -257,7 +282,9 @@ export function LiveRosterList({
             {groups.finished.length}
           </span>
         </div>
-        {groups.finished.length === 0 && loaded ? (
+        {!loaded ? (
+          <RosterSkeletonRows rows={1} />
+        ) : groups.finished.length === 0 ? (
           <EmptySignal label={tl.emptyFinished} />
         ) : (
           <ul className="flex flex-col gap-0.5">{groups.finished.map(renderRow)}</ul>

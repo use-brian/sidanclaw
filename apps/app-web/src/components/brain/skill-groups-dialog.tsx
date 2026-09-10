@@ -158,7 +158,8 @@ export function SkillGroupsDialog({
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[1px]" />
-        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[min(46rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background p-5 shadow-xl">
+        {/* `dvh`, edge-to-edge below `sm` (C 66 / M5 / M6). */}
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[min(46rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-none border border-border bg-background p-4 shadow-xl sm:rounded-xl sm:p-5">
           <Dialog.Title className="text-sm font-semibold text-foreground">
             {copy.title}
           </Dialog.Title>

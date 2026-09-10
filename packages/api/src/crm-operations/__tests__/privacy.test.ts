@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../../db/client.js', () => ({ query: mocks.query, getPool: mocks.getPool }))
 
+vi.mock('../privacy-admission.js',()=>({acquireCrmPrivacyAdmission:vi.fn(async()=>{})}))
+
 import {
   CRM_OPERATIONS_PRIVACY_TABLES,
   exportCrmOperationsPrivacy,
@@ -50,9 +52,10 @@ describe('[COMP:crm/operations-privacy] CRM operations privacy lifecycle', () =>
     expect(sql).toContain("payload=jsonb_build_object('erased',true")
     expect(sql).toContain("metadata=jsonb_build_object('erased',true)")
     expect(sql).toContain('UPDATE workspace_audit_log')
-    expect(sql).toContain('DELETE FROM crm_segments')
+    expect(sql).not.toContain('DELETE FROM crm_segments')
     expect(sql).toContain('DELETE FROM association_consent_events')
-    expect(sql).toContain('DELETE FROM crm_intake_idempotency')
+    expect(sql).toContain('SELECT id,replay_policy_version FROM crm_intake_idempotency')
+    expect(sql).not.toContain('DELETE FROM crm_intake_idempotency WHERE workspace_id=$1 AND contact_id=$2')
   })
 
   it('retains append-only evidence while pruning only configured terminal data', async () => {
@@ -63,9 +66,14 @@ describe('[COMP:crm/operations-privacy] CRM operations privacy lifecycle', () =>
     const result = await pruneCrmOperationsRetention(workspaceId, new Date('2026-01-01T00:00:00Z'))
     const sql = mocks.clientQuery.mock.calls.map(([statement]) => String(statement)).join('\n')
 
-    expect(result.total).toBe(8)
+    expect(result.total).toBe(10)
+    expect(sql).toContain('DELETE FROM crm_import_sources')
+    expect(sql).toContain('replay_expires_at<=clock_timestamp()')
+    expect(sql).toContain('source_id=ANY($3::uuid[])')
     expect(sql).toContain('DELETE FROM crm_import_jobs')
     expect(sql).toContain('DELETE FROM crm_domain_event_outbox')
+    expect(sql).toContain("status='delivered'")
+    expect(sql).not.toContain("status IN ('delivered','failed')")
     expect(sql).toContain('DELETE FROM crm_intake_idempotency')
     expect(sql).toContain('DELETE FROM association_enquiries')
     expect(sql).not.toContain('DELETE FROM association_consent_events')

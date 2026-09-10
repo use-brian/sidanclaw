@@ -124,6 +124,7 @@ function renderDock(profiles: FeedProfile[]): string {
   recorderRef.current = {
     phase: { kind: "idle" },
     active: false,
+    savingCount: 0,
     elapsedMs: () => 0,
     notice: null,
     clearNotices: vi.fn(),
@@ -374,7 +375,10 @@ describe("[COMP:app-web/feed-tuning-chat] FeedSurfaceShell dock swap", () => {
         </FeedSurfaceShell>
       </I18nProvider>,
     );
-    expect(html).toContain(en.feedPage.shell.loading);
+    // The cold branch is a geometry-matched skeleton, never the sentence
+    // (instant-navigation N4 / N5).
+    expect(html).toContain("data-feed-gate-skeleton");
+    expect(html).not.toContain(en.feedPage.shell.loading);
     expect(html).not.toContain("data-feed-page");
     expect(html).not.toContain(en.feedPage.tuningChat.openAria);
   });

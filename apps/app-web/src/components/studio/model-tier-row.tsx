@@ -76,7 +76,7 @@ export function ModelTierRow({
         >
           <SelectTrigger
             size="sm"
-            className="text-xs gap-1.5 bg-muted/50 hover:bg-muted border-transparent h-7 w-auto min-w-24"
+            className="text-[16px] md:text-xs gap-1.5 bg-muted/50 hover:bg-muted border-transparent h-7 w-auto min-w-24"
           >
             <SelectValue />
           </SelectTrigger>

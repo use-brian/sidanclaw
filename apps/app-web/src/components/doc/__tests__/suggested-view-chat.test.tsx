@@ -26,6 +26,7 @@ vi.mock("next/link", () => ({
 }));
 
 vi.mock("@/lib/i18n/client", () => ({
+  useLocale: () => "en",
   useT: () => ({
     docPage: {
       suggested: {

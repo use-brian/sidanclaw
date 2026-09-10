@@ -45,6 +45,7 @@ import { CellSelection } from "@tiptap/pm/tables";
 import { NodeRangeSelection, isNodeRangeSelection } from "@tiptap/extension-node-range";
 import { sinkListItemOrJoin } from "./block-indent";
 import { isChangeOrigin } from "@tiptap/extension-collaboration";
+import { isCoarsePointer } from "@/lib/viewport";
 import {
   ySyncPluginKey,
   absolutePositionToRelativePosition,
@@ -685,7 +686,26 @@ export type BlockDragHandleOptions = {
    *  React-owned node desyncs React's reconciliation → `insertBefore` crash). */
   element: HTMLElement;
   onNodeChange?: (args: { editor: Editor; node: PMNode | null; pos: number }) => void;
+  /**
+   * Touch path to the block-action menu (responsive contract M2 / M9). Hover
+   * never happens on a phone, so a long-press on a block resolves the target,
+   * reveals the grip against it and fires this — `drag-handle.tsx` opens the
+   * same menu the grip's click opens. Fired only after the target is latched,
+   * so `onNodeChange` has already run.
+   */
+  onLongPress?: () => void;
 };
+
+/** How long a still touch must hold before it counts as a long-press. Under
+ *  iOS's ~500ms text-selection callout so the menu, not the OS selection, is
+ *  what the user sees first. */
+const LONG_PRESS_MS = 450;
+/** Finger travel (px) past which a touch is a scroll, not a press. */
+const LONG_PRESS_SLOP_PX = 10;
+/** Inset (px) that keeps the in-column touch grip inside the block's right
+ *  edge, where the doc scroller cannot clip it (the left-gutter grip is
+ *  clipped to ~8px by `overflow-x-clip` at phone widths). */
+const TOUCH_GRIP_INSET_PX = 4;
 
 /**
  * Build the ProseMirror plugin. Lifecycle mirrors the upstream: tippy holds the
@@ -696,6 +716,7 @@ export function createBlockDragHandlePlugin({
   editor,
   element,
   onNodeChange,
+  onLongPress,
 }: BlockDragHandleOptions): Plugin {
   const wrapper = document.createElement("div");
   let popup: TippyInstance | null = null;
@@ -703,6 +724,13 @@ export function createBlockDragHandlePlugin({
   let currentNode: PMNode | null = null;
   let currentNodePos = -1;
   let currentNodeRelPos: unknown = null;
+  // Long-press tracking (touch only). `touchAnchor` is the finger-down point;
+  // the timer fires the block menu unless the finger travels or lifts first.
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let touchAnchor: { x: number; y: number } | null = null;
+  // The last pointer type seen on the editor, so a `contextmenu` raised by a
+  // touch long-press (Android) can be told apart from a right-click.
+  let lastPointerType: string | null = null;
   // True from the grip's `dragstart` until the matching drop/`dragend`. Gates the
   // post-drop selection rescue (`appendTransaction`) so it only fires for a grip
   // block-move — a plain text drag-drop the user makes is left untouched.
@@ -762,6 +790,108 @@ export function createBlockDragHandlePlugin({
       popup = tippy(referenceDom, { ...TIPPY_PROPS, appendTo: wrapper, content: element });
     }
     return popup;
+  };
+
+  /**
+   * Where the grip sits relative to its block. A hover pointer gets the
+   * Notion left-gutter grip (`left-start`, 8px outside the block). A coarse
+   * pointer gets an IN-COLUMN grip at the block's right edge (`right-start`
+   * with a NEGATIVE distance, so the popup overlaps the block): at phone
+   * widths the doc scroller's `overflow-x-clip` cuts the gutter grip to ~8px
+   * and there is nothing to tap, which is what made Duplicate / Delete /
+   * Color / Copy link / Comment unreachable on a phone (responsive contract
+   * M2). Read per revealed block, never in the popper hot path.
+   */
+  const gripProps = (dom: HTMLElement) => {
+    if (!isCoarsePointer()) {
+      return {
+        placement: TIPPY_PROPS.placement,
+        offset: [gripVerticalOffset(dom), 8] as [number, number],
+      };
+    }
+    const gripWidth = element.offsetWidth || GRIP_HEIGHT;
+    return {
+      placement: "right-start" as const,
+      offset: [gripVerticalOffset(dom), -(gripWidth + TOUCH_GRIP_INSET_PX)] as [number, number],
+    };
+  };
+
+  /**
+   * Latch `target` as the grip's block and show the grip against its DOM.
+   * Shared by the hover path (`mousemove`), the touch paths (long-press, and
+   * the caret-follow on a coarse pointer) and nothing else — every reveal has
+   * to run the same layout gate + synchronous popper pass, or the grip flashes
+   * at the wrapper origin (see the comments inside).
+   */
+  const revealGrip = (view: EditorView, target: DragTarget, dom: HTMLElement): void => {
+    const live = ensurePopup(view.dom);
+    currentNode = target.node;
+    currentNodePos = target.pos;
+    currentNodeRelPos = getRelativePos(view.state, currentNodePos);
+    onNodeChange?.({ editor, node: currentNode, pos: currentNodePos });
+    live.setProps({
+      getReferenceClientRect: () => gripReferenceRect(dom),
+      ...gripProps(dom),
+    });
+    live.show();
+    // tippy.css is NOT imported, so the popup has no opacity-fade to
+    // mask the frame between show() and popper's FIRST layout pass —
+    // and that pass is ASYNC (popper schedules it off a microtask/raf).
+    // The line below flips the grip to visible synchronously, so without
+    // forcing the layout the grip paints at the wrapper origin (top:0,
+    // left:0 → the page's top-left, by the title) for that frame and only
+    // then snaps onto the block. That is the "drag handle appears at the
+    // top of the page, not beside the hovered block" symptom — on EVERY
+    // first hover, since the reference is only set per-block here. (Tuning
+    // gripReferenceRect / gripVerticalOffset never fixed it because the
+    // geometry was already right; the grip was just revealed pre-layout.)
+    // forceUpdate runs popper's modifiers synchronously against the
+    // reference we just set, so the grip is anchored to the block the
+    // instant it becomes visible. popperInstance is set by the synchronous
+    // mount inside show(); the `?.` is a no-op guard if a future tippy
+    // ever defers mounting (popper's own async pass still lands then).
+    live.popperInstance?.forceUpdate();
+    element.style.visibility = "visible";
+  };
+
+  /**
+   * The block under a viewport point, for the touch paths. `posAtCoords` is
+   * authoritative on a phone (the finger is on the text, never in a gutter),
+   * so none of the hover path's gutter-stickiness applies. Null off the
+   * document, or when the block has no layout box yet.
+   */
+  const targetAtPoint = (
+    view: EditorView,
+    x: number,
+    y: number,
+  ): { target: DragTarget; dom: HTMLElement } | null => {
+    const coords = view.posAtCoords({ left: x, top: y });
+    if (!coords) return null;
+    const target = blockTargetAtPos(view.state.doc, coords.pos);
+    if (!target) return null;
+    const dom = view.nodeDOM(target.pos);
+    if (!(dom instanceof HTMLElement) || !hasLayoutBox(dom)) return null;
+    return { target, dom };
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+    touchAnchor = null;
+  };
+
+  /** Long-press fired: reveal the grip on the pressed block and open its menu. */
+  const fireLongPress = (view: EditorView, x: number, y: number) => {
+    longPressTimer = null;
+    touchAnchor = null;
+    if (locked || !editor.isEditable) return;
+    if (view.state.selection instanceof CellSelection) return;
+    const hit = targetAtPoint(view, x, y);
+    if (!hit) return;
+    revealGrip(view, hit.target, hit.dom);
+    onLongPress?.();
   };
 
   const dragHandler = (event: DragEvent) => {
@@ -932,6 +1062,35 @@ export function createBlockDragHandlePlugin({
             onNodeChange?.({ editor, node: null, pos: -1 });
             return;
           }
+          // Coarse pointer: the grip FOLLOWS THE CARET. Hover never happens on a
+          // phone, so the block that holds the caret is the one that shows a
+          // visible, tappable in-column grip (responsive contract M2) — the
+          // touch twin of hover-reveal. Only while the editor has focus (a
+          // programmatic selection restore with the keyboard down must not
+          // surface a grip on a page nobody is touching), and never while the
+          // menu is pinned (the target must stay frozen under it).
+          if (
+            !locked &&
+            isCoarsePointer() &&
+            innerView.hasFocus() &&
+            !innerView.state.selection.eq(oldState.selection) &&
+            innerView.state.selection instanceof TextSelection
+          ) {
+            const caretTarget = blockTargetAtPos(
+              innerView.state.doc,
+              innerView.state.selection.$from.pos,
+            );
+            const caretDom = caretTarget ? innerView.nodeDOM(caretTarget.pos) : null;
+            if (
+              caretTarget &&
+              caretDom instanceof HTMLElement &&
+              hasLayoutBox(caretDom) &&
+              caretTarget.pos !== currentNodePos
+            ) {
+              revealGrip(innerView, caretTarget, caretDom);
+              return;
+            }
+          }
           if (innerView.state.doc.eq(oldState.doc) || currentNodePos === -1) return;
           // Reposition after a doc change (the position was already remapped in
           // `apply`). If the tracked block's DOM is gone — deleted, or replaced
@@ -966,10 +1125,11 @@ export function createBlockDragHandlePlugin({
           onNodeChange?.({ editor, node: currentNode, pos: currentNodePos });
           popup.setProps({
             getReferenceClientRect: () => gripReferenceRect(dom),
-            offset: [gripVerticalOffset(dom), 8],
+            ...gripProps(dom),
           });
         },
         destroy() {
+          cancelLongPress();
           popup?.destroy();
           // Null it (not just destroy): if this teardown is a view RECREATION
           // (same plugin closure, new EditorView), the next `ensurePopup` must
@@ -1145,34 +1305,66 @@ export function createBlockDragHandlePlugin({
           // unshowable position.
           const dom = view.nodeDOM(target.pos);
           if (!(dom instanceof HTMLElement) || !hasLayoutBox(dom)) return false;
-          currentNode = target.node;
-          currentNodePos = target.pos;
-          currentNodeRelPos = getRelativePos(view.state, currentNodePos);
-          onNodeChange?.({ editor, node: currentNode, pos: currentNodePos });
-          popup.setProps({
-            getReferenceClientRect: () => gripReferenceRect(dom),
-            offset: [gripVerticalOffset(dom), 8],
-          });
-          popup.show();
-          // tippy.css is NOT imported, so the popup has no opacity-fade to
-          // mask the frame between show() and popper's FIRST layout pass —
-          // and that pass is ASYNC (popper schedules it off a microtask/raf).
-          // The line below flips the grip to visible synchronously, so without
-          // forcing the layout the grip paints at the wrapper origin (top:0,
-          // left:0 → the page's top-left, by the title) for that frame and only
-          // then snaps onto the block. That is the "drag handle appears at the
-          // top of the page, not beside the hovered block" symptom — on EVERY
-          // first hover, since the reference is only set per-block here. (Tuning
-          // gripReferenceRect / gripVerticalOffset never fixed it because the
-          // geometry was already right; the grip was just revealed pre-layout.)
-          // forceUpdate runs popper's modifiers synchronously against the
-          // reference we just set, so the grip is anchored to the block the
-          // instant it becomes visible. popperInstance is set by the synchronous
-          // mount inside show(); the `?.` is a no-op guard if a future tippy
-          // ever defers mounting (popper's own async pass still lands then).
-          popup.popperInstance?.forceUpdate();
-          element.style.visibility = "visible";
+          // The reveal (latch + show + synchronous popper pass) is shared with
+          // the touch paths — see `revealGrip` for why the pass must be forced.
+          revealGrip(view, target, dom);
           return false;
+        },
+        // ── Touch path (responsive contract M2 / M9) ─────────────────────
+        // A finger has no hover, so the gutter grip never appears on a phone
+        // except through the tap's synthetic `mousemove` — and then sits
+        // clipped in the scroller's gutter. A still press on a block reveals
+        // the in-column grip and opens the block menu directly.
+        pointerdown(_view, event) {
+          lastPointerType = (event as PointerEvent).pointerType ?? null;
+          return false;
+        },
+        touchstart(view, event) {
+          const e = event as TouchEvent;
+          cancelLongPress();
+          if (e.touches.length !== 1) return false;
+          const t0 = e.touches[0];
+          touchAnchor = { x: t0.clientX, y: t0.clientY };
+          longPressTimer = setTimeout(() => {
+            const anchor = touchAnchor;
+            if (anchor) fireLongPress(view, anchor.x, anchor.y);
+          }, LONG_PRESS_MS);
+          return false;
+        },
+        touchmove(_view, event) {
+          if (!touchAnchor) return false;
+          const e = event as TouchEvent;
+          const t0 = e.touches[0];
+          if (!t0) return false;
+          if (
+            Math.hypot(t0.clientX - touchAnchor.x, t0.clientY - touchAnchor.y) >
+            LONG_PRESS_SLOP_PX
+          ) {
+            cancelLongPress();
+          }
+          return false;
+        },
+        touchend() {
+          cancelLongPress();
+          return false;
+        },
+        touchcancel() {
+          cancelLongPress();
+          return false;
+        },
+        contextmenu(view, event) {
+          // Android raises `contextmenu` for a touch long-press. The timer
+          // above has usually already opened the menu; swallow the native
+          // one so it does not stack on top. A mouse right-click is left to
+          // the browser.
+          if (lastPointerType !== "touch") return false;
+          event.preventDefault();
+          if (longPressTimer !== null) {
+            const e = event as MouseEvent;
+            cancelLongPress();
+            fireLongPress(view, e.clientX, e.clientY);
+          }
+          return true;
         },
       },
     },

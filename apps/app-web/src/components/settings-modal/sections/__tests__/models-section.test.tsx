@@ -42,7 +42,9 @@ describe("[COMP:app-web/models-settings] Models section", () => {
     );
     expect(html).toContain(tm.title);
     expect(html).toContain(tm.blurb);
-    expect(html).toContain(tm.loading);
+    // Cold open: the routing-card skeleton, never the sentence (N4 / N5).
+    expect(html).toContain('data-testid="models-skeleton"');
+    expect(html).not.toContain(tm.loading);
   });
 
   it("keeps credentials out of the default routing view and exposes focused views", () => {

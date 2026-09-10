@@ -26,24 +26,25 @@ function build(role: 'owner' | 'admin' | 'member' = 'owner') {
   }) }
   const readStore = {
     authenticate: vi.fn(),
-    listDefinitions: vi.fn().mockResolvedValue([{ id: DEFINITION_ID, definitionKey: 'contact_form' }]),
-    listCredentials: vi.fn().mockResolvedValue([{ id: 'credential-1', prefix: 'sk_intake_abcd' }]),
-    listSubmissions: vi.fn().mockResolvedValue([{ id: SUBMISSION_ID, contactId: CONTACT_ID }]),
+    listDefinitions: vi.fn().mockResolvedValue({ definitions: [{ id: DEFINITION_ID, definitionKey: 'contact_form' }], nextCursor: null }),
+    listCredentials: vi.fn().mockResolvedValue({ credentials: [{ id: 'credential-1', prefix: 'sk_intake_abcd' }], nextCursor: null }),
+    listSubmissions: vi.fn().mockResolvedValue({ submissions: [{ id: SUBMISSION_ID, contactId: CONTACT_ID }], nextCursor: null }),
     getSubmission: vi.fn().mockResolvedValue({ id: SUBMISSION_ID, contactId: CONTACT_ID, fields: { message: 'Hello' } }),
-    listConsentPurposes: vi.fn().mockResolvedValue([{ purposeKey: 'marketing' }]),
+    listConsentPurposes: vi.fn().mockResolvedValue({ purposes: [{ purposeKey: 'marketing' }], nextCursor: null }),
     getConsent: vi.fn().mockResolvedValue({ purposes: [], events: [], suppressions: [] }),
     checkSendability: vi.fn().mockResolvedValue({ verdict: 'unknown', reasons: ['consent_not_recorded'], effectiveSuppressionEventIds: [] }),
     listSegments: vi.fn().mockResolvedValue({ segments: [{ id: SEGMENT_ID, segmentKey: 'active_people' }], catalog: [{ family: 'base', field: 'name' }] }),
     getSegment: vi.fn().mockResolvedValue({ id: SEGMENT_ID, segmentKey: 'active_people' }),
     previewSegment: vi.fn().mockResolvedValue({ rows: [], count: 0, snapshotIds: [] }),
     listCrmEventFilterCatalog: vi.fn().mockResolvedValue({ eventTypes: ['crm.submission.received'], stableKeys: [] }),
-    listEntitlementPlans: vi.fn().mockResolvedValue([{ id: PLAN_ID, planKey: 'member' }]),
-    listEntitlements: vi.fn().mockResolvedValue([{ id: ENTITLEMENT_ID, contactId: CONTACT_ID }]),
-    listEvents: vi.fn().mockResolvedValue([{ id: EVENT_ID, slug: 'annual-meeting' }]),
-    listParticipation: vi.fn().mockResolvedValue([{ id: PARTICIPATION_ID, eventId: EVENT_ID }]),
-    listPipelines: vi.fn().mockResolvedValue([{
+    listEntitlementPlans: vi.fn().mockResolvedValue({ plans: [{ id: PLAN_ID, planKey: 'member' }], nextCursor: null }),
+    listEntitlements: vi.fn().mockResolvedValue({ entitlements: [{ id: ENTITLEMENT_ID, contactId: CONTACT_ID }], nextCursor: null }),
+    listEvents: vi.fn().mockResolvedValue({ events: [{ id: EVENT_ID, slug: 'annual-meeting' }], nextCursor: null }),
+    listParticipation: vi.fn().mockResolvedValue({ participation: [{ id: PARTICIPATION_ID, eventId: EVENT_ID }], nextCursor: null }),
+    listRecordFields: vi.fn().mockResolvedValue({ fields: [], nextCursor: null }),
+    listPipelines: vi.fn().mockResolvedValue({ pipelines: [{
       id: PIPELINE_ID, name: 'Renewals', stages: [{ id: STAGE_ID, name: 'Review' }],
-    }]),
+    }], nextCursor: null }),
   }
   const importService = {
     dryRun: vi.fn().mockResolvedValue({
@@ -52,7 +53,7 @@ function build(role: 'owner' | 'admin' | 'member' = 'owner') {
     }),
     confirm: vi.fn().mockResolvedValue({ id: IMPORT_JOB_ID, status: 'ready', totalRows: 1 }),
     resume: vi.fn().mockResolvedValue({ id: IMPORT_JOB_ID, status: 'completed', totalRows: 1, processedRows: 1 }),
-    cancel: vi.fn(), list: vi.fn().mockResolvedValue([]), get: vi.fn(), errorsCsv: vi.fn(),
+    cancel: vi.fn(), list: vi.fn().mockResolvedValue({ jobs: [], nextCursor: null }), get: vi.fn(), errorsCsv: vi.fn(),
   }
   const app = express()
   app.use(express.json())
@@ -62,6 +63,25 @@ function build(role: 'owner' | 'admin' | 'member' = 'owner') {
 }
 
 describe('[COMP:api/crm-operations-route] intake configuration REST adapter', () => {
+  it('discovers fields for members using only the pure paginated read port', async () => {
+    const f = build('member')
+    const result = await request(f.app).get(`/api/crm/${WORKSPACE_ID}/operations/record-fields`)
+      .query({ entityKind: 'deal', includeArchived: 'true', limit: 17 })
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual({ fields: [], nextCursor: null })
+    expect(f.readStore.listRecordFields).toHaveBeenCalledWith(WORKSPACE_ID, { entityKind: 'deal', includeArchived: 'true', limit: 17 })
+    expect(f.service.execute).not.toHaveBeenCalled()
+  })
+  it('rejects invalid page parameters before requesting a collection', async () => {
+    const f = build()
+    for (const path of ['intake-definitions', 'intake-credentials', 'consent-purposes', 'imports']) {
+      const response = await request(f.app).get(`/api/crm/${WORKSPACE_ID}/operations/${path}?limit=0`)
+      expect(response.status).toBe(400)
+      expect(response.body.error).toBe('invalid_input')
+    }
+    expect(f.readStore.listDefinitions).not.toHaveBeenCalled()
+    expect(f.readStore.listCredentials).not.toHaveBeenCalled()
+  })
   it('lists definitions for members but keeps credentials admin-only', async () => {
     const member = build('member')
     expect((await request(member.app).get(`/api/crm/${WORKSPACE_ID}/operations/intake-definitions`)).status).toBe(200)
@@ -73,14 +93,14 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     const owner = build()
     const response = await request(owner.app)
       .post(`/api/crm/${WORKSPACE_ID}/operations/intake-credentials`)
-      .send({ label: 'Website', definitionIds: [DEFINITION_ID] })
+      .send({ label: 'Website', definitionIds: [DEFINITION_ID], rotateFromCredentialId: CONTACT_ID })
     expect(response.status).toBe(201)
     expect(response.body.key).toBe('sk_intake_once')
     expect(owner.service.execute).toHaveBeenCalledWith(expect.objectContaining({
       workspaceId: WORKSPACE_ID,
       actor: { kind: 'user', userId: USER_ID },
       authority: expect.objectContaining({ canConfigure: true }),
-    }), { kind: 'create_intake_credential', label: 'Website', definitionIds: [DEFINITION_ID] })
+    }), { kind: 'create_intake_credential', label: 'Website', definitionIds: [DEFINITION_ID], rotateFromCredentialId: CONTACT_ID })
   })
 
   it('does not accept request-owned authority fields', async () => {
@@ -122,6 +142,21 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     })
   })
 
+  it('forwards locale configuration and selection while refusing client-owned evidence', async () => {
+    const owner = build()
+    const purpose = { purposeKey: 'updates',label: 'Updates',wordingVersion: '1',wording: 'Default',defaultLocale: 'en',localeWordings: { ja: '同意します' } }
+    expect((await request(owner.app).post(`/api/crm/${WORKSPACE_ID}/operations/consent-purposes`).send(purpose)).status).toBe(201)
+    expect(owner.service.execute).toHaveBeenLastCalledWith(expect.anything(),expect.objectContaining(purpose))
+    const path = `/api/crm/${WORKSPACE_ID}/operations/contacts/${CONTACT_ID}/consent`
+    const evidence = { purposeKey: 'updates',action: 'granted',source: 'manual',locale: 'ja' }
+    expect((await request(owner.app).post(path).send(evidence)).status).toBe(201)
+    expect(owner.service.execute).toHaveBeenLastCalledWith(expect.anything(),expect.objectContaining({ kind: 'record_consent',contactId: CONTACT_ID,...evidence }))
+    for (const extra of [{ locale: 'xx' },{ wording: 'Caller text' },{ wordingHash: 'a'.repeat(64) },{ wordingVersionId: PLAN_ID }]) {
+      expect((await request(owner.app).post(path).send({ ...evidence,...extra })).status).toBe(400)
+    }
+    expect(owner.service.execute).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps purpose configuration admin-only and exposes compliance reads to members', async () => {
     const member = build('member')
     member.service.execute.mockRejectedValueOnce(new CrmOperationsError(
@@ -160,7 +195,7 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
       })
     expect(list.status).toBe(200)
     expect(preview.status).toBe(200)
-    expect(member.readStore.listSegments).toHaveBeenCalledWith(WORKSPACE_ID, { entityKind: 'person', includeArchived: false })
+    expect(member.readStore.listSegments).toHaveBeenCalledWith(WORKSPACE_ID, { entityKind: 'person', includeArchived: false, limit: 50 })
     expect(member.readStore.previewSegment).toHaveBeenCalledWith(WORKSPACE_ID, SEGMENT_ID, { limit: 10, snapshotLimit: 100 })
     expect(saved.status).toBe(201)
     expect(member.service.execute).toHaveBeenCalledWith(expect.objectContaining({
@@ -180,14 +215,14 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     const member = build('member')
     const entitlements = await request(member.app)
       .get(`/api/crm/${WORKSPACE_ID}/operations/entitlements`)
-      .query({ contactId: CONTACT_ID, status: 'active', limit: 25 })
+      .query({ contactId: CONTACT_ID, status: 'active', limit: 25, activeOnly: true, effectiveAt: '2026-01-01T00:00:00Z' })
     const participation = await request(member.app)
       .get(`/api/crm/${WORKSPACE_ID}/operations/participation`)
       .query({ eventId: EVENT_ID, sourceKind: 'commerce' })
     expect(entitlements.status).toBe(200)
     expect(participation.status).toBe(200)
     expect(member.readStore.listEntitlements).toHaveBeenCalledWith(WORKSPACE_ID, {
-      contactId: CONTACT_ID, status: 'active', limit: 25,
+      contactId: CONTACT_ID, status: 'active', limit: 25, activeOnly: true, effectiveAt: '2026-01-01T00:00:00Z',
     })
     expect(member.readStore.listParticipation).toHaveBeenCalledWith(WORKSPACE_ID, {
       eventId: EVENT_ID, sourceKind: 'commerce', limit: 50,
@@ -204,7 +239,7 @@ describe('[COMP:api/crm-operations-route] intake configuration REST adapter', ()
     expect(listed.status).toBe(200)
     expect(listed.body.pipelines[0]).toMatchObject({ id: PIPELINE_ID, name: 'Renewals' })
     expect(member.readStore.listPipelines).toHaveBeenCalledWith(WORKSPACE_ID, {
-      entityKind: 'deal', includeArchived: false,
+      entityKind: 'deal', includeArchived: false, limit: 50,
     })
     expect(moved.status).toBe(200)
     expect(member.service.execute).toHaveBeenCalledWith(expect.objectContaining({

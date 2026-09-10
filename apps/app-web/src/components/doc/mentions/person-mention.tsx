@@ -38,6 +38,7 @@ import { ReactRenderer } from "@tiptap/react";
 import { Suggestion, type SuggestionProps } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
 import { createSuggestionDismiss } from "../suggestion-dismiss";
+import { onViewportChange, positionSuggestionPopup } from "@/lib/popup-clamp";
 
 /**
  * Distinct suggestion plugin key — see the note in `slash-menu.tsx`. The `@`
@@ -231,19 +232,25 @@ export function createPersonMentionExtension(
               return { people, pages };
             };
 
+            // Clamp + flip inside the visible viewport (responsive contract
+            // M5); re-placed when the keyboard changes the visual viewport.
+            let lastProps: SuggestionProps<MentionItem> | null = null;
+            let stopViewport: (() => void) | null = null;
             const position = (props: SuggestionProps<MentionItem>) => {
+              lastProps = props;
               const el = component?.element as HTMLElement | undefined;
               if (!el) return;
               const rect = props.clientRect?.();
               if (!rect) return;
-              el.style.position = "absolute";
-              el.style.top = `${rect.bottom + window.scrollY + 4}px`;
-              el.style.left = `${rect.left + window.scrollX}px`;
+              positionSuggestionPopup(el, rect, { width: 320, height: 300 });
             };
 
             return {
               onStart: (props) => {
                 dismiss.reset();
+                stopViewport = onViewportChange(() => {
+                  if (lastProps) position(lastProps);
+                });
                 const { people, pages } = splitItems(props.items);
                 component = new ReactRenderer<MentionPopupRef, MentionPopupProps>(
                   MentionPopup,
@@ -285,6 +292,9 @@ export function createPersonMentionExtension(
               },
               onExit: () => {
                 dismiss.reset();
+                stopViewport?.();
+                stopViewport = null;
+                lastProps = null;
                 if (component) {
                   component.element.parentNode?.removeChild(component.element);
                   component.destroy();

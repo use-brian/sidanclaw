@@ -14,8 +14,10 @@
  * batch (do not modify block-data.tsx here).
  */
 
-import { Search } from "lucide-react";
+import { useState } from "react";
+import { Search, SlidersHorizontal } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
+import { cn } from "@/lib/utils";
 import type { A2UIColumn } from "@use-brian/views-renderer";
 
 import { FilterBar, type Filter } from "./filter-bar";
@@ -54,6 +56,14 @@ export function ViewToolbar({
   className,
 }: ViewToolbarProps) {
   const t = useT().docPage.viewToolbar;
+  // Phone (responsive contract M2 / M8; report B row 34): the host cannot
+  // hover-reveal the toolbar, and the five controls run ~450px wide at 390px,
+  // so below `md` they collapse behind one "View options" button and wrap
+  // when expanded. From `md` the button is hidden and the row is the single
+  // non-wrapping strip it always was.
+  const [expanded, setExpanded] = useState(false);
+  const activeCount =
+    value.filters.length + (value.sort ? 1 : 0) + (value.groupBy ? 1 : 0);
 
   const patch = (delta: Partial<ViewToolbarValue>) => {
     onChange({ ...value, ...delta });
@@ -63,57 +73,81 @@ export function ViewToolbar({
     <div
       data-component="view-toolbar"
       className={
-        // Single non-wrapping row — the host (`embed-view`) reveals this
-        // inline beside the table title via opacity, so it must keep a
-        // constant height (no wrap → no reflow). No bottom border: the
+        // Single non-wrapping row from `md` — the host (`embed-view`) reveals
+        // this inline beside the table title via opacity, so it must keep a
+        // constant height there (no wrap → no reflow). No bottom border: the
         // table's own column-header rule provides the separation.
-        "flex flex-nowrap items-center gap-2 " + (className ?? "")
+        "flex flex-wrap items-center gap-2 md:flex-nowrap " + (className ?? "")
       }
     >
-      {/* Search */}
-      <div className="relative">
-        <Search
-          className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-          aria-hidden
-        />
-        <input
-          type="search"
-          data-field="search"
-          aria-label={t.searchAria}
-          placeholder={t.searchPlaceholder}
-          value={value.search}
-          onChange={(e) => patch({ search: e.target.value })}
-          className="h-7 w-44 rounded-md border border-border bg-background pl-7 pr-2 text-xs outline-none focus-visible:shadow-none"
-        />
-      </div>
+      <button
+        type="button"
+        data-action="view-options"
+        aria-expanded={expanded}
+        aria-label={t.viewOptionsAria}
+        onClick={() => setExpanded((v) => !v)}
+        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground md:hidden"
+      >
+        <SlidersHorizontal className="size-3.5" aria-hidden />
+        <span>{t.viewOptions}</span>
+        {activeCount > 0 ? (
+          <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[0.625rem] font-semibold leading-4 text-muted-foreground">
+            {activeCount}
+          </span>
+        ) : null}
+      </button>
+      <div
+        data-view-toolbar-controls
+        className={cn(
+          "w-full flex-wrap items-center gap-2 md:flex md:w-auto md:min-w-0 md:flex-1 md:flex-nowrap",
+          expanded ? "flex" : "hidden",
+        )}
+      >
+        {/* Search */}
+        <div className="relative w-full sm:w-44">
+          <Search
+            className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <input
+            type="search"
+            data-field="search"
+            aria-label={t.searchAria}
+            placeholder={t.searchPlaceholder}
+            value={value.search}
+            onChange={(e) => patch({ search: e.target.value })}
+            className="h-9 w-full rounded-md border border-border bg-background pl-7 pr-2 text-[16px] outline-none focus-visible:shadow-none md:h-7 md:text-xs"
+          />
+        </div>
 
-      <FilterBar
-        columns={columns}
-        value={value.filters}
-        onChange={(filters) => patch({ filters })}
-      />
-
-      <SortMenu
-        columns={columns}
-        value={value.sort}
-        onChange={(sort) => patch({ sort })}
-      />
-
-      <GroupByMenu
-        columns={columns}
-        value={value.groupBy}
-        onChange={(groupBy) => patch({ groupBy })}
-      />
-
-      <div className="ml-auto">
-        <PropertyToggleMenu
+        <FilterBar
           columns={columns}
-          visibleProperties={value.visibleProperties}
-          order={value.order}
-          onChange={(visibleProperties, order) =>
-            patch({ visibleProperties, order })
-          }
+          value={value.filters}
+          onChange={(filters) => patch({ filters })}
         />
+
+        <SortMenu
+          columns={columns}
+          value={value.sort}
+          onChange={(sort) => patch({ sort })}
+        />
+
+        <GroupByMenu
+          columns={columns}
+          value={value.groupBy}
+          onChange={(groupBy) => patch({ groupBy })}
+        />
+
+        <div className="ml-auto">
+          <PropertyToggleMenu
+            columns={columns}
+            visibleProperties={value.visibleProperties}
+            order={value.order}
+            onChange={(visibleProperties, order) =>
+              patch({ visibleProperties, order })
+            }
+          />
+        </div>
       </div>
     </div>
   );

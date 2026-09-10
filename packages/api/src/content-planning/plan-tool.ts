@@ -83,6 +83,8 @@ export const PROPOSE_PLAN_TOOL_NAME = 'proposePlan'
 
 export function buildProposePlanTool(): Tool {
   return buildTool({
+    requiresCapability: 'feed',
+    homeAppToolSet: { app: 'feed', set: 'write' },
     name: PROPOSE_PLAN_TOOL_NAME,
     description:
       'Surface a proposed month of posts in the plan cardboard. Put the slots '

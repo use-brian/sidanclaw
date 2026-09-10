@@ -1,3 +1,4 @@
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * SDK for the Feed surface — thin typed wrappers around the shared
  * `/api/distribution/*` wire contract (open content planning plus hosted
@@ -16,6 +17,8 @@
  * [COMP:app-web/feed-sdk]
  */
 
+import { feedCachedJson } from "@/lib/offline/feed-cache";
+import { mergeLocalFeedSessions, readLocalFeedPost } from "@/lib/offline/feed-offline";
 import { authFetch } from "@/lib/auth-fetch";
 import type { PostMedia } from "@/lib/feed-media";
 import type { FeedPlatform } from "@/lib/feed-nav";
@@ -31,7 +34,7 @@ import type {
   FeedPostFormat,
 } from "@/lib/feed-post-versions";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 export type FeedCloudLink = {
   state: "native" | "disabled" | "unlinked" | "pending" | "linked" | "plan_required" | "error";
@@ -104,8 +107,8 @@ export async function unlinkFeedCloud(workspaceId: string): Promise<void> {
 /**
  * Build an `/api/...` URL with query params.
  *
- * `new URL()` cannot be used here: in development `next.config.ts` sets
- * `NEXT_PUBLIC_API_URL` to `""` on purpose so the browser goes through the
+ * `new URL()` cannot be used here: in development runtime config uses an empty
+ * API URL on purpose so the browser goes through the
  * `/api` rewrite, and `new URL("/api/…")` throws `Invalid URL` without a base.
  * That threw inside the SDK before any fetch fired, so callers saw a bare
  * "failed to load" with NO request in the network tab - which is exactly how
@@ -174,11 +177,7 @@ type ProfilesApiResponse = {
 export async function fetchFeedTeamProfiles(
   workspaceId: string,
 ): Promise<FeedProfile[]> {
-  const res = await authFetch(
-    `${API_URL}/api/distribution/team/${workspaceId}/profiles`,
-  );
-  if (!res.ok) throw new Error(`feed API ${res.status}`);
-  const body = (await res.json()) as ProfilesApiResponse;
+  const body = await feedCachedJson<ProfilesApiResponse>(`/api/distribution/team/${workspaceId}/profiles`);
   return (body.profiles ?? []).map((p) => ({
     assistantId: p.assistantId,
     platform: p.platform,
@@ -197,18 +196,9 @@ export async function fetchFeedTeamProfiles(
 export async function fetchFeedDistributionAssistants(
   workspaceId: string,
 ): Promise<Array<{ id: string; name: string }>> {
-  const res = await authFetch(
-    `${API_URL}/api/assistants?workspaceId=${encodeURIComponent(workspaceId)}`,
-  );
-  if (!res.ok) return [];
-  const body = (await res.json().catch(() => ({}))) as {
-    assistants?: Array<{
-      id: string;
-      name: string;
-      kind?: string;
-      appType?: string;
-    }>;
-  };
+  const body = await feedCachedJson<{
+    assistants?: Array<{ id: string; name: string; kind?: string; appType?: string }>;
+  }>(`/api/assistants?workspaceId=${encodeURIComponent(workspaceId)}`);
   return (body.assistants ?? [])
     .filter((assistant) =>
       assistant.kind === "app" && assistant.appType === "distribution"
@@ -405,8 +395,7 @@ export async function fetchFeedExternalPost(
 
 /**
  * Cross-platform pending-approval total for the Feed inbox badge. Returns 0
- * on any error so the badge degrades silently (same contract as
- * `fetchInboxBadgeCount`).
+ * on any error so the badge degrades silently.
  */
 export async function fetchFeedApprovalsCount(
   assistantIds: string[],
@@ -726,14 +715,18 @@ export async function fetchFeedDraftSessions(
    *  in one call. Both editions treat the query param as optional. */
   platform?: FeedPlatform,
 ): Promise<FeedDraftSessionSummary[]> {
-  const res = await authFetch(
-    `${API_URL}/api/distribution/${assistantId}/draft-sessions${
-      platform ? `?platform=${platform}` : ""
-    }`,
-  );
-  if (!res.ok) throw new Error(`draft sessions API ${res.status}`);
-  const body = (await res.json()) as { sessions?: FeedDraftSessionSummary[] };
-  return body.sessions ?? [];
+  let sessions: FeedDraftSessionSummary[] = [];
+  try {
+    const body = await feedCachedJson<{ sessions?: FeedDraftSessionSummary[] }>(
+      `/api/distribution/${assistantId}/draft-sessions${platform ? `?platform=${platform}` : ""}`,
+    );
+    sessions = body.sessions ?? [];
+  } catch (error) {
+    const local = await mergeLocalFeedSessions(assistantId, [], platform);
+    if (!local.length) throw error;
+    return local;
+  }
+  return mergeLocalFeedSessions(assistantId, sessions, platform);
 }
 
 /**
@@ -787,32 +780,6 @@ export async function deleteFeedDraftSession(
   return { ok: false, error: data.error ?? null };
 }
 
-/** Rename a draft session while the server preserves its platform prefix. */
-export async function updateFeedDraftSessionTitle(
-  assistantId: string,
-  sessionId: string,
-  title: string,
-): Promise<
-  | { ok: true; title: string }
-  | { ok: false; error: string | null }
-> {
-  const res = await authFetch(
-    `${API_URL}/api/distribution/${assistantId}/draft-sessions/${sessionId}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
-    },
-  );
-  const data = (await res.json().catch(() => ({}))) as {
-    title?: string;
-    error?: string;
-  };
-  return res.ok && typeof data.title === "string"
-    ? { ok: true, title: data.title }
-    : { ok: false, error: data.error ?? null };
-}
-
 /**
  * The session's saved drafts with resolution status
  * (`GET /:assistantId/draft-sessions/:sessionId/saved-drafts`). Returns
@@ -823,14 +790,13 @@ export async function fetchFeedSavedDrafts(
   assistantId: string,
   sessionId: string,
 ): Promise<FeedSavedDraft[] | null> {
-  const res = await authFetch(
-    `${API_URL}/api/distribution/${assistantId}/draft-sessions/${sessionId}/saved-drafts`,
-  );
-  if (!res.ok) return null;
-  const body = (await res.json().catch(() => ({}))) as {
-    drafts?: FeedSavedDraft[];
-  };
-  return body.drafts ?? [];
+  if ((await readLocalFeedPost(assistantId, sessionId))?.newSession) return [];
+  try {
+    const body = await feedCachedJson<{ drafts?: FeedSavedDraft[] }>(
+      `/api/distribution/${assistantId}/draft-sessions/${sessionId}/saved-drafts`,
+    );
+    return body.drafts ?? [];
+  } catch { return null; }
 }
 
 /** Decode outcome the save-draft route reports for URL-paste reply targets. */

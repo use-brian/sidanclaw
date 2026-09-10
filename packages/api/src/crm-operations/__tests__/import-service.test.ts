@@ -4,7 +4,14 @@ import type { CrmOperationsContext, FilesApi } from '@use-brian/core'
 
 const mocks = vi.hoisted(() => ({ query: vi.fn(), createContact: vi.fn(), updateContact: vi.fn() }))
 
-vi.mock('../../db/client.js', () => ({ query: mocks.query }))
+vi.mock('../../db/client.js', () => ({ query: mocks.query, getPool: () => ({ connect: async () => ({
+  release: () => {},
+  query: (sql: string, values: unknown[]) => {
+    if (/^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE SAVEPOINT)/.test(sql) || sql.includes("set_config('app.system_bypass'") || sql.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [] })
+    if (sql.includes('SELECT role FROM workspace_members')) return Promise.resolve({ rows: [{ role: 'admin' }] })
+    return mocks.query(sql, values)
+  },
+}) }) }))
 vi.mock('../../db/crm.js', () => ({
   createContact: mocks.createContact,
   createCompany: vi.fn(),
@@ -70,7 +77,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
   })
 
   it('dry-runs the full staged file without creating database rows', async () => {
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const result = await service.dryRun(context, {
       stagedFileId: fileId,
       entityKind: 'contact',
@@ -84,7 +91,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
   })
 
   it('requires admin authority for a trusted identity mapping', async () => {
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     await expect(service.dryRun({
       ...context,
       authority: { ...context.authority, role: 'member', canConfigure: false },
@@ -101,7 +108,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     mocks.query.mockResolvedValueOnce({
       rows: [{ fieldKey: 'score', fieldType: 'number', options: [] }],
     })
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const result = await service.dryRun(context, {
       stagedFileId: fileId,
       entityKind: 'contact',
@@ -115,8 +122,22 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     expect(mocks.createContact).not.toHaveBeenCalled()
   })
 
+  it('validates explicit historical participation imports during dry run', async () => {
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
+    for (const [historical, validRows] of [['true', 1], ['false', 1], ['yes', 0]] as const) {
+      readBytes.mockResolvedValueOnce({ ok: true, value: { file: { id: fileId }, bytes: Buffer.from(
+        `Contact,Event,Source,Name,Historical\n${entityId},${fileId},fixture-row,Fictional attendee,${historical}\n`,
+      ) } })
+      const result = await service.dryRun(context, { stagedFileId: fileId, entityKind: 'operations',
+        mapping: { columns: { 0: 'contactId', 1: 'participationEventId', 2: 'participationSourceId', 3: 'participantName', 4: 'participationHistoricalImport' } },
+      })
+      expect(result.validRows).toBe(validRows)
+      if (!validRows) expect(result.sampleErrors).toContainEqual(expect.objectContaining({ code: 'invalid_historical_import' }))
+    }
+  })
+
   it('commits one bounded chunk and treats a completed resume as a no-op', async () => {
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     const checked = await service.dryRun(context, {
       stagedFileId: fileId,
       entityKind: 'contact',
@@ -133,7 +154,8 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     expect(confirmed.status).toBe('ready')
 
     mocks.query
-      .mockResolvedValueOnce({ rows: [job('ready')] }) // load
+      .mockResolvedValueOnce({ rows: [job('ready')] }) // source snapshot
+      .mockResolvedValueOnce({ rows: [job('ready')] }) // locked load
       .mockResolvedValueOnce({ rows: [{ id: jobId }] }) // claim
       .mockResolvedValueOnce({ rows: [{ id: 'chunk', status: 'running', inputHash: createHash('sha256').update(JSON.stringify([['Ada Example', 'ada@example.test']])).digest('hex') }] })
       .mockResolvedValueOnce({ rows: [] }) // receipt
@@ -151,9 +173,9 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       name: 'Ada Example',
       email: 'ada@example.test',
       externalRef: expect.objectContaining({ import_key: `${jobId}:2` }),
-    }), undefined)
+    }), undefined, expect.objectContaining({ client: expect.anything(), afterCommit: expect.any(Function) }))
 
-    mocks.query.mockResolvedValueOnce({ rows: [job('completed')] })
+    mocks.query.mockResolvedValueOnce({ rows: [job('completed')] }).mockResolvedValueOnce({ rows: [job('completed')] })
     await expect(service.resume(context, jobId)).resolves.toMatchObject({ status: 'completed' })
     expect(mocks.createContact).toHaveBeenCalledTimes(1)
   })
@@ -166,7 +188,8 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     const ready = job('ready', { mapping })
     const completed = job('completed', { mapping })
     mocks.query
-      .mockResolvedValueOnce({ rows: [ready] })
+      .mockResolvedValueOnce({ rows: [ready] }) // source snapshot
+      .mockResolvedValueOnce({ rows: [ready] }) // locked load
       .mockResolvedValueOnce({ rows: [{ id: jobId }] })
       .mockResolvedValueOnce({ rows: [{
         id: 'chunk', status: 'running',
@@ -180,19 +203,19 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [completed] })
 
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     await expect(service.resume(context, jobId)).resolves.toMatchObject({ status: 'completed' })
     expect(mocks.updateContact).toHaveBeenCalledWith(userId, entityId, expect.objectContaining({
       name: 'Ada Example', email: 'ada@example.test', tags: ['existing'],
       externalRef: expect.objectContaining({ import_key: `${jobId}:2` }),
-    }), undefined)
+    }), undefined, expect.objectContaining({ workspaceId }), expect.anything(), undefined, expect.any(Function))
     expect(mocks.createContact).not.toHaveBeenCalled()
   })
 
-  it('uses deterministic provider event ids when a crashed operations row is replayed', async () => {
+  it.each([undefined, '2026-01-01T03:00:00.123456+03:00'])('preserves evidence time %s and deterministic ids when an operations row is replayed', async (occurredAt) => {
     const operationsSource = [
-      'Contact ID,Purpose,Consent Action,Consent Source,Channel,Suppression Action,Reason,Suppression Source',
-      `${entityId},updates,granted,legacy_export,email,suppressed,manual_do_not_contact,legacy_export`,
+      'Contact ID,Purpose,Consent Action,Consent Source,Channel,Suppression Action,Reason,Suppression Source,Consent Time,Suppression Time',
+      `${entityId},updates,granted,legacy_export,email,suppressed,manual_do_not_contact,legacy_export,${occurredAt ?? ''},${occurredAt ?? ''}`,
       '',
     ].join('\n')
     const operationsBytes = Buffer.from(operationsSource)
@@ -200,13 +223,15 @@ describe('[COMP:crm/production-import] production CRM import', () => {
     const mapping = { columns: {
       0: 'contactId', 1: 'consentPurposeKey', 2: 'consentAction', 3: 'consentSource',
       4: 'suppressionChannel', 5: 'suppressionAction', 6: 'suppressionReasonCode', 7: 'suppressionSource',
+      8: 'consentOccurredAt', 9: 'suppressionOccurredAt',
     } }
     const ready = job('ready', { entityKind: 'operations', mapping, sourceHash: operationsHash })
     const completed = job('completed', { entityKind: 'operations', mapping, sourceHash: operationsHash })
     const cells = operationsSource.split('\n')[1]!.split(',')
     readBytes.mockResolvedValueOnce({ ok: true, value: { file: { id: fileId }, bytes: operationsBytes } })
     mocks.query
-      .mockResolvedValueOnce({ rows: [ready] })
+      .mockResolvedValueOnce({ rows: [ready] }) // source snapshot
+      .mockResolvedValueOnce({ rows: [ready] }) // locked load
       .mockResolvedValueOnce({ rows: [{ id: jobId }] })
       .mockResolvedValueOnce({ rows: [{
         id: 'chunk', status: 'running',
@@ -219,7 +244,7 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [completed] })
 
-    const service = createCrmProductionImportService({ filesApi, operations: operations as never })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
     await expect(service.resume(context, jobId)).resolves.toMatchObject({ status: 'completed' })
     expect(operations.execute).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       kind: 'record_consent', provider: 'import',
@@ -229,5 +254,30 @@ describe('[COMP:crm/production-import] production CRM import', () => {
       kind: 'record_suppression', provider: 'import',
       providerEventId: `${jobId}:2:suppression:email`,
     }))
+    for (const [, command] of operations.execute.mock.calls) {
+      if (occurredAt) expect(command).toHaveProperty('occurredAt', occurredAt)
+      else expect(command).not.toHaveProperty('occurredAt')
+    }
+  })
+
+  it.each(['consentOccurredAt', 'suppressionOccurredAt'])('validates %s in preflight without discarding invalid historical evidence', async (target) => {
+    const isConsent = target === 'consentOccurredAt'
+    const columns = isConsent
+      ? ['contactId', 'consentPurposeKey', 'consentAction', 'consentSource', target]
+      : ['contactId', 'suppressionChannel', 'suppressionAction', 'suppressionReasonCode', 'suppressionSource', target]
+    const base = isConsent ? [entityId, 'updates', 'granted', 'fixture']
+      : [entityId, 'email', 'released', 'manual_do_not_contact', 'fixture']
+    const times = ['2026-01-01T03:00:00.123456+03:00', '', '2026-01-01', '2026-01-01T00:00:00', '2026-02-30T00:00:00Z', 'not-a-time', '2026-01-01T00:00:00.1234567Z']
+    const rows = times.map((at) => [...base, at].join(','))
+    rows.push([entityId, ...base.slice(1).map(() => ''), times[0]].join(','))
+    readBytes.mockResolvedValueOnce({ ok: true, value: { file: { id: fileId }, bytes: Buffer.from([columns.join(','), ...rows, ''].join('\n')) } })
+    const service = createCrmProductionImportService({ filesApi, operationsForTransaction: () => operations as never })
+    const result = await service.dryRun(context, { stagedFileId: fileId, entityKind: 'operations',
+      mapping: { columns: Object.fromEntries(columns.map((column, index) => [index, column])) } })
+    expect(result).toMatchObject({ totalRows: 8, validRows: 2, failedRows: 6 })
+    expect(result.sampleErrors.filter((error) => error.code === 'invalid_instant')).toHaveLength(5)
+    expect(result.sampleErrors).toContainEqual(expect.objectContaining({ row: 9, code: isConsent ? 'incomplete_consent' : 'incomplete_suppression' }))
+    expect(operations.execute).not.toHaveBeenCalled()
+    expect(mocks.query).not.toHaveBeenCalled()
   })
 })

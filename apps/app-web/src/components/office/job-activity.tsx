@@ -238,8 +238,8 @@ export function OfficeJobActivityView({
       </div> : null}
       <form onSubmit={onSubmit} className="mt-3">
         <label className="sr-only" htmlFor="office-brian-instruction">{t.editWithBrian}</label>
-        <textarea id="office-brian-instruction" value={instruction} onChange={(event) => onInstructionChange(event.target.value)} disabled={revisionActive} placeholder={t.iterationPlaceholder} className="min-h-24 w-full resize-y rounded-lg border bg-background p-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-60" />
-        <button type="submit" disabled={disabled} className="mt-2 h-8 rounded-md bg-action px-3 text-xs font-medium text-action-foreground disabled:opacity-50">{submitting ? t.queued : t.askBrian}</button>
+        <textarea id="office-brian-instruction" value={instruction} onChange={(event) => onInstructionChange(event.target.value)} disabled={revisionActive} placeholder={t.iterationPlaceholder} className="min-h-24 w-full resize-y rounded-lg border bg-background p-2.5 text-[16px] disabled:cursor-not-allowed disabled:opacity-60 md:text-sm" />
+        <button type="submit" disabled={disabled} className="mt-2 h-11 rounded-md bg-action px-3 text-xs font-medium text-action-foreground disabled:opacity-50 sm:h-8">{submitting ? t.queued : t.askBrian}</button>
         {!steering && (revisionActive ? t.brianRevisionInFlight : !canRequestRevision ? requestDisabledReason : undefined) ? <p className="mt-2 text-xs text-muted-foreground">{revisionActive ? t.brianRevisionInFlight : requestDisabledReason}</p> : null}
         {feedbackLabel ? <p role={feedback === "failed" || feedback === "conflict" ? "alert" : "status"} className={feedback === "failed" || feedback === "conflict" ? "mt-2 text-xs text-destructive" : "mt-2 text-xs text-muted-foreground"}>{feedbackLabel}</p> : null}
       </form>

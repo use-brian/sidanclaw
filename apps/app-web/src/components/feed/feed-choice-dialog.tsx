@@ -150,12 +150,16 @@ export function useChoiceDialog() {
               </Dialog.Description>
             ) : null}
           </div>
-          <div className="flex justify-end gap-2 px-5 py-4 border-t border-border mt-3">
+          {/* Three labels need ~510px in a row; below `sm` they stack full
+              width with the primary on top (responsive contract M8, the
+              confirm-dialog shape), so the destructive choice never spills
+              off a 360px screen. */}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 px-5 py-4 border-t border-border mt-3">
             <button
               type="button"
               onClick={onCancel}
               disabled={busy}
-              className="press inline-flex items-center justify-center h-9 px-4 rounded-xl text-sm font-medium text-foreground bg-transparent border border-border hover:bg-accent disabled:opacity-50"
+              className="press inline-flex items-center justify-center h-11 sm:h-9 w-full sm:w-auto px-4 rounded-xl text-sm font-medium text-foreground bg-transparent border border-border hover:bg-accent disabled:opacity-50"
             >
               {pending?.cancelLabel ?? t.cancel}
             </button>
@@ -164,7 +168,7 @@ export function useChoiceDialog() {
               onClick={() => pending?.resolveChoice("secondary")}
               disabled={busy}
               className={cn(
-                "press inline-flex items-center justify-center h-9 px-4 rounded-xl text-sm font-medium shadow-sm disabled:opacity-60",
+                "press inline-flex items-center justify-center h-11 sm:h-9 w-full sm:w-auto px-4 rounded-xl text-sm font-medium shadow-sm disabled:opacity-60",
                 variantClass(pending?.secondaryVariant ?? "default"),
                 activeAction === "secondary" && "cursor-wait",
               )}
@@ -181,7 +185,7 @@ export function useChoiceDialog() {
               disabled={busy}
               autoFocus
               className={cn(
-                "press inline-flex items-center justify-center h-9 px-4 rounded-xl text-sm font-medium shadow-sm disabled:opacity-60",
+                "press inline-flex items-center justify-center h-11 sm:h-9 w-full sm:w-auto px-4 rounded-xl text-sm font-medium shadow-sm disabled:opacity-60",
                 variantClass(pending?.variant ?? "default"),
                 activeAction === "primary" && "cursor-wait",
               )}

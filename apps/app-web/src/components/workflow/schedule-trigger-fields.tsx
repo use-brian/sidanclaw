@@ -25,6 +25,7 @@
 
 import { useMemo } from "react";
 import { useT } from "@/lib/i18n/client";
+import { format as fmt } from "@/lib/i18n";
 import type {
   ScheduleConfig,
   WorkflowTrigger,
@@ -36,6 +37,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  SearchableSelect,
+  type SearchableSelectItem,
+} from "@/components/ui/searchable-select";
 import { Switch } from "@/components/ui/switch";
 import {
   Disclosure,
@@ -59,9 +64,20 @@ const DAYS = [
   "sunday",
 ];
 
-/** Compact input matching the panel's `size="sm"` selects. */
+/**
+ * Compact input matching the panel's `size="sm"` selects. 16px on a phone
+ * (responsive contract M4: iOS zooms the page on a sub-16px focus and stays
+ * zoomed) and 44px tall there; the native time / datetime pickers keep their
+ * OS wheel and ride the same gate.
+ */
 const INPUT_CLS =
-  "w-full h-8 px-2.5 bg-background border border-input rounded-md text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50";
+  "w-full h-11 sm:h-8 px-2.5 bg-background border border-input rounded-md text-[16px] md:text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50";
+
+/** The panel's `size="sm"` selects: 36px on a phone, the primitive's 28px above. */
+const SELECT_CLS = "w-full min-h-9 sm:min-h-0";
+
+/** Sentinel for "no timezone set" (the server falls back to UTC). */
+const DEFAULT_TIMEZONE_VALUE = "__default__";
 
 type Props = {
   trigger: Extract<WorkflowTrigger, { kind: "schedule" }>;
@@ -124,7 +140,7 @@ export function ScheduleTriggerFields({ trigger, onChange, disabled }: Props) {
               cron: b.scheduleTypeCron,
             }}
           >
-            <SelectTrigger size="sm" className="w-full">
+            <SelectTrigger size="sm" className={SELECT_CLS}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -155,7 +171,7 @@ export function ScheduleTriggerFields({ trigger, onChange, disabled }: Props) {
                       setSchedule({ ...s, days: next });
                     }}
                     className={cn(
-                      "text-xs px-2 py-1 rounded border capitalize",
+                      "text-xs px-2.5 sm:px-2 py-2.5 sm:py-1 rounded border capitalize",
                       on
                         ? "bg-action text-action-foreground border-primary"
                         : "border-border hover:bg-muted",
@@ -251,18 +267,11 @@ export function ScheduleTriggerFields({ trigger, onChange, disabled }: Props) {
             label={b.timezonePickerLabel}
             hint={b.timezonePickerHint}
           />
-          <input
-            type="text"
-            value={trigger.timezone ?? ""}
-            onChange={(e) =>
-              onChange({ ...trigger, timezone: e.target.value || undefined })
-            }
+          <TimezonePicker
+            value={trigger.timezone}
+            onChange={(timezone) => onChange({ ...trigger, timezone })}
             disabled={disabled}
-            placeholder="Asia/Hong_Kong"
-            list="iana-timezones"
-            className={INPUT_CLS}
           />
-          <TimezoneDataList />
         </div>
       </div>
 
@@ -320,7 +329,7 @@ export function ScheduleTriggerFields({ trigger, onChange, disabled }: Props) {
                   user: b.scheduleModeUser,
                 }}
               >
-                <SelectTrigger size="sm" className="w-full">
+                <SelectTrigger size="sm" className={SELECT_CLS}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -362,7 +371,7 @@ export function ScheduleTriggerFields({ trigger, onChange, disabled }: Props) {
                   whatsapp: b.deliverChannelWhatsApp,
                 }}
               >
-                <SelectTrigger size="sm" className="w-full">
+                <SelectTrigger size="sm" className={SELECT_CLS}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -527,12 +536,25 @@ function SchedulePreview({
 }
 
 /**
- * Datalist of IANA timezones for the timezone input's typeahead. Reads
- * `Intl.supportedValuesOf('timeZone')` when available (modern browsers);
- * falls back to a compact list of the most commonly used zones so the
- * field still autocompletes in older environments.
+ * IANA timezone picker: a `SearchableSelect` over
+ * `Intl.supportedValuesOf('timeZone')` (a compact fallback list in older
+ * environments), with a "Default (UTC)" row for the unset state and a
+ * creatable escape hatch so a zone the runtime does not enumerate (or an
+ * already-saved legacy value) stays typeable. Replaced the free-text input +
+ * native `<datalist>`, which iOS Safari barely supports, so on a phone the
+ * timezone was effectively free text (C 61).
  */
-function TimezoneDataList() {
+function TimezonePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | undefined;
+  onChange: (timezone: string | undefined) => void;
+  disabled?: boolean;
+}) {
+  const t = useT();
+  const b = t.workflowPage.builder;
   const zones = useMemo(() => {
     const fn = (
       Intl as unknown as { supportedValuesOf?: (k: string) => string[] }
@@ -546,12 +568,31 @@ function TimezoneDataList() {
     }
     return TIMEZONE_FALLBACK;
   }, []);
+  const current = value ?? "";
+  const items = useMemo<SearchableSelectItem[]>(() => {
+    const rows: SearchableSelectItem[] = [
+      { value: DEFAULT_TIMEZONE_VALUE, label: b.timezoneDefaultOption },
+      ...zones.map((z) => ({ value: z, label: z })),
+    ];
+    // A saved value the runtime cannot enumerate stays selectable.
+    if (current && !zones.includes(current)) rows.push({ value: current, label: current });
+    return rows;
+  }, [zones, current, b.timezoneDefaultOption]);
   return (
-    <datalist id="iana-timezones">
-      {zones.map((z) => (
-        <option key={z} value={z} />
-      ))}
-    </datalist>
+    <SearchableSelect
+      value={current || DEFAULT_TIMEZONE_VALUE}
+      onValueChange={(v) =>
+        onChange(!v || v === DEFAULT_TIMEZONE_VALUE ? undefined : v)
+      }
+      onCreate={(v) => onChange(v.trim() || undefined)}
+      createLabel={(q) => fmt(b.timezoneCreate, { query: q })}
+      items={items}
+      searchPlaceholder={b.timezoneSearchPlaceholder}
+      emptyMessage={b.timezoneEmpty}
+      disabled={disabled}
+      aria-label={b.timezonePickerLabel}
+      className="h-11 sm:h-9"
+    />
   );
 }
 

@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 // [COMP:app-web/block-image]
 /**
  * Phase 2 media block — `kind: 'image'`.
@@ -42,7 +44,7 @@ import {
 } from "./doc-file-url";
 import { UploadSpinner } from "./upload-spinner";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 type ImageBlock = {
   kind: "image";
@@ -234,7 +236,7 @@ export function BlockImage({ block, workspaceId, readOnly, onChange }: Props) {
                   onChange?.({ caption: next });
                 }
               }}
-              className="w-full border-0 bg-transparent px-0 py-0 text-xs text-muted-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0"
+              className="w-full border-0 bg-transparent px-0 py-0 text-[16px] text-muted-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0 md:text-xs"
             />
           )}
         </figcaption>

@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * Drag-and-drop file support for the doc AI-chat surfaces. Pairs with
- * `useFileAttachments` — the host passes `att.upload` as `onFiles` and spreads
- * `dropProps` onto whatever container should accept drops (the chat panel, the
- * comment thread, the comment composer). `isDragging` drives a drop overlay.
+ * Drag-and-drop file support for app-web surfaces. A host spreads `dropProps`
+ * onto the container that owns the drop and uses `isDragging` for its overlay.
+ * Every owner receives a DOM marker. A workspace-wide fallback can therefore
+ * defer to a more specific descendant owner even when that control is disabled.
  *
  * The enter/leave counter (so moving over child elements doesn't flicker the
  * overlay — the same pattern apps/web's chat composer uses) lives in the pure
@@ -44,9 +44,24 @@ export function carriesFiles(types: readonly string[] | undefined): boolean {
   return Array.from(types ?? []).includes("Files");
 }
 
+const FILE_DROP_OWNER_ATTRIBUTE = "data-file-drop-owner";
+const FILE_DROP_OWNER_SELECTOR = `[${FILE_DROP_OWNER_ATTRIBUTE}]`;
+
+/** True when the event began inside a more specific marked drop surface. */
+export function isFileDropOwnedByDescendant(
+  target: EventTarget | null,
+  currentTarget: EventTarget | null,
+): boolean {
+  const closest = (target as { closest?: (selector: string) => unknown } | null)?.closest;
+  if (typeof closest !== "function") return false;
+  const owner = closest.call(target, FILE_DROP_OWNER_SELECTOR);
+  return owner != null && owner !== currentTarget;
+}
+
 export type FileDropApi = {
   isDragging: boolean;
   dropProps: {
+    "data-file-drop-owner": "true";
     onDragEnter: (e: React.DragEvent) => void;
     onDragOver: (e: React.DragEvent) => void;
     onDragLeave: (e: React.DragEvent) => void;
@@ -56,45 +71,74 @@ export type FileDropApi = {
 
 export function useFileDrop(
   onFiles: (files: FileList) => void,
-  opts?: { disabled?: boolean },
+  opts?: { disabled?: boolean; fallback?: boolean },
 ): FileDropApi {
   const [state, dispatch] = React.useReducer(dragReducer, IDLE);
   const disabled = opts?.disabled ?? false;
+  const fallback = opts?.fallback ?? false;
 
   // Keep the callback in a ref so dropProps stays referentially stable.
   const onFilesRef = React.useRef(onFiles);
   onFilesRef.current = onFiles;
 
+  React.useEffect(() => {
+    if (!state.active) return;
+    const reset = () => dispatch("reset");
+    window.addEventListener("drop", reset, true);
+    window.addEventListener("dragend", reset, true);
+    return () => {
+      window.removeEventListener("drop", reset, true);
+      window.removeEventListener("dragend", reset, true);
+    };
+  }, [state.active]);
+
   const dropProps = React.useMemo(
     () => ({
+      "data-file-drop-owner": "true" as const,
       onDragEnter(e: React.DragEvent) {
-        if (disabled || !carriesFiles(e.dataTransfer?.types)) return;
+        if (!carriesFiles(e.dataTransfer?.types)) return;
+        if (fallback && isFileDropOwnedByDescendant(e.target, e.currentTarget)) {
+          dispatch("reset");
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
+        if (disabled) return;
         dispatch("enter");
       },
       onDragOver(e: React.DragEvent) {
-        if (disabled || !carriesFiles(e.dataTransfer?.types)) return;
+        if (!carriesFiles(e.dataTransfer?.types)) return;
+        if (fallback && isFileDropOwnedByDescendant(e.target, e.currentTarget)) return;
         // preventDefault is required for onDrop to fire.
         e.preventDefault();
         e.stopPropagation();
       },
       onDragLeave(e: React.DragEvent) {
-        if (disabled || !carriesFiles(e.dataTransfer?.types)) return;
+        if (!carriesFiles(e.dataTransfer?.types)) return;
+        if (fallback && isFileDropOwnedByDescendant(e.target, e.currentTarget)) {
+          dispatch("reset");
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
+        if (disabled) return;
         dispatch("leave");
       },
       onDrop(e: React.DragEvent) {
-        if (disabled) return;
+        if (!carriesFiles(e.dataTransfer?.types)) return;
+        if (fallback && isFileDropOwnedByDescendant(e.target, e.currentTarget)) {
+          dispatch("reset");
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         dispatch("reset");
+        if (disabled) return;
         const files = e.dataTransfer?.files;
         if (files && files.length > 0) onFilesRef.current(files);
       },
     }),
-    [disabled],
+    [disabled, fallback],
   );
 
   return { isDragging: state.active, dropProps };

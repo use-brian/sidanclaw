@@ -43,12 +43,13 @@ import {
 } from "@/lib/live-roster";
 import { OperatorTopbar } from "@/components/operator/operator-topbar";
 import { AssistantAvatar } from "@/components/assistant-avatar";
+import { Skeleton } from "@/components/skeleton";
 import { LiveWatchPane } from "@/components/live/live-watch-pane";
 import { useLiveRoster } from "@/components/live/use-live-roster";
 import { cn } from "@/lib/utils";
 
 const topbarActionCls =
-  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground";
+  "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:h-7";
 const LIVE_ZONE_VISIBLE_ROWS = 6;
 
 function zoneLayoutClass(count: number): string {
@@ -369,6 +370,52 @@ export function LiveOverview({
   );
 }
 
+/**
+ * Cold-cache stand-in for `LiveOverview`: the same four zone cards with two
+ * skeleton rows each, so the first entry of a session paints the overview's
+ * geometry instead of four empty zones that fill in (N4). Every later entry
+ * paints the cached roster on the first frame and never reaches this.
+ */
+export function LiveOverviewSkeleton() {
+  return (
+    <div
+      data-live-overview-skeleton
+      aria-busy
+      className="mx-auto grid w-full max-w-6xl grid-cols-1 items-start gap-4 animate-fade-in md:grid-cols-2"
+    >
+      {[0, 1, 2, 3].map((zone) => (
+        <section
+          key={zone}
+          className="flex min-w-0 flex-col rounded-3xl border border-border/60 p-4 shadow-sm sm:p-5"
+        >
+          <header className="flex items-center gap-3">
+            <Skeleton className="size-10 shrink-0 rounded-2xl" />
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="ml-auto h-6 w-9 shrink-0 rounded-full" />
+          </header>
+          <div className="mt-4 flex flex-col gap-2">
+            {[0, 1].map((row) => (
+              <div
+                key={row}
+                className="flex min-h-16 items-center gap-3 rounded-2xl border border-border/60 px-3 py-2.5"
+              >
+                <Skeleton className="size-9 shrink-0 rounded-xl" />
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <Skeleton
+                    className="h-3.5"
+                    style={{ width: `${40 + ((zone * 13 + row * 29) % 35)}%` }}
+                  />
+                  <Skeleton className="h-3 w-1/2" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function LiveRunOverview({ item }: { item: LiveWorkflowRunItem }) {
   const tl = useT().liveApp;
   const stateLabel = {
@@ -419,7 +466,7 @@ export function LiveSurface({ workspaceId }: { workspaceId: string }) {
   const t = useT();
   const tl = t.liveApp;
   const searchParams = useSearchParams();
-  const { items, error } = useLiveRoster(workspaceId);
+  const { items, loaded, error } = useLiveRoster(workspaceId);
   const focusedCandidate = focusedLiveItem(
     items,
     searchParams.get(LIVE_FOCUS_PARAM),
@@ -464,7 +511,14 @@ export function LiveSurface({ workspaceId }: { workspaceId: string }) {
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-muted/[0.16] p-4 sm:p-6">
-        {error ? (
+        {!loaded ? (
+          <div className="min-h-full py-4">
+            <LiveOverviewSkeleton />
+          </div>
+        ) : error && items.length === 0 ? (
+          // A failed REVALIDATION keeps painting the cached roster (the hook
+          // holds the last good value); only a failure with nothing to show
+          // gets the error card, so a blip never blanks a roster on screen.
           <div className="flex h-full items-center justify-center">
             <div className="flex max-w-sm items-center gap-3 rounded-2xl border border-destructive/20 bg-card px-4 py-3 text-sm text-destructive shadow-sm">
               <CircleAlert className="size-4 shrink-0" aria-hidden />

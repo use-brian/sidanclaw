@@ -148,3 +148,71 @@ describe("[COMP:app-web/block-action-menu] capability gating", () => {
     expect(kinds.some((l) => l.includes(slashItems.toggle))).toBe(false);
   });
 });
+
+/**
+ * Touch mode (responsive contract M2 / M5). A hover fly-out beside a 240px
+ * menu has nowhere to go on a 390px phone, and a finger never hovers — so on
+ * a coarse pointer a submenu row toggles on TAP and its list renders as a
+ * second level INSIDE the menu. Pointer class comes from `matchMedia`, which
+ * jsdom lacks, so the test installs one.
+ */
+describe("[COMP:app-web/block-action-menu] touch mode", () => {
+  const originalMatchMedia = (window as { matchMedia?: unknown }).matchMedia;
+  afterEach(() => {
+    (window as { matchMedia?: unknown }).matchMedia = originalMatchMedia;
+  });
+
+  function installCoarseMatchMedia() {
+    (window as { matchMedia?: unknown }).matchMedia = (query: string) => ({
+      matches: query.includes("hover: none"),
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    });
+  }
+
+  it("opens Turn into inline on tap and never as a fly-out", () => {
+    installCoarseMatchMedia();
+    mountMenu({ extensions: browserDocExtensions(), pageContext: true });
+    expect(menuEl().getAttribute("data-coarse")).toBe("true");
+    // Every row is a 44px target on touch (M3).
+    expect(menuEl().className).toContain("[&_[role=menuitem]]:min-h-11");
+
+    const row = Array.from(
+      menuEl().querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+    ).find((b) => (b.textContent ?? "").includes(ba.turnInto));
+    expect(row).not.toBeUndefined();
+    // A hover-derived mouseover must NOT open it on touch (a tap fires one
+    // first, which would pre-empt the toggle).
+    act(() => {
+      row!.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(menuEl().querySelector('[data-submenu]')).toBeNull();
+
+    act(() => {
+      row!.click();
+    });
+    const sub = menuEl().querySelector<HTMLElement>('[data-submenu]');
+    expect(sub).not.toBeNull();
+    expect(sub!.getAttribute("data-submenu")).toBe("inline");
+    expect(sub!.className).not.toContain("left-full");
+    expect(row!.getAttribute("aria-expanded")).toBe("true");
+    expect(sub!.querySelectorAll('[role="menuitemradio"]').length).toBeGreaterThan(0);
+
+    // Second tap folds it back.
+    act(() => {
+      row!.click();
+    });
+    expect(menuEl().querySelector('[data-submenu]')).toBeNull();
+  });
+
+  it("keeps the hover fly-out on a fine pointer", () => {
+    mountMenu({ extensions: browserDocExtensions(), pageContext: true });
+    expect(menuEl().getAttribute("data-coarse")).toBeNull();
+    openSubmenu(ba.turnInto);
+    const sub = menuEl().querySelector<HTMLElement>('[data-submenu]');
+    expect(sub).not.toBeNull();
+    expect(sub!.getAttribute("data-submenu")).toBe("flyout");
+    expect(sub!.className).toContain("left-full");
+  });
+});

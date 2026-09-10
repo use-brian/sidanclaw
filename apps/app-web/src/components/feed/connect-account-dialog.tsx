@@ -1,5 +1,7 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 /**
  * Connect-an-account dialog — ported faithfully from
  * `apps/feed-web/src/components/connect-account-dialog.tsx`
@@ -32,9 +34,10 @@ import {
   type ConnectableFeedPlatform,
 } from "@/lib/feed-nav";
 import { useT } from "@/lib/i18n/client";
+import { isPhoneViewport } from "@/lib/viewport";
 import { format } from "@/lib/i18n/format";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 const CONNECT_ATTEMPT_TIMEOUT_MS = 15_000;
 
 type DistributionAssistant = { id: string; name: string };
@@ -383,12 +386,12 @@ export function useConnectAccount() {
                 </button>
                 {mode === "new" && (
                   <input
-                    autoFocus
+                    autoFocus={!isPhoneViewport()}
                     disabled={busy}
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder={t.connect.voiceNamePlaceholder}
-                    className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none placeholder:text-muted-foreground"
+                    className="h-9 w-full rounded-lg border border-border bg-background px-3 text-[16px] md:text-sm outline-none placeholder:text-muted-foreground"
                   />
                 )}
               </div>

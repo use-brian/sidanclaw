@@ -48,8 +48,11 @@ import type { SkillStatus } from "@/lib/skills-view";
 
 /** Top-level Brain section — the sidebar's stacked rows. `blueprints` is the
  *  fillable-template library (structural-synthesis.md): page templates carrying
- *  an `extraction` spec, a sibling of the procedural `skills` library. */
-export type BrainSection = "entries" | "skills" | "reviews" | "blueprints";
+ *  an `extraction` spec, a sibling of the procedural `skills` library.
+ *  `audit` is the chat-history audit browser (features/chat-audit.md): the
+ *  sidebar lists the viewer's conversations, the page steps through one
+ *  turn at a time with its tool trace and retrieved entries lit on the graph. */
+export type BrainSection = "entries" | "skills" | "reviews" | "blueprints" | "audit";
 
 /** `graph` (force-directed doc — the DEFAULT entries surface) or
  *  `grouped` (the list overview behind the List toggle). Scopes the
@@ -77,6 +80,15 @@ export type BrainSurface = {
    *  verify/delete. */
   selectedReviewKey: string | null;
   setSelectedReviewKey: (key: string | null) => void;
+  /** Audit master-detail selection — the session the sidebar's conversation
+   *  list picked and the assistant turn (message id) the page is stepping
+   *  on. `openAudit` sets both and lands on the section (the chat surface's
+   *  "Audit this turn" and the `?audit=&turn=` deep link use it). */
+  auditSessionId: string | null;
+  setAuditSessionId: (id: string | null) => void;
+  auditTurnId: string | null;
+  setAuditTurnId: (id: string | null) => void;
+  openAudit: (sessionId: string, turnId?: string | null) => void;
   /** Selected primitive-type filters; empty = all. Scopes the ENTRIES list
    *  (`/api/brain/list` kinds). Reviews has its own `reviewFilters` (it can
    *  filter `relationships`, which isn't a brain-list primitive). */
@@ -136,6 +148,21 @@ export function BrainSurfaceProvider({
   const [selectedReviewKey, setSelectedReviewKey] = useState<string | null>(
     null,
   );
+  const [auditSessionId, setAuditSessionIdState] = useState<string | null>(null);
+  const [auditTurnId, setAuditTurnId] = useState<string | null>(null);
+  // A new session always resets the turn — a message id belongs to one
+  // conversation, and a stale one would 404 the trace against the new URL.
+  const setAuditSessionId = useCallback((id: string | null) => {
+    setAuditSessionIdState((prev) => {
+      if (prev !== id) setAuditTurnId(null);
+      return id;
+    });
+  }, []);
+  const openAudit = useCallback((sessionId: string, turnId?: string | null) => {
+    setSection("audit");
+    setAuditSessionIdState(sessionId);
+    setAuditTurnId(turnId ?? null);
+  }, []);
   const [primitives, setPrimitives] = useState<BrainPrimitive[]>([]);
   const [reviewFilters, setReviewFilters] = useState<ReviewFilter[]>([]);
   const [skillStatusFilter, setSkillStatusFilter] = useState<SkillStatus[]>([]);
@@ -194,6 +221,11 @@ export function BrainSurfaceProvider({
       closeSkillCreator,
       selectedReviewKey,
       setSelectedReviewKey,
+      auditSessionId,
+      setAuditSessionId,
+      auditTurnId,
+      setAuditTurnId,
+      openAudit,
       primitives,
       togglePrimitive,
       reviewFilters,
@@ -216,6 +248,10 @@ export function BrainSurfaceProvider({
       openSkillCreator,
       closeSkillCreator,
       selectedReviewKey,
+      auditSessionId,
+      setAuditSessionId,
+      auditTurnId,
+      openAudit,
       primitives,
       togglePrimitive,
       reviewFilters,

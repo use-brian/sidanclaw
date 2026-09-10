@@ -1,11 +1,13 @@
 "use client";
 
+
+import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 // Ported from apps/web/src/app/(app)/settings/billing/page.tsx
 // — see docs/architecture/platform/cost-and-pricing.md
 // The "Plan & usage" section: plan tier, payment, invoices, plus the
 // embedded UsageSection block (the old standalone ws-usage entry).
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CreditCardIcon,
   SparklesIcon,
@@ -18,9 +20,12 @@ import { useWorkspaceContext } from "@/lib/workspace-context";
 import { useT, useLocale } from "@/lib/i18n/client";
 import { format } from "@/lib/i18n";
 import { webAppUrl } from "@/lib/primary-auth";
+import { mutateSurfaceCache, useCachedResource } from "@/lib/surface-cache";
+import { settingsBillingCacheKey } from "@/lib/surface-prefetch";
+import { Skeleton } from "@/components/skeleton";
 import { UsageSection } from "./usage-section";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const API_URL = publicRuntimeConfig().apiUrl ?? "http://localhost:4000";
 
 // Deep-link target for `/plans`, which still lives in the marketing app
 // (apps/web). `webAppUrl()` resolves the prod-safe base (usebrian.ai in prod)
@@ -147,6 +152,33 @@ type Invoice = {
 // need a JSON Content-Type header for POST bodies here.
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
+/** What the section paints, as one cached unit (`settings-billing:<wid>`). */
+type BillingBundle = {
+  subscription: SubscriptionResponse | null;
+  invoices: Invoice[];
+};
+
+/**
+ * Subscription + invoices in parallel (N7). A non-OK response leaves that
+ * half at its "nothing yet" value (a 401 here is expected for guests); a
+ * thrown network error propagates so the cache keeps its last good value
+ * instead of painting "No plan" from a failed refresh.
+ */
+async function fetchBillingBundle(workspaceId: string): Promise<BillingBundle> {
+  const ws = encodeURIComponent(workspaceId);
+  const [subRes, invRes] = await Promise.all([
+    authFetch(`${API_URL}/api/billing/subscription?workspace_id=${ws}`),
+    authFetch(`${API_URL}/api/billing/invoices?workspace_id=${ws}`),
+  ]);
+  const subscription = subRes.ok ? ((await subRes.json()) as SubscriptionResponse) : null;
+  const invoices = invRes.ok
+    ? (((await invRes.json()) as { invoices: Invoice[] }).invoices ?? [])
+    : [];
+  return { subscription, invoices };
+}
+
+const NO_INVOICES: Invoice[] = [];
+
 /**
  * Format an ISO date string as "Apr 22, 2026" for the renewal line.
  * Falls back to a generic message when the date is null or unparseable.
@@ -213,78 +245,68 @@ export function BillingSection() {
   // Billing is per-workspace (migration 143) — scoped to the active
   // workspace from the doc workspace context.
   const { workspaceId } = useWorkspaceContext();
-  const [plan, setPlan] = useState<PlanId>("free");
-  const [loading, setLoading] = useState(true);
-  const [subscription, setSubscription] = useState<SubscriptionResponse | null>(
-    null,
+  // Paints from the surface cache (instant-navigation contract N1): reopening
+  // Plan & usage renders the last-known plan, card and invoices on its first
+  // frame and revalidates behind them; only a cold open shows the skeleton
+  // (the old `plan="free"` default painted "No plan" at a Pro user for the
+  // whole round trip). No spine primitive names a subscription, so the
+  // checkout poll below writes through the cache and mount / visibility
+  // revalidation covers the rest.
+  const billingKey = workspaceId ? settingsBillingCacheKey(workspaceId) : null;
+  const bundle = useCachedResource<BillingBundle>(billingKey, () =>
+    fetchBillingBundle(workspaceId),
   );
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const { refresh } = bundle;
+  const subscription = bundle.data?.subscription ?? null;
+  const invoices = bundle.data?.invoices ?? NO_INVOICES;
+  const plan: PlanId =
+    subscription?.plan && subscription.plan in PLAN_MAP ? subscription.plan : "free";
+  const loading = bundle.loading;
   const [portalSubmitting, setPortalSubmitting] = useState(false);
   const [portalError, setPortalError] = useState<string | null>(null);
 
-  const fetchBillingState = useCallback(async () => {
-    if (!workspaceId) return;
-    const ws = encodeURIComponent(workspaceId);
-    try {
-      const [subRes, invRes] = await Promise.all([
-        authFetch(`${API_URL}/api/billing/subscription?workspace_id=${ws}`),
-        authFetch(`${API_URL}/api/billing/invoices?workspace_id=${ws}`),
-      ]);
-
-      if (subRes.ok) {
-        const sub = (await subRes.json()) as SubscriptionResponse;
-        setSubscription(sub);
-        if (sub.plan && sub.plan in PLAN_MAP) setPlan(sub.plan);
-      }
-      // 401 here is expected for guest users — authFetch has already
-      // attempted a refresh and cleared the user cookie if it failed.
-      // We silently keep the free-plan default state.
-      if (invRes.ok) {
-        const data = (await invRes.json()) as { invoices: Invoice[] };
-        setInvoices(data.invoices ?? []);
-      }
-    } catch (err) {
-      console.error("[billing] fetch failed:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [workspaceId]);
-
   useEffect(() => {
-    if (!workspaceId) return;
+    if (!workspaceId || !billingKey) return;
     const ws = encodeURIComponent(workspaceId);
-    async function init() {
-      await fetchBillingState();
-
+    let cancelled = false;
+    async function settleCheckout() {
       // After a Stripe checkout/upgrade redirect, the webhook may not
       // have processed yet. Poll until the plan updates, then refresh
       // the user cookie so the chrome reflects the new plan.
       const params = new URLSearchParams(window.location.search);
-      if (params.get("checkout") === "success") {
-        for (let i = 0; i < 5; i++) {
-          const res = await authFetch(
-            `${API_URL}/api/billing/subscription?workspace_id=${ws}`,
-          );
-          if (res.ok) {
-            const data = (await res.json()) as SubscriptionResponse;
-            if (data.plan !== "free") {
-              setSubscription(data);
-              if (data.plan && data.plan in PLAN_MAP) setPlan(data.plan);
-              break;
-            }
+      if (params.get("checkout") !== "success") return;
+      for (let i = 0; i < 5 && !cancelled; i++) {
+        const res = await authFetch(
+          `${API_URL}/api/billing/subscription?workspace_id=${ws}`,
+        );
+        if (res.ok) {
+          const data = (await res.json()) as SubscriptionResponse;
+          if (data.plan !== "free") {
+            // The user's own purchase: patch the cached row, then make it
+            // authoritative.
+            mutateSurfaceCache<BillingBundle>(billingKey, (previous) => ({
+              ...previous,
+              subscription: data,
+            }));
+            void refresh();
+            break;
           }
-          await new Promise((r) => setTimeout(r, 2000));
         }
-        await refreshUserCookie();
-        // Strip the `checkout` query param without navigating away from
-        // the current page (app-web URLs are page-scoped).
-        const url = new URL(window.location.href);
-        url.searchParams.delete("checkout");
-        window.history.replaceState({}, "", url.toString());
+        await new Promise((r) => setTimeout(r, 2000));
       }
+      if (cancelled) return;
+      await refreshUserCookie();
+      // Strip the `checkout` query param without navigating away from
+      // the current page (app-web URLs are page-scoped).
+      const url = new URL(window.location.href);
+      url.searchParams.delete("checkout");
+      window.history.replaceState({}, "", url.toString());
     }
-    void init();
-  }, [fetchBillingState, workspaceId]);
+    void settleCheckout();
+    return () => {
+      cancelled = true;
+    };
+  }, [billingKey, refresh, workspaceId]);
 
   /**
    * Open the Stripe Customer Portal for the current user. Used by all
@@ -374,7 +396,21 @@ export function BillingSection() {
 
       {/* ── Plan header card ───────────────────────────────── */}
       <div className="border-t border-border pt-6">
-        <div className="flex items-start gap-4">
+        {loading ? (
+          // Cold open only: the header card's geometry, never "No plan" for a
+          // plan that has not answered yet (N4).
+          <div aria-busy="true" data-testid="billing-skeleton" className="flex items-start gap-4">
+            <Skeleton className="size-12 shrink-0 rounded-xl" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-5 w-40 max-w-full" />
+              <Skeleton className="h-3.5 w-56 max-w-full" />
+              <Skeleton className="h-3.5 w-48 max-w-full" />
+            </div>
+          </div>
+        ) : (
+        // Wraps below ~400px so the plan action sits under the copy instead
+        // of squeezing it (report A row 19).
+        <div className="flex flex-wrap items-start gap-4">
           <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
             <config.Icon className="w-6 h-6 text-primary" />
           </div>
@@ -422,6 +458,7 @@ export function BillingSection() {
             </a>
           )}
         </div>
+        )}
       </div>
 
       {/* ── Upgrade teasers ────────────────────────────────── */}
@@ -561,7 +598,12 @@ export function BillingSection() {
         <h3 className="text-sm font-semibold mb-4">
           {t.settings.billing.invoicesTitle}
         </h3>
-        {isContactSales ? (
+        {loading ? (
+          <div aria-busy="true" className="space-y-3">
+            <Skeleton className="h-3.5 w-full" />
+            <Skeleton className="h-3.5 w-11/12" />
+          </div>
+        ) : isContactSales ? (
           <div className="text-xs text-muted-foreground italic">
             {t.settings.billing.invoicesContactSales}
           </div>
@@ -570,7 +612,9 @@ export function BillingSection() {
             {t.settings.billing.noInvoices}
           </div>
         ) : (
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-6 gap-y-3 text-sm items-baseline">
+          // Two columns on phones (Status + action wrap to a second line);
+          // the four-column grid from `sm` (report A row 19).
+          <div className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-3 text-sm items-baseline sm:grid-cols-[1fr_auto_auto_auto] sm:gap-x-6">
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               {t.settings.billing.colDate}
             </div>
@@ -583,7 +627,7 @@ export function BillingSection() {
             <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider text-right">
               {t.settings.billing.colActions}
             </div>
-            <div className="col-span-4 border-t border-border pt-3" />
+            <div className="col-span-2 border-t border-border pt-3 sm:col-span-4" />
             {invoices.map((inv) => (
               <InvoiceRow key={inv.id} invoice={inv} />
             ))}

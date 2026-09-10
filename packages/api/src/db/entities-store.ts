@@ -194,11 +194,9 @@ function toEntityListRow(row: EntityCompactRow): EntityListRow {
 
 // ── Raw SQL helpers ──────────────────────────────────────────────────
 
-export async function createEntity(params: EntityCreateParams): Promise<EntityRecord> {
+export async function createEntity(params: EntityCreateParams, transactionClient?: pg.PoolClient): Promise<EntityRecord> {
   assertAuthorshipPresent('createEntity', params.createdByUserId)
-  const result = await queryWithRLS<EntityRow>(
-    params.createdByUserId,
-    `INSERT INTO entities (
+  const sql = `INSERT INTO entities (
        kind, display_name, canonical_id, aliases, attributes, sensitivity,
        workspace_id, user_id, assistant_id,
        created_by_user_id, created_by_assistant_id, source_episode_id,
@@ -210,8 +208,8 @@ export async function createEntity(params: EntityCreateParams): Promise<EntityRe
        $10, $11, $12,
        $13, $14::text[], $15::uuid[], $16
      )
-     RETURNING ${FULL_SELECT}`,
-    [
+     RETURNING ${FULL_SELECT}`
+  const values = [
       params.kind,
       params.displayName,
       params.canonicalId ?? null,
@@ -228,8 +226,10 @@ export async function createEntity(params: EntityCreateParams): Promise<EntityRe
       params.compartments ?? [],
       params.projectIds ?? [],
       params.sourceSessionId ?? null,
-    ],
-  )
+    ]
+  const result = transactionClient
+    ? await transactionClient.query<EntityRow>(sql, values)
+    : await queryWithRLS<EntityRow>(params.createdByUserId, sql, values)
   return toEntity(result.rows[0])
 }
 
@@ -956,6 +956,7 @@ export async function addEntityAlias(
   actorUserId: string,
   entityId: string,
   alias: string,
+  access?: AccessContext,
 ): Promise<
   | { kind: 'ok'; entity: EntityRecord }
   | { kind: 'conflict'; conflictingEntityId: string }
@@ -966,13 +967,17 @@ export async function addEntityAlias(
     throw new Error('alias must be 1-200 characters after trim')
   }
 
-  // Look up the target entity (and its workspace) under RLS.
+  const targetGuard = access
+    ? buildAccessPredicate(access, { startIdx: 2 })
+    : { sql: '(user_id IS NULL OR user_id = $2)', params: [actorUserId] }
+  // Match the caller's projection as well as workspace membership.
   const target = await queryWithRLS<{ workspaceId: string; displayName: string }>(
     actorUserId,
     `SELECT workspace_id AS "workspaceId", display_name AS "displayName"
        FROM entities
-      WHERE id = $1 AND valid_to IS NULL`,
-    [entityId],
+      WHERE id = $1 AND valid_to IS NULL AND retracted_at IS NULL
+        AND ${targetGuard.sql}${access ? ` AND workspace_id = $${targetGuard.params.length + 2}` : ''}`,
+    [entityId, ...targetGuard.params, ...(access ? [access.workspaceId] : [])],
   )
   if (target.rows.length === 0) return { kind: 'not_found' }
   const { workspaceId, displayName } = target.rows[0]
@@ -980,31 +985,39 @@ export async function addEntityAlias(
   // Self-alias check — adding an entity's own display_name as alias is
   // a no-op (lookups already match display_name). Still allowed so
   // callers don't have to special-case; just don't store the redundancy.
-  if (displayName.toLowerCase() === normalized) {
+  if (displayName.trim().toLowerCase() === normalized) {
     const fresh = await queryWithRLS<EntityRow>(
       actorUserId,
-      `SELECT ${FULL_SELECT} FROM entities WHERE id = $1`,
-      [entityId],
+      `SELECT ${FULL_SELECT} FROM entities WHERE id = $1 AND valid_to IS NULL
+        AND retracted_at IS NULL AND ${targetGuard.sql}`,
+      [entityId, ...targetGuard.params],
     )
-    return { kind: 'ok', entity: toEntity(fresh.rows[0]) }
+    return fresh.rows[0] ? { kind: 'ok', entity: toEntity(fresh.rows[0]) } : { kind: 'not_found' }
   }
 
   // Conflict check — does another live entity in this workspace already
   // claim this alias (or have it as its display_name)? GIN-indexed.
+  const conflictGuard = access
+    ? buildAccessPredicate(access, { startIdx: 4 })
+    : { sql: '(user_id IS NULL OR user_id = $4)', params: [actorUserId] }
   const conflict = await queryWithRLS<{ id: string }>(
     actorUserId,
     `SELECT id FROM entities
       WHERE workspace_id = $1
         AND id <> $2
-        AND valid_to IS NULL
+        AND valid_to IS NULL AND retracted_at IS NULL
+        AND ${conflictGuard.sql}
         AND (lower(display_name) = $3 OR $3 = ANY(aliases))
       LIMIT 1`,
-    [workspaceId, entityId, normalized],
+    [workspaceId, entityId, normalized, ...conflictGuard.params],
   )
   if (conflict.rows.length > 0) {
     return { kind: 'conflict', conflictingEntityId: conflict.rows[0].id }
   }
 
+  const writeGuard = access
+    ? buildAccessPredicate(access, { startIdx: 3 })
+    : { sql: '(user_id IS NULL OR user_id = $3)', params: [actorUserId] }
   // Append + dedup in a single statement so concurrent writers can't
   // race a duplicate in.
   const updated = await queryWithRLS<EntityRow>(
@@ -1015,9 +1028,10 @@ export async function addEntityAlias(
                 FROM unnest(aliases || ARRAY[$2]::text[]) AS a
             ),
             updated_at = now()
-      WHERE id = $1 AND valid_to IS NULL
+      WHERE id = $1 AND valid_to IS NULL AND retracted_at IS NULL
+        AND ${writeGuard.sql}${access ? ` AND workspace_id = $${writeGuard.params.length + 3}` : ''}
       RETURNING ${FULL_SELECT}`,
-    [entityId, normalized],
+    [entityId, normalized, ...writeGuard.params, ...(access ? [access.workspaceId] : [])],
   )
   if (updated.rows.length === 0) return { kind: 'not_found' }
   return { kind: 'ok', entity: toEntity(updated.rows[0]) }
@@ -1027,17 +1041,22 @@ export async function removeEntityAlias(
   actorUserId: string,
   entityId: string,
   alias: string,
+  access?: AccessContext,
 ): Promise<EntityRecord | null> {
   const normalized = alias.trim().toLowerCase()
   if (normalized.length === 0) return null
+  const writeGuard = access
+    ? buildAccessPredicate(access, { startIdx: 3 })
+    : { sql: '(user_id IS NULL OR user_id = $3)', params: [actorUserId] }
   const result = await queryWithRLS<EntityRow>(
     actorUserId,
     `UPDATE entities
         SET aliases = array_remove(aliases, $2),
             updated_at = now()
-      WHERE id = $1 AND valid_to IS NULL
+      WHERE id = $1 AND valid_to IS NULL AND retracted_at IS NULL
+        AND ${writeGuard.sql}${access ? ` AND workspace_id = $${writeGuard.params.length + 3}` : ''}
       RETURNING ${FULL_SELECT}`,
-    [entityId, normalized],
+    [entityId, normalized, ...writeGuard.params, ...(access ? [access.workspaceId] : [])],
   )
   if (result.rows.length === 0) return null
   return toEntity(result.rows[0])
@@ -1989,10 +2008,10 @@ export function createDbEntitiesStore(deps: { entityLinks: EntityLinksStore }): 
       findCrossKindDuplicateClustersSystem(actorUserId, workspaceId, opts ?? {}, access),
     listLiveEntitiesSystem: (actorUserId, workspaceId, opts, access) =>
       listLiveEntitiesForWorkspaceSystem(actorUserId, workspaceId, opts ?? {}, access),
-    addAlias: (actorUserId, entityId, alias) =>
-      addEntityAlias(actorUserId, entityId, alias),
-    removeAlias: (actorUserId, entityId, alias) =>
-      removeEntityAlias(actorUserId, entityId, alias),
+    addAlias: (actorUserId, entityId, alias, access) =>
+      addEntityAlias(actorUserId, entityId, alias, access),
+    removeAlias: (actorUserId, entityId, alias, access) =>
+      removeEntityAlias(actorUserId, entityId, alias, access),
     update: (actorUserId, id, fields) => updateEntity(actorUserId, id, fields),
     supersedeAttributes: (actorUserId, id, patch) =>
       supersedeEntity(actorUserId, id, patch),
