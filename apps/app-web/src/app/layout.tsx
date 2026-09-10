@@ -9,8 +9,8 @@ import { KindPickerDialogProvider } from "@/components/ui/kind-picker-dialog";
 import { RouteProgress } from "@/components/route-progress";
 import { MACOS_TRAFFIC_LIGHT_CLEARANCE_PX } from "@/lib/desktop-titlebar";
 import {
-  resolveRuntimePublicConfig,
   runtimePublicConfigScript,
+  serverRuntimePublicConfig,
 } from "@/lib/runtime-public-config";
 import "./globals.css";
 
@@ -109,7 +109,7 @@ export default async function RootLayout({
 }>) {
   const { locale, dict } = await getServerDictionary();
   const publicConfigScript = runtimePublicConfigScript(
-    resolveRuntimePublicConfig(process.env),
+    serverRuntimePublicConfig(),
   );
   return (
     <html

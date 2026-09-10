@@ -1,4 +1,4 @@
-import { resolveRuntimePublicConfig } from "@/lib/runtime-public-config";
+import { serverRuntimePublicConfig } from "@/lib/runtime-public-config";
 // Next.js Route Handler — GET /api/desktop-config
 //
 // Deployment self-description for the desktop shell. The Electron app lets a
@@ -29,7 +29,7 @@ import { resolveRuntimePublicConfig } from "@/lib/runtime-public-config";
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const config = resolveRuntimePublicConfig(process.env);
+  const config = serverRuntimePublicConfig();
   return NextResponse.json(
     {
       ...config,
