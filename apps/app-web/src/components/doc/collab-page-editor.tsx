@@ -63,6 +63,9 @@ import type {
 import { colorForUserId } from "@/lib/collab/cursor-color";
 import { useT } from "@/lib/i18n/client";
 import { useWorkspaceContext } from "@/lib/workspace-context";
+import { DrawingLibraryContext } from './block-drawing';
+import { libraryKey } from './drawing-library';
+import { publicRuntimeConfig } from '@/lib/runtime-public-config';
 import { fetchMembers, fetchPages } from "@/lib/api/mentions";
 import {
   createDraft,
@@ -200,6 +203,7 @@ export function CollabPageEditor({
   onTemplateSeeded,
   onContentChange,
 }: CollabPageEditorProps) {
+  const workspace = useWorkspaceContext();
   const { doc, provider, synced, status } = collab;
   if (!doc || !provider) {
     return (
@@ -210,6 +214,11 @@ export function CollabPageEditor({
     );
   }
   return (
+    <DrawingLibraryContext.Provider value={viewId ? {
+      key: libraryKey(publicRuntimeConfig().apiUrl, workspace.me.id, workspace.workspaceId),
+      account: workspace.me.id,
+      path: `/w/${workspace.workspaceId}/p/${viewId}`,
+    } : null}>
     <CollabEditorInner
       doc={doc}
       provider={provider}
@@ -228,6 +237,7 @@ export function CollabPageEditor({
       onTemplateSeeded={onTemplateSeeded}
       onContentChange={onContentChange}
     />
+    </DrawingLibraryContext.Provider>
   );
 }
 

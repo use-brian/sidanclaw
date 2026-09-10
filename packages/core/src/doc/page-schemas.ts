@@ -194,6 +194,7 @@ export const outlineEntrySchema: z.ZodType<OutlineEntry> = z.object({
     'data',
     'chart',
     'diagram',
+    'drawing',
     'callout',
     'code',
     'quote',

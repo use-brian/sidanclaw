@@ -13,7 +13,7 @@ describe("[COMP:app-web/association] Native member wire contracts",()=>{
   ] as const)("reads %s using its canonical envelope and cursor",async(resource,path,key)=>{
     api.fetch.mockResolvedValue(response({[key]:[{id:"one"}],nextCursor:"next/value"}));
     expect(await listAssociationPage("workspace",resource,{cursor:"cursor+1"})).toEqual({items:[{id:"one"}],nextCursor:"next/value"});
-    const url=new URL(api.fetch.mock.calls[0][0]);expect(url.pathname).toBe(`/api/crm/workspace/${path}`);expect(url.searchParams.get("cursor")).toBe("cursor+1");expect(url.searchParams.get("limit")).toBe("50");
+    const url=new URL(api.fetch.mock.calls[0][0], "https://app.example");expect(url.pathname).toBe(`/api/crm/workspace/${path}`);expect(url.searchParams.get("cursor")).toBe("cursor+1");expect(url.searchParams.get("limit")).toBe("50");
   });
   it("does not treat missing page metadata, an invalid envelope or permission denial as an empty result",async()=>{
     for(const value of [{events:[]},{events:null,nextCursor:null},{events:[],nextCursor:42}]){
@@ -24,7 +24,7 @@ describe("[COMP:app-web/association] Native member wire contracts",()=>{
   it("uses event-scoped paths and only allows the unpaged ticket contract to omit a cursor",async()=>{
     api.fetch.mockResolvedValue(response({tickets:[{id:"ticket"}]}));await listAssociationPage("w","tickets",{eventId:"event/id"});
     expect(api.fetch.mock.calls[0][0]).toContain("/association/events/event%2Fid/tickets?");
-    expect(new URL(api.fetch.mock.calls[0][0]).searchParams.has("eventId")).toBe(false);
+    expect(new URL(api.fetch.mock.calls[0][0], "https://app.example").searchParams.has("eventId")).toBe(false);
     api.fetch.mockResolvedValue(response({registrations:[],nextCursor:null}));await listAssociationPage("w","registrations",{eventId:"event",cursor:"next"});
     expect(api.fetch.mock.calls[1][0]).toContain("/events/event/registrations?limit=50&cursor=next");
   });
@@ -43,14 +43,14 @@ describe("[COMP:app-web/association] Native member wire contracts",()=>{
     api.fetch.mockImplementation(async()=>response({}));
     // The shape is independently checked by canonical server schemas; this checks routing.
     await saveAssociationPlan("w",{} as never);await saveAssociationEvent("w",{} as never);await saveAssociationTicket("w","event",{} as never);
-    expect(api.fetch.mock.calls.map(c=>new URL(c[0]).pathname)).toEqual(["/api/crm/w/operations/entitlement-plans","/api/crm/w/operations/events","/api/crm/w/association/events/event/tickets"]);
+    expect(api.fetch.mock.calls.map(c=>new URL(c[0], "https://app.example").pathname)).toEqual(["/api/crm/w/operations/entitlement-plans","/api/crm/w/operations/events","/api/crm/w/association/events/event/tickets"]);
   });
 });
 describe("[COMP:app-web/association] Complete consent-filtered attendee download",()=>{
   it("traverses beyond 100 attendees and bounds parallel consent checks",async()=>{
     let inFlight=0,peak=0;
     api.sendability.mockImplementation(async()=>{peak=Math.max(peak,++inFlight);await Promise.resolve();--inFlight;return{verdict:"allowed"};});
-    api.fetch.mockImplementation(async(raw)=>{const cursor=new URL(raw).searchParams.get("cursor"),start=cursor?Number(cursor):0;return response({registrations:Array.from({length:start===100?3:50},(_,i)=>registration(String(start+i))),nextCursor:start<100?String(start+50):null});});
+    api.fetch.mockImplementation(async(raw)=>{const cursor=new URL(raw, "https://app.example").searchParams.get("cursor"),start=cursor?Number(cursor):0;return response({registrations:Array.from({length:start===100?3:50},(_,i)=>registration(String(start+i))),nextCursor:start<100?String(start+50):null});});
     const csv=await exportAssociationAttendees("w","event","updates");
     expect(csv.trim().split("\r\n")).toHaveLength(104);expect(csv).toContain('"102"');expect(api.sendability).toHaveBeenCalledTimes(103);expect(peak).toBeLessThanOrEqual(8);
     expect(api.sendability).toHaveBeenCalledWith("w","contact-102","email","updates");

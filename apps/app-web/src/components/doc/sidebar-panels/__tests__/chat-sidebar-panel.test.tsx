@@ -122,6 +122,7 @@ function buttonNamed(name: string): HTMLButtonElement {
 }
 
 beforeEach(() => {
+  resetSurfaceCache();
   vi.clearAllMocks();
   resetSurfaceCache();
   navigation.search = "v=workspace&s=room-1";

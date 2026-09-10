@@ -22,6 +22,7 @@
     "@use-brian/office-model": "workspace:*",
     "@use-brian/office-renderer": "workspace:*",
     "@use-brian/shared": "workspace:*",
+    "crc-32": "^1.2.2",
     "docx": "^9.7.1",
     "e2b": "^2.32.0",
     "exceljs": "^4.4.0",

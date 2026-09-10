@@ -31,6 +31,7 @@
 
 import * as Y from 'yjs'
 import type { Block, Page } from '@use-brian/core/dist/views/blocks.js'
+import { blockSchema } from '@use-brian/core/dist/views/blocks.js'
 import { FRAGMENT_FIELD, ID_NODE_TYPES, META_MAP } from './schema.js'
 import { pageToYDoc, yDocToSnapshot } from './encode.js'
 
@@ -91,6 +92,7 @@ function genId(): string {
  *  `clone()` must be called on the *integrated* temp-doc node — a detached
  *  clone can't be read into further. */
 function buildBlockNodes(block: Block): Y.XmlElement[] {
+  if (block.kind === 'drawing') block = blockSchema.parse(block)
   const tmp = pageToYDoc({ blocks: [block] } as Page, '')
   const frag = tmp.getXmlFragment(FRAGMENT_FIELD)
   const clones = frag
@@ -517,6 +519,7 @@ function applyOne(
         return
       }
       const merged = { ...current, ...op.patch, id } as Block
+      if (merged.kind === 'drawing' && 'scene' in op.patch) delete merged.preview
       if (loc.kind === 'top') {
         const rebuilt = buildBlockNodes(merged)
         if (rebuilt.length === 0) {

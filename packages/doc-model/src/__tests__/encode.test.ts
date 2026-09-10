@@ -1,10 +1,23 @@
 import { describe, it, expect } from 'vitest'
 import * as Y from 'yjs'
-import { LEGACY_SEED_CLIENT_ID, pageToYDocUpdate, snapshotFromUpdate } from '../encode.js'
+import { LEGACY_SEED_CLIENT_ID, pageToYDoc, pageToYDocUpdate, snapshotFromUpdate, yDocToSnapshot } from '../encode.js'
 import { canonicalizePage } from '../block-mapping.js'
 import { ALL_KINDS_PAGE } from './fixtures.js'
 
 describe('[COMP:doc-model/encode] Page ↔ Y.Doc round-trip', () => {
+  it('returns the consumer Y.Doc constructor and exchanges updates with it', () => {
+    const encoded = pageToYDoc(ALL_KINDS_PAGE, 'Shared document')
+    const consumer = new Y.Doc()
+    try {
+      expect(encoded).toBeInstanceOf(Y.Doc)
+      Y.applyUpdate(consumer, Y.encodeStateAsUpdate(encoded))
+      expect(yDocToSnapshot(consumer)).toEqual(yDocToSnapshot(encoded))
+    } finally {
+      encoded.destroy()
+      consumer.destroy()
+    }
+  })
+
   it('encodes a page to a Y.Doc update and decodes the same snapshot', () => {
     const update = pageToYDocUpdate(ALL_KINDS_PAGE, 'My page')
     expect(update).toBeInstanceOf(Uint8Array)

@@ -1,0 +1,106 @@
+const escapeHTMLAttribute = (str) => {
+  const map = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+  };
+
+  if (typeof str !== "string") return "";
+
+  return str.replace(/[&<>"]/g, (char) => map[char]);
+};
+
+const populateLibraryList = (filterQuery = "") => {
+  const items = [
+    ...document.getElementById("template").parentNode.children,
+  ].filter((x) => x.id !== "template");
+  items.forEach((x) => x.remove());
+
+  filterQuery = filterQuery.trim().toLowerCase();
+  const hasMatch = (haystackStr) =>
+    haystackStr.toLowerCase().includes(filterQuery);
+  let libraries = libraries_;
+  if (filterQuery) {
+    libraries = libraries.filter((library) =>
+      searchKeys.some((key) => {
+        const haystack = library[key] || "";
+        if (Array.isArray(haystack)) {
+          return haystack.some((x) => hasMatch(x));
+        } else {
+          return hasMatch(haystack);
+        }
+      }),
+    );
+  }
+  const template = document.getElementById("template");
+  const searchParams = new URLSearchParams(location.search);
+  const referrer = escapeHTMLAttribute(
+    searchParams.get("referrer") || "https://excalidraw.com",
+  );
+  const appName = getAppName(referrer);
+  const target = decodeURIComponent(
+    escapeHTMLAttribute(searchParams.get("target")) || "_blank",
+  );
+  const useHash = searchParams.get("useHash");
+  const csrfToken = escapeHTMLAttribute(searchParams.get("token"));
+  for (let library of libraries) {
+    const div = document.createElement("div");
+    div.classList.add("library");
+    div.setAttribute("id", library.id);
+    let inner = template.innerHTML;
+    const source = `libraries/${library.source}`;
+    let authorsInnerHTML = "";
+    inner = inner.replace(/\{libraryId\}/g, library.id);
+    inner = inner.replace(/\{name\}/g, library.name);
+
+    const truncate = (str) => {
+      if (str.length > 300) {
+        str = str.slice(0, 300);
+        return str.split(", ").slice(0, -1).join(", ") + "...";
+      }
+      return str;
+    };
+
+    let description = library.description || "";
+    if (library.itemNames) {
+      description += `<br/><br/><b>Items: </b> <span className="itemNames">${truncate(
+        library.itemNames.join(", "),
+      )}</span>`;
+    }
+    inner = inner.replace(/\{description\}/g, description);
+
+    inner = inner.replace(/\{source\}/g, source);
+    for (let author of library.authors) {
+      authorsInnerHTML += `<a href="${author.url}" target="_blank">@${author.name}</a> `;
+    }
+    inner = inner.replace(/\{authors\}/g, authorsInnerHTML);
+    inner = inner.replace(
+      /\{preview\}/g,
+      `libraries/${library.preview}?v=${library.updated || 0}`,
+    );
+    inner = inner.replace(/\{created\}/g, getDate(library.created));
+    if (library.created !== library.updated) {
+      inner = inner.replace(/\{updated\}/g, getDate(library.updated));
+    } else {
+      inner = inner.replace('<p class="updated">Updated: {updated}</p>', "");
+    }
+    inner = inner.replace(/\{appName\}/g, appName);
+    const libraryUrl = encodeURIComponent(
+      `${escapeHTMLAttribute(origin)}/${source}`,
+    );
+    inner = inner.replace(
+      "{addToLib}",
+      `${referrer}${useHash ? "#" : "?"}addLibrary=${libraryUrl}${
+        csrfToken ? `&token=${csrfToken}` : ""
+      }`,
+    );
+    inner = inner.replace("{target}", target);
+    inner = inner.replace(/\{total\}/g, library.downloads.total);
+    inner = inner.replace(/\{week\}/g, library.downloads.week);
+    div.innerHTML = inner;
+    div.setAttribute("data-version", library.version || "1");
+    template.after(div);
+  }
+  initImageLazyLoading();
+};

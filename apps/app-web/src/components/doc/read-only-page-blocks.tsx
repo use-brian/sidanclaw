@@ -25,6 +25,8 @@ import { FileText } from "lucide-react";
 import { renderWidget } from "@use-brian/views-renderer";
 import type { A2UIWidget, ViewPayload } from "@use-brian/views-renderer";
 import { scanStamps } from "@use-brian/shared";
+import { drawingBlockSchema } from '@use-brian/shared/drawing';
+import { BlockDrawing } from './block-drawing';
 import type { PublicBlock, PublicComment } from "@/lib/api/public-share";
 import { publicMediaUrlFor, type PublicSource } from "@/lib/api/public-share";
 import { useRecordingPlayer } from "@/lib/recordings/recording-player-context";
@@ -733,6 +735,10 @@ function BlockView({
           <span className="min-w-0 truncate">{title}</span>
         </a>
       );
+    }
+    case "drawing": {
+      const drawing = drawingBlockSchema.safeParse(block);
+      return drawing.success ? <div {...root}><BlockDrawing block={drawing.data} /></div> : null;
     }
     case "data":
     case "chart":

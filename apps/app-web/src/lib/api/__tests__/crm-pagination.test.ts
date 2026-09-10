@@ -29,8 +29,8 @@ describe("[COMP:crm/operations-pagination] Operations SDK follows every page", (
     fetch.mockResolvedValueOnce(response({ [key]: [{ id: 100 }], nextCursor: null }));
     const result = await list();
     expect(result).toHaveLength(101);
-    const first = new URL(String(fetch.mock.calls[0][0]));
-    const second = new URL(String(fetch.mock.calls[1][0]));
+    const first = new URL(String(fetch.mock.calls[0][0]), "https://app.example");
+    const second = new URL(String(fetch.mock.calls[1][0]), "https://app.example");
     expect(second.pathname).toBe(first.pathname);
     expect(second.searchParams.get("cursor")).toBe("fixture_cursor");
     second.searchParams.delete("cursor");
@@ -41,11 +41,11 @@ describe("[COMP:crm/operations-pagination] Operations SDK follows every page", (
     fetch.mockResolvedValueOnce(response({ segments: [{ id: "2" }], catalog: [], nextCursor: "two" }));
     fetch.mockResolvedValueOnce(response({ segments: [{ id: "3" }], catalog: [], nextCursor: null }));
     expect(await listCrmSegments("fixture", "person")).toEqual({ segments: [{ id: "1" }, { id: "2" }, { id: "3" }], catalog: [{ field: "name" }] });
-    expect(new URL(String(fetch.mock.calls[2][0])).searchParams.getAll("cursor")).toEqual(["two"]);
+    expect(new URL(String(fetch.mock.calls[2][0]), "https://app.example").searchParams.getAll("cursor")).toEqual(["two"]);
     fetch.mockResolvedValueOnce(response({ rows: [{ id: "1" }], count: 2, snapshotIds: ["1"], snapshotNextCursor: "ids" }));
     fetch.mockResolvedValueOnce(response({ rows: [{ id: "1" }], count: 2, snapshotIds: ["2"], snapshotNextCursor: null }));
     expect(await previewCrmSegment("fixture", "segment")).toEqual({ rows: [{ id: "1" }], count: 2, snapshotIds: ["1", "2"] });
-    expect(new URL(String(fetch.mock.calls[4][0])).searchParams.get("snapshotCursor")).toBe("ids");
+    expect(new URL(String(fetch.mock.calls[4][0]), "https://app.example").searchParams.get("snapshotCursor")).toBe("ids");
   });
   it("rejects a partial snapshot when a later segment page fails", async () => {
     fetch.mockResolvedValueOnce(response({ rows: [], count: 2, snapshotIds: ["1"], snapshotNextCursor: "ids" }));
