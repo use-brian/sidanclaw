@@ -6,6 +6,34 @@ empty embed offers an explicit editor button. Save commits one complete scene;
 Cancel discards the local draft without changing the block. Existing drawings
 show a scene-derived canvas preview and can be reopened for editing.
 
+The host page's inline formatting bubble and touch Comment chip stay unmounted
+while a drawing draft is open, including lazy loading, nested library browsing,
+and failed saves. Closing, successful Save, scope changes, or unmounting releases
+this editor-scoped suppression; ordinary text selection formatting works again.
+Single-node selections (including the drawing frame before opening) do not show
+inline formatting. Drawing dialog keyboard and wheel events stay inside the
+modal. Pointer and mouse down/move/up/cancel events and ordinary click/double-click
+events must not be stopped at the modal boundary: Excalidraw 0.18.0 starts gestures
+on the canvas but finishes them in bubbling native window pointerup listeners.
+Blocking release leaves cursorButton down, the marquee live, and gesture move
+listeners installed. Host toolbar suppression belongs to DrawingToolbarProvider,
+not event isolation; narrow library import/browse interception remains intentional.
+The browser regression must exercise a single left click followed by no-button
+movement, marquee and shape drags (including release outside the canvas), and
+verify released SDK state and stable geometry/selection after further movement.
+This contract is shared by desktop and mobile; it does not change page content,
+selection, edit permission, or drawing Save/Cancel semantics.
+
+Run `node scripts/drawing-pointer-browser.mjs` from `apps/app-web` with Playwright
+and Chromium available (or set `PLAYWRIGHT_MODULE` and `CHROMIUM_EXECUTABLE` to
+external installs). It mounts the actual modal/SDK and a real host BubbleMenu
+under the scoped provider in StrictMode, without auth or catalog network calls.
+`DRAWING_BLOCK_RELEASE=1` is a negative control: reinstating the release blocker
+must fail the first single-click assertion with cursorButton still down. The
+jsdom test checks event delivery to window and toolbar lifecycle only; it is not
+evidence of real canvas gesture completion. Browser coverage is desktop mouse;
+touch/pen cancellation and native window focus loss are not simulated.
+
 Drawings have an optional `title`, trimmed and limited to 200 characters.
 Missing or blank titles render the localized Drawing fallback. The existing
 editor's top-left title is the only name input, with a localized accessible label
@@ -27,6 +55,52 @@ state and does not change existing text or its fonts. Save still persists only
 the canonical durable app-state subset, not the current text-tool font setting.
 
 ## Libraries
+
+### Default Brian Assets
+
+The bundled library contains 38 assets from https://usebrian.ai/brand/interns:
+the bordered base logo, all 15 V1 accessories, and the 22 distinct V1 intern
+discipline/accessory combinations across the four roles. Source filename stems
+are retained as names and deterministic IDs; discipline, accessory, role and
+source metadata live on each grouped asset's background rectangle.
+`drawing-default-library.ts` derives sharp, solid Excalidraw geometry from the
+pixel data in the platform's `apps/web/src/lib/brand-mascot.ts`. Geometry matches
+the 512px downloads, scaled to 160px, including navy tiles, eyes and discipline
+pins. Bordered cells use a 1-unit inset at that native size (2-unit shared grid
+edges), matching the marketing renderer's output-size border rule rather than
+scaling its 1px inset down to 0.3125 units. The old subpixel gaps render unevenly
+through Excalidraw's per-element canvas caches at fractional sizes; SVG library
+thumbnails do not exercise that path. The borderless logo is not included.
+No marketing runtime dependency or network fetch is needed.
+The ten V2 poses use curves, gradients and glow rather than pixel grids and are
+deliberately not approximated. This does not add raster library support.
+
+Initialization merges defaults with saved items by stable ID/content, preserving
+existing entries. Items and a defaults-seeded marker are written atomically in
+the existing API/account/workspace storage key. Legacy saved arrays remain
+readable. Ordinary reads and editor updates never seed; after successful seeding,
+deleting any or all defaults survives reopening. Explicit reimport is supported.
+Seed version 4 removes only exact unchanged built-in borderless entries from
+previously seeded V1, V2 or V3 libraries during initialization. Legacy geometry
+is retained only to recognize those persisted seeds. Edited entries and copies
+with different IDs remain; stale editor writes cannot restore an unchanged removed
+seed. Present, exactly unedited older bordered items are still repaired in place
+with the same IDs and order. Name, metadata, geometry,
+style, element order or other content changes exclude an item from repair; no
+missing item is recreated. The version and items are written atomically and
+ordinary preference writes retain the version. Existing drawing scenes are user
+content and are never migrated; replace an already-inserted old logo explicitly
+from the repaired library if needed.
+If adding defaults would exceed the byte, item or element limits, initialization
+returns the valid existing library without writing storage or marking it seeded.
+Existing items remain available in the editor; a later initialization retries
+seeding after capacity is freed. Invalid saved data and storage/quota failures
+remain errors and never overwrite saved items. Regression coverage lives in the
+existing `[COMP:app-web/drawing-library]` unit and real-SDK suites.
+The network-free `node apps/app-web/scripts/drawing-default-library-browser.mjs`
+regression samples all 44 shared bordered base-logo edges on the mounted SDK's actual
+cached canvas at 160, 173, 240 and 320px, at device pixel ratios 1 and 2. It uses
+the same external Playwright/Chromium options as the catalog browser test below.
 
 ### In-App Catalog Contract
 
@@ -146,7 +220,8 @@ Official v1 arrays and v2 item records are accepted, including legacy nullable
 status and creation times receive the SDK's import defaults. Imports must contain items, and SDK
 restoration must retain every validated item and element before persistence;
 empty or unsupported data gets a specific error, never an installed notice.
-Initial preferences use the SDK's queued imperative merge, not a second copy in
+Initial preferences use the SDK's queued imperative replacement after Brian's
+default/saved-library merge, not a second copy in
 scene `initialData`. Only a correlated iframe callback grants library import.
 The real-SDK StrictMode regression mounts the editor, sends an iframe callback,
 checks rendered library tiles, then closes and reopens to verify persistence.

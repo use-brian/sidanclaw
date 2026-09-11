@@ -46,16 +46,27 @@
  * [COMP:app-web/floating-toolbar]
  */
 
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { BubbleMenu } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import { isNodeRangeSelection } from "@tiptap/extension-node-range";
 import { CellSelection } from "@tiptap/pm/tables";
+import { NodeSelection } from "@tiptap/pm/state";
 import { Bold, Italic, Code, Link as LinkIcon, MessageSquarePlus } from "lucide-react";
 import { useT } from "@/lib/i18n/client";
 import { isPhoneViewport, useCoarsePointer } from "@/lib/viewport";
 import { clampPopupRect, measureViewport, type PopupAnchor } from "@/lib/popup-clamp";
 import { TurnIntoMenu } from "./turn-into-menu";
+
+export const DrawingToolbarContext = createContext<{
+  active: number;
+  setActive: React.Dispatch<React.SetStateAction<number>>;
+} | null>(null);
+
+export function DrawingToolbarProvider({ children }: { children: ReactNode }) {
+  const [active, setActive] = useState(0);
+  return <DrawingToolbarContext.Provider value={{ active, setActive }}>{children}</DrawingToolbarContext.Provider>;
+}
 
 type Props = {
   editor: Editor | null;
@@ -85,6 +96,8 @@ type Props = {
  *  - **table-axis range** (`CellSelection`) → hide: a row/column grip owns that
  *    structural selection and its menu. Inline text commands are not valid for
  *    the axis as a whole and otherwise overlap the table action menu.
+ *  - **single node** (`NodeSelection`) → hide: a drawing/embed frame is not
+ *    an inline text range, even though its selection is non-empty.
  *  - otherwise → show
  */
 export function shouldShowToolbar({
@@ -93,17 +106,20 @@ export function shouldShowToolbar({
   isInCodeBlock,
   isNodeRange,
   isCellSelection,
+  isNodeSelection,
 }: {
   from: number;
   to: number;
   isInCodeBlock: boolean;
   isNodeRange?: boolean;
   isCellSelection?: boolean;
+  isNodeSelection?: boolean;
 }): boolean {
   if (from === to) return false;
   if (isInCodeBlock) return false;
   if (isNodeRange) return false;
   if (isCellSelection) return false;
+  if (isNodeSelection) return false;
   return true;
 }
 
@@ -251,6 +267,7 @@ export function selectionChipAnchor(
     isInCodeBlock: ed.isActive("codeBlock"),
     isNodeRange: isNodeRangeSelection(ed.state.selection),
     isCellSelection: ed.state.selection instanceof CellSelection,
+    isNodeSelection: ed.state.selection instanceof NodeSelection,
   });
   if (!show) return null;
   const start = ed.view.coordsAtPos(Math.min(from, to));
@@ -342,7 +359,10 @@ export function SelectionCommentChip({
 }
 
 export function FloatingToolbar({ editor, className, onComment }: Props) {
-  if (!editor) return null;
+  const drawing = useContext(DrawingToolbarContext);
+  // Unmount, rather than only changing shouldShow: tippy can already be visible,
+  // and the touch chip and link shortcut have independent document listeners.
+  if (!editor || drawing?.active) return null;
 
   // The `display:contents` host is load-bearing — see the module note's
   // "DOM-desync guard". It contributes no box but keeps the tippy-relocated
@@ -360,6 +380,7 @@ export function FloatingToolbar({ editor, className, onComment }: Props) {
             isInCodeBlock: ed.isActive("codeBlock"),
             isNodeRange: isNodeRangeSelection(ed.state.selection),
             isCellSelection: ed.state.selection instanceof CellSelection,
+            isNodeSelection: ed.state.selection instanceof NodeSelection,
           })
         }
         className={[

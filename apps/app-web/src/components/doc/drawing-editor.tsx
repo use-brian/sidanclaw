@@ -11,7 +11,7 @@ import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
 import { loadDrawingRuntime } from './drawing-runtime';
 import { desktopBridge } from '@/lib/desktop-auth-source';
-import { LIBRARY_BYTES, mergeLibraries, parseLibrary, persistLibrary, readLibrary, validateLibraryItems, isLocalLibraryOrigin,
+import { LIBRARY_BYTES, mergeLibraries, parseLibrary, persistLibrary, initializeLibrary, validateLibraryItems, isLocalLibraryOrigin,
   type LibraryTarget } from './drawing-library';
 import { DrawingLibraryCatalog } from './drawing-library-catalog';
 import '@excalidraw/excalidraw/index.css';
@@ -50,11 +50,6 @@ export default function DrawingEditor({ scene, title, preview: savedPreview, edi
   const initialScene = useRef<string | null>(null);
   useEffect(() => {
     let active = true;
-    if (libraryTarget && editable) {
-      try {
-        library.current = readLibrary(libraryTarget.key);
-      } catch { setError(t.libraryStorageFailed); }
-    }
     loadDrawingRuntime().then(value => { if (active) setRuntime(value); })
       .catch(() => { if (active) setError(t.drawingFailed); });
     return () => { active = false; };
@@ -63,8 +58,11 @@ export default function DrawingEditor({ scene, title, preview: savedPreview, edi
   useEffect(() => {
     if (!api || !libraryTarget || !editable) return;
     let active = true;
+    setLibraryReady(false);
+    try { library.current = initializeLibrary(libraryTarget.key); }
+    catch { setError(t.libraryStorageFailed); return; }
     libraryWriting.current = true;
-    void api.updateLibrary({ libraryItems: library.current, merge: true }).then(() => {
+    void api.updateLibrary({ libraryItems: library.current, merge: false }).then(() => {
       if (active) { libraryWriting.current = false; setLibraryReady(true); }
     }).catch(() => { if (active) setError(t.libraryFailed); });
     return () => { active = false; };
@@ -180,11 +178,12 @@ export default function DrawingEditor({ scene, title, preview: savedPreview, edi
   return <Dialog.Root open onOpenChange={(open) => { if (!open) onCancel(); }}>
     <Dialog.Portal>
       <Dialog.Backdrop className="fixed inset-0 z-50 bg-background/80" />
+      {/* Excalidraw finishes gestures in native window pointerup listeners.
+          Keep pointer/mouse events bubbling; DrawingToolbarProvider hides host UI. */}
       <Dialog.Popup
         className="fixed inset-0 z-50 flex flex-col bg-background text-foreground sm:inset-4 sm:rounded-xl sm:border sm:border-border"
         onKeyDown={event => event.stopPropagation()}
         onKeyUp={event => event.stopPropagation()}
-        onPointerDown={event => event.stopPropagation()}
         onWheel={event => event.stopPropagation()}
       >
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-3">

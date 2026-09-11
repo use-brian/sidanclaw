@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, lazy, Suspense, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types';
 import type { BinaryFiles } from '@excalidraw/excalidraw/types';
 import { drawingSceneSchema, type DrawingBlock, type DrawingScene, type DrawingPreview } from '@use-brian/shared/drawing';
@@ -8,6 +8,7 @@ import { useT } from '@/lib/i18n/client';
 import { useTheme } from '@/lib/theme';
 import { loadDrawingRuntime } from './drawing-runtime';
 import type { LibraryTarget } from './drawing-library';
+import { DrawingToolbarContext } from './floating-toolbar';
 
 export const DrawingLibraryContext = createContext<Omit<LibraryTarget, 'block'> | null>(null);
 
@@ -24,6 +25,13 @@ export function BlockDrawing({ block, editable = false, onSave }: {
   const target = libraryScope ? { ...libraryScope, block: block.id } : undefined;
   const canvasHost = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<DrawingBlock | null>(null);
+  const setDrawingActive = useContext(DrawingToolbarContext)?.setActive;
+  const drawingOpen = draft !== null;
+  useLayoutEffect(() => {
+    if (!drawingOpen || !setDrawingActive) return;
+    setDrawingActive(count => count + 1);
+    return () => setDrawingActive(count => count - 1);
+  }, [drawingOpen, setDrawingActive]);
   const [failed, setFailed] = useState(false);
   const scopeIdentity = `${libraryScope?.key}:${libraryScope?.path}:${block.id}`;
   const previousScope = useRef(scopeIdentity);

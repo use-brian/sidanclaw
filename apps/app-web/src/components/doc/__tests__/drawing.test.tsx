@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, useEffect, useState } from 'react';
+import { act, StrictMode, useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Editor, Extension } from '@tiptap/core';
 import { history, undo } from '@tiptap/pm/history';
@@ -8,7 +8,8 @@ import { docExtensions } from '@use-brian/doc-model';
 import type { DrawingBlock } from '@use-brian/shared/drawing';
 import { I18nProvider } from '@/lib/i18n/client';
 import { en } from '@/lib/i18n/dictionaries/en';
-import { BlockDrawing } from '../block-drawing';
+import { BlockDrawing, DrawingLibraryContext } from '../block-drawing';
+import { DrawingToolbarProvider, FloatingToolbar } from '../floating-toolbar';
 import { saveDrawing } from '../drawing-transaction';
 import { executeSlashItem } from '../slash-execute';
 import { SLASH_MENU_ITEMS, filterSlashMenuItems } from '../slash-menu';
@@ -21,6 +22,9 @@ const exporting = vi.hoisted(() => ({ wait: null as Promise<void> | null, invali
 const captureInitialData = vi.hoisted(() => vi.fn());
 
 vi.mock('@/lib/theme', () => ({ useTheme: () => ({ resolved: 'light' }) }));
+vi.mock('@/lib/viewport', async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/viewport')>(), useCoarsePointer: () => true,
+}));
 // Mock only the canvas engine. The real dialog, Save/Cancel, validation, and
 // lazy boundary run in the DOM; persistence uses an actual ProseMirror editor.
 vi.mock('../drawing-runtime', () => ({ loadDrawingRuntime: async () => ({
@@ -32,7 +36,7 @@ vi.mock('../drawing-runtime', () => ({ loadDrawingRuntime: async () => ({
     const [appState] = useState(initialData.appState);
     useEffect(() => { onChange(elements, appState, files); }, [elements, appState, files, onChange]);
     useEffect(() => { excalidrawAPI({ getSceneElements: () => elements, getFiles: () => files,
-      getAppState: () => appState }); }, [elements, excalidrawAPI, files, appState]);
+      getAppState: () => appState, updateLibrary: async () => [] }); }, [elements, excalidrawAPI, files, appState]);
     return <>
       <button onClick={() => setElements([{ id: 'shape', type: 'rectangle', x: 0, y: 0, width: 100, height: 80 }])}>engine draw {elements.length}</button>
       <button onClick={() => setElements([{ id: 'image', type: 'image', x: 0, y: 0, width: 100, height: 80, fileId: 'missing' }])}>engine missing image</button>
@@ -85,6 +89,57 @@ async function settle(check: () => void) {
 }
 
 describe('[COMP:app-web/drawing] editor lifecycle and authority', () => {
+  it.each(['cancel', 'save', 'conflict', 'unmount', 'scope'])('removes the real host bubble plugin during drawing and restores it after %s', async close => {
+    editor = new Editor({ extensions: docExtensions(), content: '<p>Page text</p>' });
+    editor.commands.setTextSelection({ from: 1, to: 5 });
+    const comment = vi.fn();
+    const windowRelease = vi.fn();
+    function Page({ visible = true, path = '/page' }: { visible?: boolean; path?: string }) {
+      return <StrictMode><DrawingToolbarProvider>
+        <FloatingToolbar editor={editor!} onComment={comment} />
+        <DrawingLibraryContext.Provider value={{ key: 'test', account: 'test', path }}>
+          {visible && <BlockDrawing block={original} editable onSave={() => close !== 'conflict'} />}
+        </DrawingLibraryContext.Provider>
+      </DrawingToolbarProvider></StrictMode>;
+    }
+    const bubbleMounted = () => editor!.state.plugins.some(plugin => (plugin as unknown as { key: string }).key.startsWith('bubbleMenu'));
+    await render(<Page />);
+    expect(bubbleMounted()).toBe(true);
+    await click(t.drawingEdit);
+    expect(bubbleMounted()).toBe(false);
+    await settle(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+    const dialog = document.querySelector('[role="dialog"]')!;
+    // Boundary contract only; the browser harness proves real SDK gesture cleanup.
+    const events = ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'mousedown', 'mousemove', 'mouseup', 'click', 'dblclick'];
+    for (const type of events) window.addEventListener(type, windowRelease);
+    try {
+      await act(async () => {
+        for (const type of events) dialog.dispatchEvent(new MouseEvent(type, { bubbles: true }));
+        document.dispatchEvent(new Event('selectionchange'));
+        document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }));
+      });
+      expect(windowRelease.mock.calls.map(([event]) => event.type)).toEqual(events);
+    } finally {
+      for (const type of events) window.removeEventListener(type, windowRelease);
+    }
+    expect(bubbleMounted()).toBe(false);
+    expect(document.querySelector('[data-selection-comment-chip]')).toBeNull();
+    expect(document.querySelector('[aria-label="Bold"]')).toBeNull();
+    if (close === 'conflict') {
+      await click(t.drawingSave);
+      expect(document.querySelector('[role="alert"]')?.textContent).toBe(t.drawingConflict);
+      expect(bubbleMounted()).toBe(false);
+    }
+    if (close === 'cancel' || close === 'conflict') await click(t.cancel);
+    else if (close === 'save') await click(t.drawingSave);
+    else await render(<Page visible={close !== 'unmount'} path={close === 'scope' ? '/other' : '/page'} />);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(bubbleMounted()).toBe(true);
+    expect(editor.getText()).toBe('Page text');
+    expect(editor.state.selection.from).toBe(1);
+    expect(editor.state.selection.to).toBe(5);
+  });
+
   it('saves and reopens a trimmed name, cancels a rename, and preserves scene and PNG on title-only edits', async () => {
     exporting.restoreDefaults = true;
     const scene: DrawingBlock['scene'] = { ...original.scene, elements: [{ id: 'shape', type: 'rectangle', x: 0, y: 0, width: 100, height: 80 }] };

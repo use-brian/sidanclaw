@@ -78,7 +78,7 @@ import {
 } from "@/lib/api/views";
 import { browserDocExtensions } from "./doc-schema";
 import { useRecordingPlayer } from "@/lib/recordings/recording-player-context";
-import { FloatingToolbar } from "./floating-toolbar";
+import { DrawingToolbarProvider, FloatingToolbar } from "./floating-toolbar";
 import { DocFindBar } from "./find-bar";
 import { docFindExtension } from "./find-in-page";
 import { DocDragHandle } from "./drag-handle";
@@ -219,6 +219,7 @@ export function CollabPageEditor({
       account: workspace.me.id,
       path: `/w/${workspace.workspaceId}/p/${viewId}`,
     } : null}>
+    <DrawingToolbarProvider>
     <CollabEditorInner
       doc={doc}
       provider={provider}
@@ -237,6 +238,7 @@ export function CollabPageEditor({
       onTemplateSeeded={onTemplateSeeded}
       onContentChange={onContentChange}
     />
+    </DrawingToolbarProvider>
     </DrawingLibraryContext.Provider>
   );
 }
