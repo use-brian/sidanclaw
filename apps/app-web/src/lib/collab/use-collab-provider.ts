@@ -93,6 +93,8 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
         if (payload === 'page-write-allowed') setWriteDenied(false);
       },
     });
+    // An externally owned socket does not auto-attach its document provider.
+    provider.attach();
     setBundle({ doc, provider, discardLocalChanges: async () => {
       // Only exposed behind the page's explicit local-reset confirmation.
       if (doc.isDestroyed) return;

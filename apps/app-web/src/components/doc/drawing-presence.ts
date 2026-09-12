@@ -57,6 +57,9 @@ export function bindDrawingPresence(awareness: Awareness, api: ExcalidrawImperat
       schedule();
     },
     selection(state: AppState) {
+      // SDK initialization can reset collaborators after the first awareness
+      // paint. Repair from current awareness even if no peer has moved since.
+      if (JSON.stringify([...state.collaborators]) !== rendered) { rendered = ''; render(); }
       const selected = new Set(Object.keys(state.selectedElementIds).filter(key => state.selectedElementIds[key]));
       for (const element of [state.editingTextElement, state.newElement, state.resizingElement]) if (element) selected.add(element.id);
       pending = { ...pending, selected: [...selected].slice(0, 256), button: state.cursorButton };

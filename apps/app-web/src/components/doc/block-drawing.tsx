@@ -70,6 +70,9 @@ export function BlockDrawing({ block: base, editable = false, onSave }: {
   const [failed, setFailed] = useState(false);
   const scopeIdentity = `${libraryScope?.key}:${libraryScope?.path}:${block.id}`;
   const previousScope = useRef(scopeIdentity);
+  const previewScene = useRef(block.scene);
+  previewScene.current = block.scene;
+  const requestPreview = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (previousScope.current !== scopeIdentity) {
       previousScope.current = scopeIdentity;
@@ -79,13 +82,14 @@ export function BlockDrawing({ block: base, editable = false, onSave }: {
   useEffect(() => {
     if (drawingOpen) return;
     let active = true;
+    let pending = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const host = canvasHost.current;
-    host?.replaceChildren();
     setFailed(false);
-    if (block.collaborationError) return;
+    if (block.collaborationError) { host?.replaceChildren(); return; }
     async function preview() {
-      const scene = drawingSceneSchema.parse(block.scene);
-      if (!scene.elements.some(element => !element.isDeleted)) return;
+      const scene = drawingSceneSchema.parse(previewScene.current);
+      if (!scene.elements.some(element => !element.isDeleted)) { host?.replaceChildren(); setFailed(false); return; }
       const { exportToCanvas, restoreElements } = await loadDrawingRuntime();
       const canvas = await exportToCanvas({
         elements: restoreElements(scene.elements as unknown as ExcalidrawElement[], null),
@@ -94,6 +98,7 @@ export function BlockDrawing({ block: base, editable = false, onSave }: {
         maxWidthOrHeight: 1600,
       });
       if (active) {
+        setFailed(false);
         canvas.style.width = '100%';
         canvas.style.height = 'auto';
         canvas.style.maxHeight = '480px';
@@ -101,11 +106,27 @@ export function BlockDrawing({ block: base, editable = false, onSave }: {
         host?.replaceChildren(canvas);
       }
     }
-    const render = () => { void preview().catch(() => { if (active) setFailed(true); }); };
-    const timer = page ? setTimeout(render, 120) : undefined;
-    if (!page) render();
-    return () => { active = false; clearTimeout(timer); };
-  }, [block.scene, block.collaborationError, resolved, drawingOpen]);
+    const render = () => {
+      if (pending || !active) return;
+      pending = true;
+      const run = async () => {
+        const source = previewScene.current;
+        try { await preview(); }
+        catch { if (active) { host?.replaceChildren(); setFailed(true); } }
+        finally {
+          pending = false;
+          if (active && source !== previewScene.current) render();
+        }
+      };
+      if (page) timer = setTimeout(run, 120);
+      else void run();
+    };
+    // Throttle, rather than debounce: continuous remote gestures must paint.
+    requestPreview.current = render;
+    render();
+    return () => { active = false; clearTimeout(timer); requestPreview.current = null; host?.replaceChildren(); };
+  }, [block.collaborationError, resolved, drawingOpen, page?.doc]);
+  useEffect(() => { requestPreview.current?.(); }, [block.scene]);
 
   function save(scene: DrawingScene, preview?: DrawingPreview, title?: string) {
     if (!editable || !draft || !onSave || JSON.stringify(block) !== JSON.stringify(draft)) return false;

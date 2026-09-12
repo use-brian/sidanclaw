@@ -38,6 +38,7 @@ export async function syncLocalPage(pageId: string, seed: Uint8Array): Promise<v
         onUnsyncedChanges: complete,
         onAuthenticationFailed: () => reject(new Error("offline_page_sync_denied")),
       });
+      provider.attach();
       timer = setTimeout(() => reject(new Error("offline_page_sync_timeout")), 15_000);
       void socket!.connect().catch(reject);
     });

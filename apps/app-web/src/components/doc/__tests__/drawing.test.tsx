@@ -15,6 +15,8 @@ import { executeSlashItem } from '../slash-execute';
 import { SLASH_MENU_ITEMS, filterSlashMenuItems } from '../slash-menu';
 import { drawingBlockSchema, drawingSceneDigest } from '@use-brian/shared/drawing';
 import { webcrypto } from 'node:crypto';
+import * as Y from 'yjs';
+import { DrawingPageContext } from '../block-drawing';
 
 Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4////fwAJ+wP9KobjigAAAABJRU5ErkJggg==';
@@ -50,10 +52,11 @@ vi.mock('../drawing-runtime', () => ({ loadDrawingRuntime: async () => ({
   },
   MainMenu: () => null,
   restoreElements: (elements: unknown) => elements,
-  exportToCanvas: async () => {
+  exportToCanvas: async ({ elements }: { elements: { width: number }[] }) => {
     if (exporting.wait) await exporting.wait;
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = 1;
+    canvas.dataset.sceneWidth = String(elements[0]?.width);
     canvas.toDataURL = () => exporting.invalid ? 'data:,' : `data:image/png;base64,${png}`;
     return canvas;
   },
@@ -69,6 +72,31 @@ it('[COMP:app-web/drawing] displays quarantined register errors without offering
   await render(<BlockDrawing editable block={{ ...original, collaborationError: 'invalid-registers' }} />);
   expect(host.querySelector('[role="alert"]')?.textContent).toBe(t.drawingError);
   expect([...host.querySelectorAll('button')].some(button => button.textContent === t.drawingEdit)).toBe(false);
+});
+it('[COMP:app-web/drawing] paints continuous preview changes without blanking or starving, and clears empty scenes', async () => {
+  vi.useFakeTimers();
+  const doc = new Y.Doc();
+  const paint = (width: number) => render(<DrawingPageContext.Provider value={{ doc, canEdit: false }}>
+    <BlockDrawing block={{ ...original, scene: { ...original.scene, elements: width ? [
+      { id: 'shape', type: 'rectangle', x: 0, y: 0, width, height: 80 },
+    ] : [] } }} />
+  </DrawingPageContext.Provider>);
+  try {
+    await paint(100);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(host.querySelector('canvas')?.dataset.sceneWidth).toBe('100');
+    for (let width = 101; width <= 110; width++) {
+      await paint(width);
+      expect(host.querySelector('canvas')).not.toBeNull();
+      await act(async () => { await vi.advanceTimersByTimeAsync(40); });
+    }
+    expect(Number(host.querySelector('canvas')?.dataset.sceneWidth)).toBeGreaterThan(100);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(host.querySelector('canvas')?.dataset.sceneWidth).toBe('110');
+    await paint(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(host.querySelector('canvas')).toBeNull();
+  } finally { doc.destroy(); vi.useRealTimers(); }
 });
 afterEach(() => { act(() => root?.unmount()); host?.remove(); editor?.destroy(); editor = undefined; exporting.wait = null; exporting.invalid = false; exporting.restoreDefaults = false; captureInitialData.mockClear(); });
 async function render(node: React.ReactNode) {

@@ -47,6 +47,12 @@ describe('[COMP:app-web/drawing-presence] transient scoped awareness', () => {
     const api = { updateScene: vi.fn() };
     let valid = true;
     const binding = bindDrawingPresence(awareness as never, api as unknown as ExcalidrawImperativeAPI, scope, () => valid);
+    const paints = api.updateScene.mock.calls.length;
+    binding.selection({ collaborators: new Map(), selectedElementIds: {}, cursorButton: 'up' } as never);
+    expect(api.updateScene.mock.calls.length).toBe(paints + 1);
+    expect(api.updateScene.mock.lastCall?.[0].collaborators.size).toBe(1);
+    binding.selection({ collaborators: api.updateScene.mock.lastCall?.[0].collaborators, selectedElementIds: {}, cursorButton: 'up' } as never);
+    expect(api.updateScene.mock.calls.length).toBe(paints + 1);
     for (let x = 0; x < 100; x++) binding.pointer({ pointer: { x, y: 1 }, button: 'down' } as never);
     expect(awareness.setLocalStateField).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(50);

@@ -2,6 +2,43 @@
 
 ## Live Collaboration
 
+### Page Transport And Preview
+
+The page hook and closed-local-page uploader explicitly attach each document
+provider to their externally owned Hocuspocus socket before connecting it.
+Opening a WebSocket alone does not authenticate, subscribe, sync, or forward
+status/awareness for that document in Hocuspocus 4. A saved local page can otherwise
+look editable while its document provider never participates in collaboration.
+
+The embedded drawing remains a live scene-derived canvas when its SDK editor is
+closed, including for read-only page viewers. Rendering must make progress during
+continuous edits, not wait for a pause in remote traffic. A previous canvas stays
+mounted until its replacement is ready; empty or invalid scenes clear it. This
+canvas is separate from the digest-bound PNG persisted for exports and AI reads.
+
+`node apps/app-web/scripts/drawing-page-browser.mjs` exercises two independent
+browser contexts through `useCollabProvider`, `CollabPageEditor`, the real Tiptap
+React node view and SDK. It uses an isolated Hocuspocus server with the production
+OSS `/auth/local-session` token endpoint, JWT verifier and drawing protocol gate,
+synthetic identity/page access, and no application database. It covers held-drag
+updates, late joins, same-account presence, continuous previews, read-only embedded
+viewing, reload and reconnect. The Next routing APIs use the existing desktop
+Vite shims; this is not a deployed Next/OSS-stack or RLS test. The endpoint's
+edition gate and user-store boundary are injected; JWT creation and verification
+are real. The runner rejects a legacy protocol against the seeded drawing too.
+Late SDK initialization can reset its collaborator map after the first awareness
+paint. SDK scene notifications repair that reset from current awareness, without
+waiting for the remote person to move and without persisting presence.
+
+The standard OSS launcher already starts doc-sync on port 8080 and supplies the
+same JWT secret to the API and doc-sync. No new flag or migration is needed.
+For a remote self-host, configure a browser-reachable `PUBLIC_DOC_SYNC_URL`
+(or `DOC_SYNC_DOMAIN`, or build-time `NEXT_PUBLIC_DOC_SYNC_URL`); HTTPS pages
+need `wss://`. The unconfigured development fallback is `ws://localhost:8080`,
+which points to the browser's machine, not a remote host. `DOC_SYNC_URL` is the
+API's internal endpoint, not the browser runtime setting. Keep the app and
+doc-sync drawing-protocol versions aligned and refresh old browser bundles.
+
 ### Review Safety Contracts
 
 Immutable file registers are not undoable. An insertion's undo removes only its

@@ -5,13 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { DRAWING_PROTOCOL, FRAGMENT_FIELD, pageToYDocUpdate } from "@use-brian/doc-model";
 const state = vi.hoisted(() => ({ local: null as { seed: Uint8Array; registered: boolean } | null, saved: new Map<string, Uint8Array>(), connect: vi.fn(),
-  cleared: vi.fn(),
+  cleared: vi.fn(), attach: vi.fn(),
   provider: null as null | { token: () => Promise<string>; onAuthenticated: (data: { scope: string }) => void; onAuthenticationFailed: () => void; onStateless: (data: { payload: string }) => void } }));
 vi.mock("@/lib/offline/offline-pages", () => ({ LOCAL_PAGES_CHANGED: "local-pages", readLocalPage: async () => state.local }));
 vi.mock("@/lib/auth-fetch", () => ({ getValidAccessToken: async () => "token" }));
 vi.mock("@hocuspocus/provider", () => ({
   HocuspocusProviderWebsocket: class { connect = state.connect; destroy() {} },
-  HocuspocusProvider: class { constructor(config: NonNullable<typeof state.provider>) { state.provider = config; } destroy() {} },
+  HocuspocusProvider: class { constructor(config: NonNullable<typeof state.provider>) { state.provider = config; } attach = state.attach; destroy() {} },
 }));
 vi.mock("y-indexeddb", () => ({
   clearDocument: async (name: string) => { state.cleared(name); state.saved.delete(name); },
@@ -42,11 +42,14 @@ beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   state.local = null; state.saved.clear(); state.connect.mockReset().mockResolvedValue(undefined);
   state.cleared.mockReset();
+  state.attach.mockReset();
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = null; });
 describe("[COMP:app-web/collab-provider] offline page lifecycle", () => {
   it('advertises the protocol and keeps reload-required denial sticky across reconnects', async () => {
     await mount();
+    expect(state.attach).toHaveBeenCalledTimes(1);
+    expect(state.attach.mock.invocationCallOrder[0]).toBeLessThan(state.connect.mock.invocationCallOrder[0]);
     expect(await state.provider!.token()).toBe(`${DRAWING_PROTOCOL}token`);
     await act(async () => state.provider!.onStateless({ payload: 'drawing-protocol-reload-required' }));
     expect(latest.reloadRequired).toBe(true);
