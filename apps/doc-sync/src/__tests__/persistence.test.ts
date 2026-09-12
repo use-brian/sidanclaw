@@ -7,7 +7,7 @@ import {
   storePageSnapshot,
   type SysQuery,
 } from '../persistence.js'
-import { pageToYDoc, snapshotFromUpdate } from '@use-brian/doc-model'
+import { DrawingCollaboration, pageToYDoc, snapshotFromUpdate } from '@use-brian/doc-model'
 
 describe('[COMP:doc-sync/persistence] loadPageUpdate', () => {
   it('returns the stored ydoc bytes when present', async () => {
@@ -41,6 +41,46 @@ describe('[COMP:doc-sync/persistence] loadPageUpdate', () => {
 })
 
 describe('[COMP:doc-sync/persistence] storePageSnapshot', () => {
+  it('persists a peer image duplicate after the inserting peer undoes, and isolates later malformed registers', async () => {
+    const block = { kind: 'drawing' as const, id: 'drawing', scene: { version: 1 as const, elements: [], files: {}, appState: { viewBackgroundColor: '#fff' } } }
+    const a = pageToYDoc({ blocks: [block, { kind: 'text', id: 'text', text: 'Neighbor' }] }, 'Page'), b = new Y.Doc()
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a))
+    const left = new DrawingCollaboration(a, block, () => true), right = new DrawingCollaboration(b, block, () => true)
+    const file = { id: 'file', mimeType: 'image/png' as const, dataURL: 'data:image/png;base64,YQ==', created: 1 }
+    const image = { id: 'original', type: 'image' as const, fileId: 'file', x: 0, y: 0, width: 20, height: 20 }
+    left.write(block.scene, { ...block.scene, elements: [image], files: { file } })
+    Y.applyUpdate(b, Y.encodeStateAsUpdate(a))
+    const seen = right.read().scene
+    right.write(seen, { ...seen, elements: [...seen.elements, { ...image, id: 'duplicate' }] })
+    Y.applyUpdate(a, Y.encodeStateAsUpdate(b)); left.undo.undo()
+    const calls: unknown[][] = []
+    const query: SysQuery = async (_sql, params) => { calls.push(params); return [] as never[] }
+    await storePageSnapshot({ pageId: 'p', ydoc: a, query })
+    const canonical = JSON.parse(calls[0][3] as string)
+    expect(canonical.blocks[0].scene.elements).toEqual([{ ...image, id: 'duplicate' }])
+    expect(canonical.blocks[0].scene.files.file).toEqual(file)
+    expect(snapshotFromUpdate(calls[0][1] as Uint8Array).page).toEqual(canonical)
+    left.registers.set('element:duplicate', null)
+    calls.length = 0
+    await storePageSnapshot({ pageId: 'p', ydoc: a, query })
+    expect(JSON.parse(calls[0][3] as string).blocks).toMatchObject([
+      { kind: 'drawing', collaborationError: 'invalid-registers' }, { kind: 'text', text: 'Neighbor' },
+    ])
+    left.dispose(); right.dispose(); a.destroy(); b.destroy()
+  })
+  it('stores live drawing edits in both the binary and canonical snapshot_json, not only a side map', async () => {
+    const block = { kind: 'drawing' as const, id: 'drawing', scene: { version: 1 as const, elements: [], files: {}, appState: { viewBackgroundColor: '#fff' } } }
+    const doc = pageToYDoc({ blocks: [block] }, 'Page')
+    const live = new DrawingCollaboration(doc, block, () => true)
+    live.write(block.scene, { ...block.scene, elements: [{ id: 'shape', type: 'rectangle', x: 12, y: 24, width: 80, height: 60 }] })
+    const calls: unknown[][] = []
+    const query: SysQuery = async (_sql, params) => { calls.push(params); return [] as never[] }
+    await storePageSnapshot({ pageId: 'p', ydoc: doc, query })
+    const canonical = JSON.parse(calls[0][3] as string)
+    expect(canonical.blocks[0].scene.elements[0]).toMatchObject({ id: 'shape', x: 12 })
+    expect(snapshotFromUpdate(calls[0][1] as Uint8Array).page).toEqual(canonical)
+    live.dispose(); doc.destroy()
+  })
   it('writes ydoc + derived snapshot_json, then mirrors the title to saved_views', async () => {
     const ydoc = pageToYDoc(
       { blocks: [{ kind: 'heading', id: 'h', level: 1, text: 'Doc' }] } as never,

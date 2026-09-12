@@ -4,6 +4,18 @@ export const MAX_DRAWING_BYTES = 2 * 1024 * 1024
 export const MAX_DRAWING_PREVIEW_BYTES = 1024 * 1024
 export const MAX_DRAWING_PREVIEW_DIMENSION = 1600
 
+const presenceCoordinate = z.number().finite().min(-10_000_000).max(10_000_000)
+export const drawingPresenceSchema = z.object({
+  scope: z.string().min(1).max(512),
+  pointer: z.object({ x: presenceCoordinate, y: presenceCoordinate, tool: z.literal('pointer') }).nullable(),
+  button: z.enum(['up', 'down']),
+  selected: z.array(z.string().min(1).max(128)).max(256),
+})
+export const drawingPresenceUserSchema = z.object({
+  name: z.string().min(1).max(200), color: z.string().regex(/^#[0-9a-f]{6}$/i),
+})
+export type DrawingPresence = z.infer<typeof drawingPresenceSchema>
+
 export const drawingLibraryPreviewPathSchema = z.string().max(1024)
   .regex(/^(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\.(?:png|jpe?g|webp|svg)$/)
 
@@ -143,12 +155,23 @@ export const drawingSceneSchema = z.object({
 
 export const drawingTitleSchema = z.string().trim().max(200).optional()
 
+/** Restore/repair a concurrent union without accepting malformed geometry/assets. */
+export function parseDrawingSceneStructure(value: unknown): DrawingScene {
+  const parsed = drawingSceneSchema.safeParse(value)
+  if (parsed.success) return parsed.data
+  if (parsed.error.issues.every(issue =>
+    (issue.code === 'too_big' && issue.path.join('.') === 'elements') ||
+    (issue.code === 'custom' && issue.message === 'Drawing exceeds 2 MiB'))) return value as DrawingScene
+  throw parsed.error
+}
+
 export const drawingBlockSchema = z.object({
   kind: z.literal('drawing'),
   title: drawingTitleSchema,
   id: z.string().min(1).max(128),
   scene: drawingSceneSchema,
   preview: drawingPreviewSchema.optional(),
+  collaborationError: z.literal('invalid-registers').optional(),
 })
 export type DrawingScene = z.infer<typeof drawingSceneSchema>
 export type DrawingBlock = z.infer<typeof drawingBlockSchema>

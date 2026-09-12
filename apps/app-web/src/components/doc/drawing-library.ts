@@ -1,4 +1,5 @@
 import type { LibraryItems } from '@excalidraw/excalidraw/types';
+import { defaultDrawingLibrary } from './drawing-default-library';
 import { drawingSceneSchema, drawingLibraryIndexSchema, drawingLibraryPreviewPathSchema } from '@use-brian/shared/drawing';
 
 export const LIBRARY_BYTES = 2 * 1024 * 1024;
@@ -32,7 +33,8 @@ export function validateLibraryItems(value: unknown): LibraryItems {
       (item.name !== undefined && (typeof item.name !== 'string' || item.name.length > 200)) ||
       !Array.isArray(item.elements) || !item.elements.length) throw new Error('library-data');
     count += item.elements.length;
-    if (count > 5000 || item.elements.some(element => element?.type === 'image' || element?.isDeleted === true)) throw new Error('library-assets');
+    if (count > 5000) throw new Error('library-size');
+    if (item.elements.some(element => element?.type === 'image' || element?.isDeleted === true)) throw new Error('library-assets');
     const scene = drawingSceneSchema.parse({ version: 1, elements: item.elements, appState: { viewBackgroundColor: '#fff' }, files: {} });
     return { id: item.id, status: item.status, created: item.created, elements: scene.elements,
       ...(item.name !== undefined ? { name: item.name } : {}) };
@@ -43,6 +45,15 @@ function libraryItemContent(item: LibraryItems[number]) {
   return JSON.stringify({ elements: item.elements, name: item.name }, (_key, value) =>
     value && typeof value === 'object' && !Array.isArray(value)
       ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+}
+function isRetiredDefault(item: LibraryItems[number]) {
+  if (item.id !== 'brian-default-v1-use-brian') return false;
+  // V1 and V2 share the tiled logo; V3 used a single silhouette.
+  return ([1, 3] as const).some(version => {
+    const old = defaultDrawingLibrary(version)[0];
+    return item.status === old.status && item.created === old.created &&
+      libraryItemContent(item) === libraryItemContent(old);
+  });
 }
 export function parseLibrary(text: string): LibraryItems {
   if (new TextEncoder().encode(text).length > LIBRARY_BYTES) throw new Error('library-size');
@@ -86,16 +97,52 @@ export function mergeLibraries(existing: LibraryItems, incoming: LibraryItems): 
   return validateLibraryItems(merged);
 }
 export function readLibrary(key: string): LibraryItems {
+  return readLibraryState(key).items;
+}
+function readLibraryState(key: string): { items: LibraryItems; defaultsSeeded: boolean; defaultsVersion?: 1 | 2 | 3 | 4 } {
   const text = localStorage.getItem(key);
-  if (!text) return [];
-  if (text.length > LIBRARY_BYTES) throw new Error('library-size');
-  return validateLibraryItems(JSON.parse(text));
+  if (!text) return { items: [], defaultsSeeded: false };
+  if (text.length > LIBRARY_BYTES + 64) throw new Error('library-size');
+  const data = JSON.parse(text);
+  if (Array.isArray(data)) return { items: validateLibraryItems(data), defaultsSeeded: false };
+  if (!data || data.defaultsSeeded !== true) throw new Error('library-data');
+  return { items: validateLibraryItems(data.items), defaultsSeeded: true, defaultsVersion: data.defaultsVersion === 4 ? 4 : data.defaultsVersion === 3 ? 3 : data.defaultsVersion === 2 ? 2 : 1 };
+}
+export function initializeLibrary(key: string): LibraryItems {
+  const stored = readLibraryState(key);
+  if (stored.defaultsSeeded) {
+    if (stored.defaultsVersion === 4) return stored.items;
+    const oldDefaults = new Map(defaultDrawingLibrary(stored.defaultsVersion ?? 1).map(item => [item.id, item]));
+    const defaults = new Map(defaultDrawingLibrary().map(item => [item.id, item]));
+    const items = validateLibraryItems(stored.items.filter(item => !isRetiredDefault(item)).map(item => {
+      const old = oldDefaults.get(item.id);
+      // An ID or source tag alone is not ownership: preserve every user edit.
+      return old && item.status === old.status && item.created === old.created &&
+        libraryItemContent(item) === libraryItemContent(old) ? defaults.get(item.id)! : item;
+    }));
+    localStorage.setItem(key, JSON.stringify({ items, defaultsSeeded: true, defaultsVersion: 4 }));
+    return items;
+  }
+  let items: LibraryItems;
+  try { items = mergeLibraries(stored.items, defaultDrawingLibrary()); }
+  catch (cause) {
+    // Defaults are optional: keep a full saved library usable and retry on reopen.
+    if (cause instanceof Error && cause.message === 'library-size') return stored.items;
+    throw cause;
+  }
+  localStorage.setItem(key, JSON.stringify({ items, defaultsSeeded: true, defaultsVersion: 4 }));
+  return items;
 }
 export function persistLibrary(key: string, previous: LibraryItems, next: LibraryItems) {
   const validated = validateLibraryItems(next);
   const removed = new Set(previous.filter(item => !validated.some(next => next.id === item.id)).map(item => item.id));
-  const merged = mergeLibraries(readLibrary(key).filter(item => !removed.has(item.id)), validated);
-  localStorage.setItem(key, JSON.stringify(merged));
+  const stored = readLibraryState(key);
+  // Ignore stale notifications from before retirement, not explicit new imports.
+  const incoming = stored.defaultsVersion === 4 && previous.some(isRetiredDefault)
+    ? validated.filter(item => !isRetiredDefault(item)) : validated;
+  const merged = mergeLibraries(stored.items.filter(item => !removed.has(item.id)), incoming);
+  localStorage.setItem(key, JSON.stringify(stored.defaultsSeeded ?
+    { items: merged, defaultsSeeded: true, defaultsVersion: stored.defaultsVersion } : merged));
   return merged;
 }
 export async function fetchLibrary(raw: string, signal: AbortSignal) {

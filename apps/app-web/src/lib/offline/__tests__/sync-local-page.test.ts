@@ -19,6 +19,7 @@ vi.mock("@hocuspocus/provider", () => ({
   HocuspocusProviderWebsocket: class {
     async connect() {
       expect(state.persisted).toBe(true);
+      expect(state.provider.attached).toBe(true);
       state.provider.isSynced = true;
       state.provider.config.onSynced({ state: true });
     }
@@ -27,6 +28,8 @@ vi.mock("@hocuspocus/provider", () => ({
   HocuspocusProvider: class {
     isSynced = false;
     hasUnsyncedChanges = true;
+    attached = false;
+    attach() { this.attached = true; }
     constructor(public config: any) { state.provider = this; }
     destroy() {}
   },

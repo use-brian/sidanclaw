@@ -12,7 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@hocuspocus/server": "^4.1.0",
+    "@hocuspocus/server": "4.2.0",
     "@use-brian/api": "workspace:*",
     "@use-brian/doc-model": "workspace:*",
     "@use-brian/office-model": "workspace:*",

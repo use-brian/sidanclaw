@@ -68,9 +68,9 @@ export function DrawingLibraryCatalog({ theme, path, onClose, onImport }: {
   const matches = entries.filter(entry => `${entry.name} ${entry.authors}`.toLowerCase().includes(search.trim().toLowerCase()));
   return <Dialog.Root open onOpenChange={open => { if (!open) dismiss(); }}>
     <Dialog.Portal>
-      <Dialog.Backdrop className="fixed inset-0 z-50 bg-background/80" />
-      <Dialog.Popup className="fixed inset-0 z-50 flex flex-col bg-background text-foreground sm:inset-8 sm:rounded-xl sm:border sm:border-border">
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-3">
+      <Dialog.Backdrop forceRender className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm dark:bg-background/80" />
+      <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 flex h-[calc(100dvh-1rem)] max-h-[56rem] w-[calc(100%-1rem)] max-w-6xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-2xl ring-1 ring-foreground/20 sm:h-[calc(100dvh-4rem)] sm:w-[calc(100%-4rem)]">
+        <div className="flex max-h-[50%] shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b border-border p-3">
           <Dialog.Title className="mr-auto font-semibold">{t.libraryBrowse}</Dialog.Title>
           <Button variant="outline" onClick={dismiss}>{t.close}</Button>
           <Dialog.Description className="w-full text-sm text-muted-foreground">{local ? t.libraryPickerHelp : t.libraryReturnHelp}</Dialog.Description>
@@ -81,10 +81,10 @@ export function DrawingLibraryCatalog({ theme, path, onClose, onImport }: {
         {supported && local && <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
           <label className="flex flex-col gap-1 text-sm">{t.librarySearch}
             <input type="search" value={search} maxLength={200} onChange={event => setSearch(event.target.value)}
-              className="rounded border border-border bg-background px-3 py-2" />
+              className="min-h-11 rounded border border-border bg-background px-3 py-2 text-base sm:min-h-0 sm:text-sm" />
           </label>
           <p className="text-xs text-muted-foreground">{t.libraryPreviewHelp}</p>
-          <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto" aria-busy={busy}>
+          <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain" aria-busy={busy}>
             {matches.map(entry =>
               <li key={entry.url} className="flex flex-wrap items-center gap-3 rounded border border-border p-3">
                 <div className="flex h-28 w-full shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-muted/30 sm:w-44">

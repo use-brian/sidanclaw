@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   assertPageAccess,
+  recheckPageConnection,
   resolveEffectiveRole,
   isReadOnlyRole,
   PageAccessDenied,
@@ -33,6 +34,26 @@ function makeQuery(opts: {
 }
 
 describe('[COMP:doc-sync/clearance-gate] assertPageAccess', () => {
+  it('revokes and restores live write access and rejects deleted/inaccessible pages without retaining the old grant', async () => {
+    const messages: string[] = []
+    const connection = { readOnly: false, sendStateless: (message: string) => { messages.push(message) } }
+    const opts: Parameters<typeof makeQuery>[0] = { access: { workspaceId: 'w', pageClearance: 'internal', memberClearance: 'internal' }, grantRole: 'edit' }
+    const params = { userId: 'u', pageId: 'p', query: makeQuery(opts), connection }
+    await recheckPageConnection(params)
+    expect(connection.readOnly).toBe(false)
+    opts.grantRole = 'view'
+    await recheckPageConnection(params)
+    expect(connection.readOnly).toBe(true)
+    expect(messages).toEqual(['page-write-denied'])
+    opts.grantRole = 'edit'
+    await recheckPageConnection(params)
+    expect(connection.readOnly).toBe(false)
+    expect(messages.at(-1)).toBe('page-write-allowed')
+    opts.access = null
+    await expect(recheckPageConnection(params)).rejects.toBeInstanceOf(PageAccessDenied)
+    expect(connection.readOnly).toBe(true)
+    expect(messages.at(-1)).toBe('page-write-denied')
+  })
   it('denies when the user is not a workspace member (no row visible)', async () => {
     await expect(
       assertPageAccess({ userId: 'u', pageId: 'p', query: makeQuery({ access: null }) }),

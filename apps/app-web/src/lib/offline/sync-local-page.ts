@@ -5,6 +5,7 @@ import { publicRuntimeConfig } from "@/lib/runtime-public-config";
 import * as Y from "yjs";
 import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/provider";
 import { getValidAccessToken } from "@/lib/auth-fetch";
+import { DRAWING_PROTOCOL } from '@use-brian/doc-model';
 
 export function resolveSyncUrl(): string {
   const configuredSyncUrl = publicRuntimeConfig().docSyncUrl;
@@ -32,11 +33,12 @@ export async function syncLocalPage(pageId: string, seed: Uint8Array): Promise<v
       };
       provider = new HocuspocusProvider({
         websocketProvider: socket!, name: pageId, document: doc,
-        token: async () => (await getValidAccessToken()) ?? "",
+        token: async () => DRAWING_PROTOCOL + ((await getValidAccessToken()) ?? ""),
         onSynced: complete,
         onUnsyncedChanges: complete,
         onAuthenticationFailed: () => reject(new Error("offline_page_sync_denied")),
       });
+      provider.attach();
       timer = setTimeout(() => reject(new Error("offline_page_sync_timeout")), 15_000);
       void socket!.connect().catch(reject);
     });

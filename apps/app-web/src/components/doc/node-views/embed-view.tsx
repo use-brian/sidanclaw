@@ -501,7 +501,7 @@ export function EmbedView(props: NodeViewProps) {
         key={(props.node.attrs.blockId as string | undefined) ?? raw ?? "embed"}
         fallback={() => <EmbedCrashFallback />}
       >
-        {block?.kind === "drawing" ? <BlockDrawing block={block} editable={editable}
+        {block?.kind === "drawing" ? <BlockDrawing key={props.node.attrs.drawingEpoch ?? 'legacy'} block={block} editable={editable}
           onSave={(next, original) => saveDrawing(props.editor, props.getPos, next, original)}
         /> : renderEmbed(block, updateBlock, editable)}
       </ErrorBoundary>

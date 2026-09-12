@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * [COMP:app-web/floating-toolbar] Floating toolbar — bubble menu over selection.
  *
@@ -6,7 +7,8 @@
  *      (hidden for collapsed selection, hidden inside code blocks).
  *   2. `<ToolbarButtons>` — the button strip + link popover. Tested via
  *      `renderToStaticMarkup` against a mock `Editor` — same SSR-only
- *      pattern mobile-chat-drawer.test.tsx uses (app-web vitest has no jsdom).
+ *      pattern mobile-chat-drawer.test.tsx uses. jsdom enables the configured
+ *      React dependency dedupe for the real icon components.
  *
  * The wrapper `<FloatingToolbar>` itself is a thin pass-through into
  * `<BubbleMenu>` + tippy.js; mounting it server-side would side-effect
@@ -21,6 +23,8 @@ import { I18nProvider } from "@/lib/i18n/client";
 import { en } from "@/lib/i18n/dictionaries/en";
 import type { Dictionary } from "@/lib/i18n/dictionaries";
 import type { Editor } from "@tiptap/react";
+import { NodeSelection } from "@tiptap/pm/state";
+import { Schema } from "@tiptap/pm/model";
 import {
   FloatingToolbar,
   ToolbarButtons,
@@ -134,6 +138,10 @@ describe("[COMP:app-web/floating-toolbar] shouldShowToolbar", () => {
         isCellSelection: true,
       }),
     ).toBe(false);
+  });
+
+  it("hides for a selected drawing frame before its editor opens", () => {
+    expect(shouldShowToolbar({ from: 0, to: 1, isInCodeBlock: false, isNodeSelection: true })).toBe(false);
   });
 });
 
@@ -299,6 +307,13 @@ describe("[COMP:app-web/floating-toolbar] selectionChipAnchor", () => {
 
   it("returns null inside a code block", () => {
     expect(selectionChipAnchor(fakeEditor({ from: 2, to: 6, codeBlock: true }))).toBeNull();
+  });
+
+  it("does not anchor a touch comment chip to a drawing node selection", () => {
+    const schema = new Schema({ nodes: { doc: { content: 'embed+' }, text: {}, embed: { atom: true } } });
+    const editor = fakeEditor({ from: 0, to: 1 });
+    Object.defineProperty(editor, 'state', { value: { selection: NodeSelection.create(schema.node('doc', null, [schema.node('embed')]), 0) } });
+    expect(selectionChipAnchor(editor)).toBeNull();
   });
 
   it("spans the selection from the start line's top to the end line's bottom, at the start's left", () => {

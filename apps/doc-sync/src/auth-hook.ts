@@ -15,7 +15,7 @@
 import { verifyAccessToken } from '@use-brian/api/auth/jwt.js'
 
 export type AuthResult =
-  | { kind: 'user'; userId: string }
+  | { kind: 'user'; userId: string; drawingProtocol?: string }
   | { kind: 'service' }
   | { kind: 'reject'; reason: string }
 
@@ -32,7 +32,8 @@ export function resolveAuth(params: {
   if (!token) return { kind: 'reject', reason: 'missing_token' }
   if (params.syncSecret && token === params.syncSecret) return { kind: 'service' }
   const verify = params.verify ?? verifyAccessToken
-  const userId = verify(token, params.jwtSecret)
+  const capability = token.match(/^(brian-drawing-v\d+:)(.+)$/)
+  const userId = verify(capability?.[2] ?? token, params.jwtSecret)
   if (!userId) return { kind: 'reject', reason: 'invalid_token' }
-  return { kind: 'user', userId }
+  return { kind: 'user', userId, ...(capability ? { drawingProtocol: capability[1] } : {}) }
 }

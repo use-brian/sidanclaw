@@ -21,6 +21,7 @@ import { HocuspocusProvider, HocuspocusProviderWebsocket } from "@hocuspocus/pro
 import type { IndexeddbPersistence } from "y-indexeddb";
 import { getValidAccessToken } from "@/lib/auth-fetch";
 import { hasLoadedState } from "@/lib/collab/doc-empty";
+import { DRAWING_PROTOCOL } from '@use-brian/doc-model';
 
 import { resolveSyncUrl } from "@/lib/offline/sync-local-page";
 import { LOCAL_PAGES_CHANGED, readLocalPage } from "@/lib/offline/offline-pages";
@@ -32,15 +33,23 @@ export type CollabHandle = {
   provider: HocuspocusProvider | null;
   status: CollabStatus;
   synced: boolean;
+  writeDenied?: boolean;
+  reloadRequired?: boolean;
+  recoveryRequired?: boolean;
+  discardLocalChanges?: () => Promise<void>;
 };
 
 export function useCollabProvider(pageId: string | null): CollabHandle {
   const [bundle, setBundle] = useState<{
     doc: Y.Doc;
     provider: HocuspocusProvider;
+    discardLocalChanges: () => Promise<void>;
   } | null>(null);
   const [status, setStatus] = useState<CollabStatus>("connecting");
   const [synced, setSynced] = useState(false);
+  const [writeDenied, setWriteDenied] = useState(false);
+  const [reloadRequired, setReloadRequired] = useState(false);
+  const [recoveryRequired, setRecoveryRequired] = useState(false);
 
   useEffect(() => {
     // No active page (the `/p` index empty-selection state, or the gap
@@ -63,7 +72,7 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
       // refreshes on 401), the socket has no retry path, so we refresh here
       // when the 1h access token is missing/expired — otherwise an expired
       // token loops "Reconnecting…" forever.
-      token: async () => (await getValidAccessToken()) ?? "",
+      token: async () => DRAWING_PROTOCOL + ((await getValidAccessToken()) ?? ""),
       onStatus: ({ status: s }) => {
         const v = String(s);
         setStatus(
@@ -75,8 +84,27 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
         );
       },
       onSynced: () => setSynced(true),
+      onAuthenticated: ({ scope }) => setWriteDenied(scope !== 'read-write'),
+      onAuthenticationFailed: () => setWriteDenied(true),
+      onStateless: ({ payload }) => {
+        if (payload === 'drawing-protocol-reload-required') { setWriteDenied(true); setReloadRequired(true); }
+        if (payload === 'drawing-legacy-state-recovery-required') { setWriteDenied(true); setRecoveryRequired(true); }
+        if (payload === 'page-write-denied') setWriteDenied(true);
+        if (payload === 'page-write-allowed') setWriteDenied(false);
+      },
     });
-    setBundle({ doc, provider });
+    // An externally owned socket does not auto-attach its document provider.
+    provider.attach();
+    setBundle({ doc, provider, discardLocalChanges: async () => {
+      // Only exposed behind the page's explicit local-reset confirmation.
+      if (doc.isDestroyed) return;
+      cancelled = true;
+      provider.destroy(); socket.destroy();
+      await persistence?.destroy();
+      const { clearDocument } = await import('y-indexeddb');
+      await clearDocument(`doc-page-${pageId}`);
+      window.location.reload();
+    } });
 
     // Offline-first (ALL clients — web, thin shell, bundled desktop; originally
     // Phase 4 of docs/plans/doc-desktop-bundled-offline.md, extended to the web
@@ -139,6 +167,9 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
       setBundle(null);
       setStatus("connecting");
       setSynced(false);
+      setWriteDenied(false);
+      setReloadRequired(false);
+      setRecoveryRequired(false);
     };
   }, [pageId]);
 
@@ -147,5 +178,9 @@ export function useCollabProvider(pageId: string | null): CollabHandle {
     provider: bundle?.provider ?? null,
     status,
     synced,
+    writeDenied: writeDenied || reloadRequired || recoveryRequired,
+    reloadRequired,
+    recoveryRequired,
+    discardLocalChanges: bundle?.discardLocalChanges,
   };
 }
