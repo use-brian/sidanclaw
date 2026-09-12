@@ -1,5 +1,60 @@
 # Collaborative Editor Runtime
 
+## Native Doc-Sync Runtime
+
+Doc-sync must install its collaboration resolver before loading the server import
+graph, for both `tsx src/index.ts` (the OSS launcher) and `node dist/index.js`.
+Resolve Yjs/y-prosemirror from doc-model and ProseMirror from its Tiptap peer
+anchor, then pin their physical ESM files. The same version in two pnpm stores
+is not one constructor; neither are the import/require exports of one package.
+Do not repair this by duck-typing XML, skipping nodes or catching conversion
+errors and substituting an empty page.
+
+The native regression must run the real entrypoint outside Vitest's aliases,
+substituting only environment/database boundaries with synthetic local state.
+It must exercise Hocuspocus load/store hooks, populated nested content, live
+drawing registers and binary/canonical reload. An unsupported XML node must
+still fail without publishing a partial snapshot.
+
+Binary and canonical projection remain one successful document write. A failed
+projection rejects the store, leaving the previous coherent row unchanged and
+Hocuspocus retaining the live document. Writing just `ydoc` to that row would
+silently desynchronize snapshot readers, seq/CAS and downstream ingestion. A
+separate durable quarantine/recovery journal would need its own lifecycle and
+reader contract; this fix does not introduce one. Retention in RAM is NOT durable:
+do not restart an affected process or clear browser storage before preserving
+the latest complete Yjs update from a connected client (including drawing maps)
+and verifying that the preserved bytes reload. Ordinary text/Markdown export
+does not preserve drawing registers or CRDT history. After preservation, deploy
+the fixed runtime, reconnect the retained client state and verify a successful
+store/reload before retiring backups. No production data repair is automatic.
+
+Native verification: `pnpm --filter @use-brian/doc-sync test` runs the subprocess
+regression outside Vitest resolution. It includes a controlled y-prosemirror
+import of Yjs's CJS export, proving the original store failure without the
+bootstrap and successful complete saves with it. To inspect the installed
+physical-store baseline, run `NATIVE_BASELINE=1 node --import tsx
+src/__tests__/native-runtime.fixture.mjs` from `apps/doc-sync`. That diagnostic
+expects an affected installation; it is not a portable clean-install test.
+After building doc-sync and its dependencies, `NATIVE_COMPILED=1 node --import
+tsx src/__tests__/native-runtime.fixture.mjs` tests its compiled entrypoint and
+native package exports. The fixture replaces dotenv and the query boundary,
+never reads an environment file or opens an application database, and closes
+its ephemeral HTTP server and real Hocuspocus documents normally.
+
+### Selection Warning
+
+An atom-only drawing page reproduces `TextSelection endpoint not pointing into
+a node with inline content (doc)` on initial editor mount, without executing
+any Brian block insertion/selection command. In y-prosemirror 1.3.7,
+`ProsemirrorBinding._forceRerender` (`src/plugins/sync-plugin.js:462`) clamps the
+old selection to the new document size but unconditionally constructs a
+TextSelection, even when that position is outside a textblock. An isolated
+real Tiptap/Collaboration mount captured that stack and verified the canonical
+snapshot was unchanged. This upstream cursor-restoration warning is separate
+from the server's foreign-Yjs-constructor failure. It remains unfixed here;
+do not suppress it or insert synthetic paragraphs to hide it.
+
 The browser must use one physical ESM instance of Yjs, y-prosemirror and the
 ProseMirror packages used by Tiptap. Version pins alone do not guarantee this:
 an absorbed pnpm workspace can retain links into a previous standalone store,
