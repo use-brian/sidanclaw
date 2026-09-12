@@ -63,9 +63,10 @@ import type {
 import { colorForUserId } from "@/lib/collab/cursor-color";
 import { useT } from "@/lib/i18n/client";
 import { useWorkspaceContext } from "@/lib/workspace-context";
-import { DrawingLibraryContext } from './block-drawing';
+import { DrawingLibraryContext, DrawingPageContext } from './block-drawing';
 import { libraryKey } from './drawing-library';
 import { publicRuntimeConfig } from '@/lib/runtime-public-config';
+import { confirmDialog } from '@/components/ui/confirm-dialog';
 import { fetchMembers, fetchPages } from "@/lib/api/mentions";
 import {
   createDraft,
@@ -204,6 +205,8 @@ export function CollabPageEditor({
   onContentChange,
 }: CollabPageEditorProps) {
   const workspace = useWorkspaceContext();
+  const drawingCopy = useT().docPage.diagramSource;
+  const [recoveryFailed, setRecoveryFailed] = useState(false);
   const { doc, provider, synced, status } = collab;
   if (!doc || !provider) {
     return (
@@ -214,16 +217,32 @@ export function CollabPageEditor({
     );
   }
   return (
+    <DrawingPageContext.Provider value={{ doc, provider, connected: status === 'connected', canEdit: canEdit !== false && !collab.writeDenied }}>
     <DrawingLibraryContext.Provider value={viewId ? {
       key: libraryKey(publicRuntimeConfig().apiUrl, workspace.me.id, workspace.workspaceId),
       account: workspace.me.id,
       path: `/w/${workspace.workspaceId}/p/${viewId}`,
     } : null}>
     <DrawingToolbarProvider>
+    {collab.recoveryRequired && <div role="alert" className="rounded border border-border p-3 text-sm">
+      <p>{drawingCopy.drawingRecovery}</p>
+      <button type="button" className="min-h-11 rounded px-3 py-2 text-primary hover:bg-muted" onClick={async () => {
+        if (await confirmDialog({ title: drawingCopy.drawingRecoveryAction, description: drawingCopy.drawingRecovery,
+          confirmLabel: drawingCopy.drawingRecoveryAction, cancelLabel: drawingCopy.cancel, variant: 'destructive' })) {
+          try { setRecoveryFailed(false); await collab.discardLocalChanges?.(); }
+          catch { setRecoveryFailed(true); }
+        }
+      }}>{drawingCopy.drawingRecoveryAction}</button>
+      {recoveryFailed && <p role="alert">{drawingCopy.drawingRecoveryFailed}</p>}
+    </div>}
+    {collab.reloadRequired && !collab.recoveryRequired && <div role="alert" className="rounded border border-border p-3 text-sm">
+      <p>{drawingCopy.drawingReload}</p>
+      <button type="button" className="min-h-11 rounded px-3 py-2 text-primary hover:bg-muted" onClick={() => window.location.reload()}>{drawingCopy.drawingReloadAction}</button>
+    </div>}
     <CollabEditorInner
       doc={doc}
       provider={provider}
-      canEdit={canEdit !== false}
+      canEdit={canEdit !== false && !collab.writeDenied}
       synced={synced}
       status={status}
       user={user}
@@ -240,6 +259,7 @@ export function CollabPageEditor({
     />
     </DrawingToolbarProvider>
     </DrawingLibraryContext.Provider>
+    </DrawingPageContext.Provider>
   );
 }
 

@@ -65,6 +65,11 @@ const t = en.docPage.diagramSource;
 let root: Root;
 let host: HTMLDivElement;
 let editor: Editor | undefined;
+it('[COMP:app-web/drawing] displays quarantined register errors without offering a stale scene editor', async () => {
+  await render(<BlockDrawing editable block={{ ...original, collaborationError: 'invalid-registers' }} />);
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe(t.drawingError);
+  expect([...host.querySelectorAll('button')].some(button => button.textContent === t.drawingEdit)).toBe(false);
+});
 afterEach(() => { act(() => root?.unmount()); host?.remove(); editor?.destroy(); editor = undefined; exporting.wait = null; exporting.invalid = false; exporting.restoreDefaults = false; captureInitialData.mockClear(); });
 async function render(node: React.ReactNode) {
   if (!host?.isConnected) { host = document.createElement('div'); document.body.append(host); root = createRoot(host); }

@@ -34,6 +34,7 @@ import type { Block, Page } from '@use-brian/core/dist/views/blocks.js'
 import { blockSchema } from '@use-brian/core/dist/views/blocks.js'
 import { FRAGMENT_FIELD, ID_NODE_TYPES, META_MAP } from './schema.js'
 import { pageToYDoc, yDocToSnapshot } from './encode.js'
+import { DrawingCollaboration, findDrawing } from './drawing.js'
 
 /**
  * The doc op vocabulary, structurally identical to `Op` in
@@ -519,7 +520,23 @@ function applyOne(
         return
       }
       const merged = { ...current, ...op.patch, id } as Block
+      if (current.kind === 'drawing' && merged.kind === 'drawing' && !('scene' in op.patch) && Object.keys(op.patch).every(key => key === 'title')) {
+        const base = findDrawing(doc, id)
+        if (base) {
+          const drawing = new DrawingCollaboration(doc, base, () => true)
+          try { drawing.rename(merged.title ?? '') } finally { drawing.dispose() }
+          return
+        }
+      }
       if (merged.kind === 'drawing' && 'scene' in op.patch) delete merged.preview
+      if (merged.kind === 'drawing' && 'scene' in op.patch) delete merged.collaborationError
+      if (current.kind === 'drawing' && merged.kind === 'drawing' && loc.kind === 'top') {
+        const validated = blockSchema.parse(merged)
+        const node = frag.get(loc.index) as Y.XmlElement
+        node.setAttribute('block', JSON.stringify(validated))
+        node.setAttribute('drawingEpoch', crypto.randomUUID())
+        return
+      }
       if (loc.kind === 'top') {
         const rebuilt = buildBlockNodes(merged)
         if (rebuilt.length === 0) {

@@ -95,6 +95,20 @@ it.each(['v1', 'v2', 'legacy-draw', 'metadata-defaults', 'empty', 'invalid', 'di
     const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent === label)!;
     await act(async () => button(en.docPage.diagramSource.drawingEdit).click());
     await wait(() => expect(button(en.docPage.diagramSource.libraryBrowse)?.disabled).toBe(false));
+    // The real SDK still mounts a trigger for an empty MainMenu override.
+    // It has no export/help actions, only a padded popup; hide that trigger alone.
+    if (format === 'v1') {
+      const trigger = document.querySelector<HTMLButtonElement>('.main-menu-trigger')!;
+      expect(trigger.closest('.excalidraw')?.parentElement?.className).toContain('[&_.main-menu-trigger]:hidden!');
+      await act(async () => trigger.click());
+      const menu = document.querySelector('.dropdown-menu-container')!;
+      expect(menu).not.toBeNull();
+      expect(menu.textContent).toBe('');
+      expect(menu.querySelector('button, a, input')).toBeNull();
+      await act(async () => trigger.click());
+      expect(document.querySelector('.sidebar-trigger__label-element input')).not.toBeNull();
+      expect(button(en.docPage.diagramSource.drawingSave)?.disabled).toBe(false);
+    }
      if (migrationVersion) {
        const old = defaultDrawingLibrary(migrationVersion);
        const expected = [defaultDrawingLibrary()[0], { ...old[2], name: 'My edited intern' }, { ...old[0], id: 'my-logo-copy' }];
@@ -168,6 +182,7 @@ it.each(['v1', 'v2', 'legacy-draw', 'metadata-defaults', 'empty', 'invalid', 'di
       return;
     }
     expect(open).not.toHaveBeenCalled();
+    expect(document.querySelector('.backdrop-blur-sm')).not.toBeNull();
     // The installed development SDK exposes its mounted App for its own tests.
     // Read the real scene/tool state without replacing the API callback or engine.
     const app = () => (window as unknown as { h: { app: Pick<ExcalidrawImperativeAPI, 'getSceneElements'> & {

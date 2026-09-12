@@ -18,7 +18,11 @@
  * [COMP:app-web/doc-schema]
  */
 
-import { docExtensions } from "@use-brian/doc-model";
+import { docExtensions, projectDrawingNodeJSON } from "@use-brian/doc-model";
+import { Extension } from '@tiptap/core';
+import { Plugin } from '@tiptap/pm/state';
+import { Fragment, Slice } from '@tiptap/pm/model';
+import { ySyncPluginKey } from 'y-prosemirror';
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import type { AnyExtension } from "@tiptap/core";
 import { NodeRange } from "@tiptap/extension-node-range";
@@ -115,6 +119,27 @@ export function browserDocExtensions(opts?: {
   // Yjs parity holds; the drag-move (via the grip) is gated by `editable`.
   return [
     ...mapped,
+    Extension.create({
+      name: 'drawingClipboard',
+      addProseMirrorPlugins() {
+        let moving = false;
+        return [new Plugin({ props: {
+          handleDOMEvents: { dragstart(_view, event) {
+            moving = !(event.altKey || event.ctrlKey || event.metaKey);
+            queueMicrotask(() => { moving = false; });
+            return false;
+          } },
+          transformCopied(slice, view) {
+            if (moving) return slice;
+            const doc = ySyncPluginKey.getState(view.state)?.doc;
+            if (!doc) return slice;
+            const nodes: ReturnType<typeof view.state.schema.nodeFromJSON>[] = [];
+            slice.content.forEach(node => nodes.push(view.state.schema.nodeFromJSON(projectDrawingNodeJSON(doc, node.toJSON(), true))));
+            return new Slice(Fragment.fromArray(nodes), slice.openStart, slice.openEnd);
+          },
+        } })];
+      },
+    }),
     BlockIndent,
     // Keep consecutive same-kind list items in ONE list after every local edit,
     // so native Tab/Shift-Tab/drag produce correct nesting + spacing instead of a

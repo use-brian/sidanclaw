@@ -13,7 +13,13 @@ requires app-relative alias targets; webpack and Vite accept absolute files.
 Vite also deduplicates React and React DOM, which Next handles internally.
 Vitest must inline the collaboration peer graph so its Node externalization
 does not bypass the aliases. Native doc-model tests resolve the same policy
-from doc-model's own dependencies, never from app-web. DOM tests optimize
+from doc-model's own dependencies, never from app-web.
+Doc-sync persistence tests also use doc-model's singleton graph and inline the
+doc-model package itself: its native externalization otherwise mixes the absorbed
+workspace's older y-prosemirror peers with the schema's newer ProseMirror classes.
+Tests exercising Hocuspocus's MessageReceiver inline the server package too, so
+its Document constructor uses the same Yjs instance as the test and doc-model.
+DOM tests optimize
 the actual Base UI subpath entrypoints, Lucide and Excalidraw's React consumers
 (Jotai, Radix, tunnel-rat) together with React/React DOM: externalizing
 their CommonJS hook shims would bypass Vite's React deduplication. Keep
@@ -35,6 +41,31 @@ therefore self-contained; the browser harness evaluates the actual config with
 dotenv disabled and asserts parity with the Vite helper before launching.
 
 ## Verification
+
+### Server Awareness Lifetime
+
+Doc-sync pins `@hocuspocus/server` to 4.2.0. Upstream 4.1.0's production
+`MessageReceiver.apply` allocates a scratch `Awareness(new Y.Doc())` per inbound
+awareness packet and never destroys either object. Awareness's 3-second interval
+retains both even after the real document/server closes; drawing traffic can
+amplify this by 20 packets per second per active client. A hook cannot safely
+repair it because the scratch instance is private to the receiver.
+
+Upstream 4.2.0 adds `try/finally` around decode, async awareness hooks and encode,
+destroying both scratch instances on success and error before applying the
+result to the live awareness. Use that existing compatible release, not a
+monkeypatch or a worker/process lifetime workaround. The standalone lock already
+resolved 4.2.0; the absorbing platform lock must also resolve 4.2.0 and the app
+manifest must exclude 4.1.0. Keep both lock importers aligned when changing this
+pin. Node >=22 and Yjs 13.6.31 remain unchanged; provider versions need not change.
+
+The receiver regression sends 400 real encoded awareness packets per scenario
+through the installed package at a simulated 20 Hz, checks interval count and
+live awareness state/metadata cardinality after each packet, and checks that
+each scratch document is destroyed. Cover accepted/mutated hooks, async hook
+rejections, malformed decode and failed encode, while live presence and Y.Doc
+content remain intact. The browser regression runs an in-process Hocuspocus
+server and must shut down normally, without terminating a worker to hide timers.
 
 From the repository root, run
 `node apps/app-web/scripts/collab-runtime-browser.mjs` for Turbopack, with

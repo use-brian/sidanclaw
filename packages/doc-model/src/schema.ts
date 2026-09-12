@@ -248,6 +248,7 @@ export const Embed = Node.create({
   draggable: true,
   addAttributes() {
     return {
+      drawingEpoch: { default: null, rendered: false },
       block: {
         default: null,
         parseHTML: (el) => el.getAttribute('data-block'),

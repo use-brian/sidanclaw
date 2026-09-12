@@ -29,9 +29,10 @@ try {
   browser = await chromium.launch({ headless: true,
     ...(process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : {}) });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  page.setDefaultTimeout(90_000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(`http://localhost:${server.httpServer.address().port}/w/workspace/p/page`);
+  await page.goto(`http://localhost:${server.httpServer.address().port}/w/workspace/p/page`, { waitUntil: 'domcontentloaded' });
   const bubbleMounted = () => page.evaluate(() => window.hostEditor.state.plugins.some(p => p.key.startsWith('bubbleMenu')));
   await page.waitForFunction(() => window.hostEditor?.state.plugins.some(p => p.key.startsWith('bubbleMenu')));
   await page.getByRole('button', { name: 'Edit drawing', exact: true }).click();
@@ -91,6 +92,48 @@ try {
   await page.mouse.move(x - 100, y + 150); await page.mouse.down();
   await page.mouse.move(x, canvas.y - 10, { steps: 5 }); await page.mouse.up();
   await released('outside-canvas release');
+  // Network-free UI feedback regression with the actual SDK and compiled theme CSS.
+  assert.equal(await page.locator('.main-menu-trigger').isVisible(), false);
+  assert.equal(await page.locator('.dropdown-menu-container').count(), 0);
+  await page.route('https://libraries.excalidraw.com/libraries.json', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify([{ name: 'Example shapes', authors: [{ name: 'Example Author' }], source: 'example/shapes.excalidrawlib' }]),
+  }));
+  const draft = (await snapshot()).elements;
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.classList.toggle('dark', theme === 'dark'), theme);
+    for (const viewport of [{ width: 1440, height: 1000 }, { width: 360, height: 740 }, { width: 740, height: 360 }]) {
+      await page.setViewportSize(viewport);
+      await page.getByRole('button', { name: 'Browse libraries', exact: true }).click();
+      const catalog = page.getByRole('dialog', { name: 'Browse libraries', exact: true });
+      await catalog.getByRole('button', { name: 'Import library: Example shapes', exact: true }).waitFor();
+      const bounds = await catalog.boundingBox();
+      assert.ok(bounds.x >= 8 && bounds.y >= 8 && bounds.x + bounds.width <= viewport.width - 8 && bounds.y + bounds.height <= viewport.height - 8);
+      assert.ok(bounds.width <= 1152 && bounds.height <= 896);
+      const style = await catalog.evaluate(el => {
+        const s = getComputedStyle(el);
+        return { border: s.borderTopWidth, shadow: s.boxShadow, overflow: s.overflow, background: s.backgroundColor };
+      });
+      assert.equal(style.border, '1px');
+      assert.notEqual(style.shadow, 'none');
+      assert.equal(style.overflow, 'hidden');
+      assert.notEqual(style.background, 'rgba(0, 0, 0, 0)');
+      assert.notEqual(await page.locator('.backdrop-blur-sm').evaluate(el => getComputedStyle(el).backdropFilter), 'none');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (viewport.width < 640) {
+        for (const name of ['Close', 'Import library: Example shapes']) {
+          assert.ok((await catalog.getByRole('button', { name, exact: true }).boundingBox()).height >= 44);
+        }
+        assert.equal(await catalog.getByRole('searchbox').evaluate(el => getComputedStyle(el).fontSize), '16px');
+      }
+      if (process.env.DRAWING_SCREENSHOT_DIR) await page.screenshot({ path: join(process.env.DRAWING_SCREENSHOT_DIR, `drawing-catalog-${theme}-${viewport.width}.png`) });
+      await catalog.getByRole('button', { name: 'Close', exact: true }).focus();
+      await page.keyboard.press('Escape');
+      await catalog.waitFor({ state: 'detached' });
+      assert.equal((await snapshot()).elements, draft);
+      assert.equal(await bubbleMounted(), false);
+    }
+  }
+  console.log('PASS empty SDK menu hidden; bounded catalog, scrim, border/shadow, phone targets and nested Escape in light/dark at desktop, phone and landscape sizes');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.waitForFunction(() => window.hostEditor.state.plugins.some(p => p.key.startsWith('bubbleMenu')));
   assert.equal(await page.getByRole('dialog').count(), 0);

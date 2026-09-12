@@ -22,6 +22,8 @@ export {
   docSchema,
 } from './schema.js'
 
+export { DrawingCollaboration, drawingRegisters, drawingNamespace, projectDrawing, projectDrawingNodeJSON, findDrawing, drawingRetention, DRAWING_RETENTION_LIMITS, DRAWING_PROTOCOL } from './drawing.js'
+
 export {
   type PMNode,
   type PMDoc,

@@ -32,7 +32,8 @@ import {
   type AssistantRunChannel,
 } from '@use-brian/doc-model'
 import { resolveAuth } from './auth-hook.js'
-import { assertPageAccess, isReadOnlyRole, type RlsQuery } from './clearance-gate.js'
+import { assertDrawingProtocol } from './drawing-protocol.js'
+import { assertPageAccess, isReadOnlyRole, recheckPageConnection, type RlsQuery } from './clearance-gate.js'
 import {
   loadPageUpdate,
   maybeEnqueueBrainIngest,
@@ -158,20 +159,30 @@ const hocuspocus = new Hocuspocus({
       workspaceId: access.workspaceId,
       clearance: access.clearance,
       role: access.role,
+      drawingProtocol: auth.drawingProtocol,
     }
   },
 
-  // Lifecycle/grant/clearance changes must affect an already-open Office tab,
+  // Lifecycle/grant/clearance changes must affect an already-open tab,
   // not only its next reconnect. Re-resolve before every inbound message and
   // flip the connection read-only before MessageReceiver handles an update.
   // Awareness remains available for read-only Archive/Trash previews.
   async beforeHandleMessage(data) {
     const target = parseSyncDocumentName(data.documentName)
-    if (target.kind !== 'office') return
     const context = data.context as { service?: true; userId?: string } | undefined
     if (context?.service) return
+    if (target.kind === 'page') {
+      await recheckPageConnection({ userId: context?.userId, pageId: target.id, query: rlsQuery, connection: data.connection })
+      return
+    }
     const access = context?.userId ? await resolveOfficeAccess(context.userId, target.id) : null
     data.connection.readOnly = !access?.canEdit
+  },
+
+  async beforeSync(data) {
+    if (parseSyncDocumentName(data.documentName).kind !== 'page' || data.context?.service) return
+    assertDrawingProtocol({ doc: data.document, protocol: data.context?.drawingProtocol,
+      type: data.type, update: data.payload, connection: data.connection })
   },
 
   async onLoadDocument(data) {

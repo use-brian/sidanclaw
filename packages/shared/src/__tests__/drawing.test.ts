@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { drawingBlockSchema, drawingSceneSchema, MAX_DRAWING_BYTES } from '../drawing.js'
+import { drawingBlockSchema, drawingSceneSchema, parseDrawingSceneStructure, MAX_DRAWING_BYTES } from '../drawing.js'
 
 const image = { id: 'e', type: 'image', x: 0, y: 0, width: 10, height: 10, fileId: 'f' }
 const scene = { version: 1, elements: [image], appState: { viewBackgroundColor: '#fff' },
   files: { f: { id: 'f', mimeType: 'image/png', dataURL: 'data:image/png;base64,YQ==', created: 1 } } }
 
 describe('[COMP:shared/drawing] scene boundary', () => {
+  it('admits an over-limit repair baseline but never relaxes geometry or asset validation', () => {
+    const over = { ...scene, elements: Array.from({ length: 5002 }, (_, i) => ({ ...image, id: `image-${i}` })) }
+    expect(drawingSceneSchema.safeParse(over).success).toBe(false)
+    expect(parseDrawingSceneStructure(over).elements).toHaveLength(5002)
+    expect(() => parseDrawingSceneStructure({ ...over, files: {} })).toThrow()
+    expect(() => parseDrawingSceneStructure({ ...over, elements: [...over.elements, null] })).toThrow()
+  })
   it('accepts legacy unnamed drawings and trims bounded optional titles', () => {
     const block = { kind: 'drawing', id: 'd', scene }
     expect(drawingBlockSchema.parse(block)).not.toHaveProperty('title')

@@ -18,6 +18,7 @@ import {
 import type { Page } from '@use-brian/core/dist/views/blocks.js'
 import { docSchema, FRAGMENT_FIELD, META_MAP } from './schema.js'
 import { blocksToPMDoc, pageToPlaintext, pmDocToBlocks, type PMDoc } from './block-mapping.js'
+import { projectDrawingNodeJSON } from './drawing.js'
 
 /**
  * The fixed Yjs `clientID` every legacy-page seed is authored under.
@@ -74,7 +75,7 @@ export function pageToYDocUpdate(page: Page, title: string): Uint8Array {
 /** Derive the block-JSON snapshot + title from a live Y.Doc. */
 export function yDocToSnapshot(ydoc: Y.Doc): { page: Page; title: string } {
   const docJSON = yDocToProsemirrorJSON(ydoc, FRAGMENT_FIELD) as PMDoc
-  const blocks = pmDocToBlocks(docJSON)
+  const blocks = pmDocToBlocks(projectDrawingNodeJSON(ydoc, docJSON) as PMDoc)
   const title = (ydoc.getMap(META_MAP).get('title') as string | undefined) ?? ''
   return { page: { blocks }, title }
 }

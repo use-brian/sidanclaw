@@ -155,3 +155,24 @@ export async function resolveEffectiveRole(params: {
 export function isReadOnlyRole(role: GrantRole): boolean {
   return role !== 'edit' && role !== 'full'
 }
+
+/** Refresh a live connection before accepting a message, failing closed. */
+export async function recheckPageConnection(params: {
+  userId?: string
+  pageId: string
+  query: RlsQuery
+  connection: { readOnly: boolean; sendStateless: (message: string) => void }
+}): Promise<void> {
+  const { connection } = params
+  const wasReadOnly = connection.readOnly
+  connection.readOnly = true
+  try {
+    if (!params.userId) throw new PageAccessDenied('missing_user')
+    const access = await assertPageAccess({ ...params, userId: params.userId })
+    connection.readOnly = isReadOnlyRole(access.role)
+    if (wasReadOnly !== connection.readOnly) connection.sendStateless(connection.readOnly ? 'page-write-denied' : 'page-write-allowed')
+  } catch (error) {
+    connection.sendStateless('page-write-denied')
+    throw error
+  }
+}

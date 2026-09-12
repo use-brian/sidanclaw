@@ -22,6 +22,8 @@ import type { Node as PMNode, Schema } from "@tiptap/pm/model";
 import { isNodeRangeSelection } from "@tiptap/extension-node-range";
 import { applyTurnInto, type TurnIntoKind } from "./turn-into-menu";
 import { newBlockId } from "@/lib/api/views";
+import { projectDrawingNodeJSON, type PMNode as NodeModel } from '@use-brian/doc-model';
+import { ySyncPluginKey } from 'y-prosemirror';
 
 /** The drag-handle's current target: a top-level node + its doc position. */
 export type BlockTarget = { node: PMNode; pos: number };
@@ -243,7 +245,9 @@ export function remintBlockIds(json: NodeJSON): NodeJSON {
 export function duplicateBlockAt(editor: Editor, pos: number): boolean {
   const node = nodeAt(editor, pos);
   if (!node) return false;
-  const clone = remintBlockIds(node.toJSON() as NodeJSON);
+  const doc = ySyncPluginKey.getState(editor.state)?.doc;
+  const json = node.toJSON() as NodeModel;
+  const clone = remintBlockIds((doc ? projectDrawingNodeJSON(doc, json) : json) as NodeJSON);
   return editor
     .chain()
     .insertContentAt(pos + node.nodeSize, clone as Record<string, unknown>, {

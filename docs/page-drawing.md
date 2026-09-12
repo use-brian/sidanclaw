@@ -1,9 +1,180 @@
 # Page Drawings
 
+## Live Collaboration
+
+### Review Safety Contracts
+
+Immutable file registers are not undoable. An insertion's undo removes only its
+local shapes, never files that another peer may already reference. Undo's deletion
+filter excludes immutable file insertions, keeping assets and elements atomic in
+one transport update without making those assets undoable.
+
+SDK baseline capture accepts structurally valid over-limit scenes, including on
+reopen. Limits apply to the resulting canonical delta projection, not the SDK's
+expanded default fields. The first repair gesture must publish, not become a new
+unpublished baseline.
+
+Live-register retention admission counts ALL nonempty drawing namespaces in the page, including
+retired epochs, tombstones, files and previews, plus immutable drawing base JSON:
+16 MiB of serialized retained data,
+50,000 registers and 128 namespaces. Growing authored writes above these budgets
+are refused visibly; removals and non-growing edits remain possible. Offline
+concurrent unions can exceed admission budgets and are preserved, not truncated.
+These are live-register admission budgets, not a claim that Yjs binary history is
+size-bounded. Undo, concurrent unions, API whole-block replacements, page imports
+and arbitrary authenticated Yjs updates are not a hard server-enforced storage cap.
+There is deliberately no automatic age-based GC: offline peers and local undo may
+still reference old assets/epochs. Safe compaction requires a coordinated fresh
+document generation with all old writers retired; no such page-generation reset
+protocol exists yet, so automatic compaction is not shipped. Reaching retention
+capacity requires moving a canonical copy into a fresh page; deleting visible
+shapes alone does not reclaim immutable assets. Tombstone/undo safety takes priority
+over pretending that visible scene size bounds storage.
+
+New page providers advertise a drawing protocol capability inside the existing
+JWT authentication message. Legacy clients can still write pages without drawings;
+before accepting their sync updates the server checks both current and proposed
+state and refuses writes involving drawing pages, including first insertion.
+This also gates legacy sessions already connected when a drawing arrives. Refusal
+sends a reload-required signal and closes that connection. Updated clients expose
+a localized reload action; unmodified old bundles receive the protocol close
+reason and must be refreshed. Office and authenticated internal service writers
+retain their existing protocol. This is capability negotiation, not a new auth
+transport or a replacement for JWT/permission validation. Deploy the server first.
+Capability negotiation alone does not authorize replaying an old whole-scene Save
+from IndexedDB after reload. Browser sync updates that change an existing drawing's
+immutable base/epoch, or revive a retired drawing under an unknown namespace, are
+refused even with the current capability. Incremental element updates, ordinary
+moves and independent new block IDs remain supported; internal validated scene
+replacement is service-authorized. A distinct recovery notice keeps this page
+read-only and lets the user copy local content, then explicitly confirm clearing
+only this page's local cache and reloading server state. Nothing is auto-discarded.
+
+Malformed registers are isolated to their drawing. Canonical snapshots retain an
+explicit `collaborationError: invalid-registers` marker and no preview instead of
+throwing out whole-page persistence. Raw CRDT state is retained for diagnosis;
+editing that drawing is blocked until a validated scene replacement retires its
+namespace. Valid neighboring blocks remain readable. Passive read-access revocation
+is inherited: the inbound-message gate does not disconnect an idle reader merely
+because its permission changed; this change does not add a proactive revocation bus.
+
+Authenticated collaborative Pages use their existing page Y.Doc and Hocuspocus
+provider for live drawing edits. Close dismisses the editor, not its shared edits;
+there is no discard promise. The standalone non-collaborative editor retains its
+Save/Cancel contract described below. Offline edits use the page provider's existing
+persistence/reconnect policy, not a new transport or a separate durability promise.
+Title edits commit on blur (including Enter or clicking Close). Escape in the
+name input returns to the current shared title without undoing a remote rename.
+Shape gestures and background changes publish immediately, including intermediate
+drag geometry before release. SDK comparison baselines are detached snapshots,
+never references to SDK-owned mutable elements. Remote updates preserve locally
+active selected, resizing, new and text-editing elements (including bound text),
+then reapply the canonical register winner on gesture completion. Other elements
+continue updating during a local gesture; remote renders never author deltas.
+View/tool state stays local. PNG generation is debounced while the editor is mounted;
+closing before it completes leaves an explicitly unavailable preview, never a
+stale image presented as current. Opening the editor retries generation.
+
+Drawing presence uses only the existing page provider awareness `drawing` field,
+scoped by the full drawing namespace (block ID, epoch and immutable base identity).
+It is transient: no Y.Doc, IndexedDB, snapshot, preview or API writes. Peers are
+keyed by awareness client ID, not account ID, so separate tabs remain visible.
+The existing page `user.name` and `user.color` supply SDK username and colors;
+no avatar, email, token, scene content or additional profile data is copied.
+Excalidraw 0.18 accepts the color fields in its public collaborator type but its
+canvas renderer derives cursor/selection hues from client identity; this change
+does not fork that renderer to force exact host-page color parity.
+SDK `onPointerUpdate` supplies scene coordinates and button; `onChange` supplies
+selection and active editing IDs. Updates coalesce at 50 ms and deduplicate.
+Only editors of the same current namespace render in the SDK collaborators map.
+Close, unmount, route/epoch change, permission loss and disconnect clear just the
+drawing field, preserving host page cursor, identity and all other awareness.
+Disconnected editors show no remote collaborators; reconnect publishes fresh
+presence. Abrupt remote loss uses the provider's awareness removal/expiry.
+Presence is untrusted advisory UI, never a permission or element lock. Validate
+finite coordinates bounded to +/-10 million, scope <=512 characters, names <=200,
+hex colors, and at most 256 selected IDs of <=128 characters. Oversized arrays are
+rejected before traversal; unknown fields are discarded rather than forwarded.
+No new UI labels are introduced.
+
+The embed scene is an immutable fallback. A per-drawing Y.Map stores element-ID
+overrides, separate deletion tombstones, immutable file IDs, background and title.
+Missing overrides read from the fallback, so concurrent first opens never seed
+competing maps or resurrect deleted fallback elements. Same-element concurrent
+writes use Yjs register resolution; deletion wins over concurrent geometry edits.
+Ordering uses SDK fractional indices with deterministic fallback order. Files are
+retained for undo and projected only for live image references. Scene replacement
+selects a fresh embed epoch plus base-scene namespace; old editors cannot write into
+the replacement. This namespace is an identity, not an authorization boundary.
+
+The canonical snapshot decoder projects these registers into ordinary drawing
+blocks, including nested drawings. JSON/API/serialization readers therefore see
+the live scene, not stale attrs or an orphan side map. The browser embed uses the
+same projection without writing it back to ProseMirror on every gesture.
+Duplicate and clipboard serialization materialize the same canonical scene before
+copying. Drawing clipboard copies and Duplicate assign fresh drawing block IDs;
+non-drawing clipboard identity is unchanged. Drawing cut/paste is copy plus delete;
+use the block Move action to retain identity and the existing live namespace.
+Ordinary drag-move serialization also retains the original base and identity;
+it must not look like a legacy whole-scene replacement to the protocol gate.
+Ordinary node moves retain their existing namespace and do not reseed the scene.
+Explicit AI scene replacement uses canonical blocks; title edits use the metadata register.
+Deleting a block makes its registers unreachable and disables an open editor.
+Every browser mutation rechecks edit authority, route/lifetime and block identity.
+The sync server also rechecks the existing RLS page-access/grant gate before each
+inbound page message, as it already does for Office. A connected tab is not a
+permanent write grant: downgrade makes it read-only; lost read access or page
+deletion rejects the message. Service-authenticated internal operations retain
+their existing upstream authorization contract.
+The existing provider's authenticated scope and stateless page-write-denied/allowed
+notifications disable/restore the page editor, including closing an open drawing.
+They do not erase rejected offline changes from local persistence.
+
+SDK notifications publish only changes since that SDK last observed the scene;
+remote reconciliation never echoes a whole scene into the map. Remote scenes use
+SDK restoration/reconciliation, with Yjs as the same-element conflict authority.
+Drawing Undo/Redo is scoped to the local drawing transaction origin, never the
+whole page or a remote scene replacement. Preview exports are derived, digest-bound
+and installed only if their source scene is still current; a stale export is
+unavailable rather than evidence of a newer scene. Validation failures are visible.
+New local writes validate the merged result against the scene limits. A union of
+individually valid offline edits can exceed those limits: preserve that complete
+canonical scene and Yjs binary in snapshots rather than failing page persistence
+or silently dropping shapes/files. The live editor shows the size error and permits
+removal to return below the limit; Brian can also replace that block's scene through
+the existing scoped operation. No further over-limit local state is published.
+Preview/export and bounded interchange validation remain unavailable until repaired.
+Deletion tombstones remain in the CRDT, not the canonical live element array, so
+deleting shapes actually reduces the scene's element and byte counts.
+
+Regression coverage must exchange concurrent updates between two real Y.Docs,
+including first edits, independent elements, same-element conflicts, deletion,
+undo, files/metadata, persistence/reopen, replacement and unrelated page edits.
+Real SDK/browser coverage is separate from pure CRDT convergence evidence.
+Run `node apps/app-web/scripts/drawing-collaboration-browser.mjs` with the same
+`PLAYWRIGHT_MODULE` / `CHROMIUM_EXECUTABLE` options as the other drawing browser
+checks. It mounts two actual SDK clients in StrictMode and exchanges real Yjs
+updates while disconnected, then checks convergence, keyboard Undo, redo, delete,
+shared title, reopen, quiet update state and permission/replacement shutdown.
+It then connects both SDK clients to an isolated local Hocuspocus server over real
+WebSockets (no direct-exchange helper in this phase), checking canvas cursor-label
+painting, dashed remote selection painting, two intermediate drag positions while
+the other mouse is held, simultaneous distinct/same-element drag protection and
+convergence, nonpersistent presence, separate drawing/epoch isolation, Close,
+permission/route/unmount cleanup and disconnect/reconnect. Both clients use the
+same synthetic account identity to verify separate-tab presence.
+The server runs in-process and shuts down normally. Doc-sync pins upstream
+Hocuspocus 4.2.0, whose `finally` cleanup fixes the per-packet scratch-awareness
+timer/document leak in 4.1.0. Both standalone and platform-absorbed locks must
+resolve the fixed version; see `docs/collab-runtime.md` for the lifetime regression.
+This is actual WebSocket/SDK evidence, not an authenticated RLS/JWT or IndexedDB
+deployment test. Mouse coverage does not prove touch/pen or network-partition expiry.
+
 Excalidraw drawings are an OSS Page feature, not an Office document feature.
 The slash menu offers Drawing (aliases: draw, sketch, excalidraw). The inserted
-empty embed offers an explicit editor button. Save commits one complete scene;
-Cancel discards the local draft without changing the block. Existing drawings
+empty embed offers an explicit editor button. Collaborative Pages use the live
+contract above. In the standalone editor, Save commits one complete scene;
+Cancel discards that local draft without changing the block. Existing drawings
 show a scene-derived canvas preview and can be reopened for editing.
 
 The host page's inline formatting bubble and touch Comment chip stay unmounted
@@ -33,6 +204,10 @@ must fail the first single-click assertion with cursorButton still down. The
 jsdom test checks event delivery to window and toolbar lifecycle only; it is not
 evidence of real canvas gesture completion. Browser coverage is desktop mouse;
 touch/pen cancellation and native window focus loss are not simulated.
+The same browser regression checks the hidden empty menu and nested catalog's
+backdrop, bounds, border/shadow, phone targets, and Escape/draft retention in both
+themes at desktop, phone and landscape sizes. Set `DRAWING_SCREENSHOT_DIR` to an
+existing directory to capture these catalog states.
 
 Drawings have an optional `title`, trimmed and limited to 200 characters.
 Missing or blank titles render the localized Drawing fallback. The existing
@@ -53,6 +228,11 @@ New text defaults to Normal (Excalidraw's Nunito font) whenever an empty or save
 scene is opened. This editor-only default preserves the scene's existing app
 state and does not change existing text or its fonts. Save still persists only
 the canonical durable app-state subset, not the current text-tool font setting.
+
+The custom SDK MainMenu has no actions. Its hamburger is hidden within this editor:
+otherwise opening it renders only a tiny empty padded, rounded popup. Keep the
+empty MainMenu override so the SDK does not restore its default file/link actions.
+This does not disable image export or change Brian's Save/PNG preview generation.
 
 ## Libraries
 
@@ -103,6 +283,17 @@ cached canvas at 160, 173, 240 and 320px, at device pixel ratios 1 and 2. It use
 the same external Playwright/Chromium options as the catalog browser test below.
 
 ### In-App Catalog Contract
+
+Both web catalog paths share a bounded dialog with an opaque theme-token surface,
+a contrasting scrim and blur, a visible token border/ring, and a deep shadow.
+The backdrop explicitly renders for this nested Base UI dialog (nested backdrops
+are otherwise omitted by the primitive).
+The panel keeps an 8px phone gutter (32px on larger screens), is capped at 72rem
+wide and 56rem tall, and uses dynamic viewport height. Rounded edges clip the
+iframe; catalog content scrolls internally without exposing the drawing through
+the panel. Close/import targets remain touch-sized and search uses 16px text on
+phones. Nested focus trapping, close/abort behavior and the mounted draft remain
+unchanged.
 
 Local-origin Web Browse uses a first-party searchable catalog inside the drawing
 dialog. All plain HTTP origins, HTTPS localhost/.localhost, single-label/local
@@ -328,7 +519,9 @@ focus trapping, responsive sizing, and explicit Save/Cancel controls.
 
 ## Integration Constraints
 
-Deploy the shared/core schema and UI together. No database migration is required.
+Deploy shared/core, doc-model, doc-sync and the UI together, and refresh existing
+browser clients. Older drawing editors do not project the live registers and their
+whole-scene Save is not a collaborative writer. No database migration is required.
 Markdown/Office exports are not editable Excalidraw interchange; the canonical
 Page JSON is the lossless interchange. The platform lockfile and external docs
 mirrors are outside this worktree's scope and must be integrated separately.

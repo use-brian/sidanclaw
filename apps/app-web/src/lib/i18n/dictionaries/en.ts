@@ -1786,6 +1786,14 @@ export const en = {
     // and "Update" only when the page is editable.
     diagramSource: {
       drawing: "Drawing", drawingEdit: "Edit drawing", drawingSave: "Save drawing",
+      drawingClose: "Close", drawingUndo: "Undo drawing", drawingRedo: "Redo drawing",
+      drawingRetention: "This page has reached its retained drawing storage limit. Copy the drawing to a new page to continue. Deleting shapes does not clear offline or undo history.",
+      drawingReload: "Reload to use the current drawing collaboration protocol. Local offline content is kept.",
+      drawingReloadAction: "Reload",
+      drawingRecovery: "Older local drawing changes cannot be merged safely. Copy any local content you need to a new page first, then close other tabs for this page. Resetting this page's local copy discards its unsynced changes and reloads the unchanged server content.",
+      drawingRecoveryAction: "Reset local copy and reload",
+      drawingRecoveryFailed: "Could not reset the local copy. Your local content is still retained. Try again.",
+      drawingLiveHelp: "Edits are shared live and sync with this page. Closing does not discard changes. Maximum 2 MiB. Raster images only; links and embedded websites are not supported.",
       drawingName: "Drawing name",
       libraryPreview: "Library preview",
       libraryPreviewHelp: "Publisher previews may show some or all included items. Import to use the library.",
